@@ -5,6 +5,8 @@ import { Toaster } from 'sonner';
 import './globals.css';
 import { Providers } from './providers';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { AuthGuard } from '@/components/auth/AuthGuard';
+import { UserMenu } from '@/components/auth/UserMenu';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -33,11 +35,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/customers" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
                 Customers
               </Link>
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-3">
+                <UserMenu />
                 <ThemeToggle />
               </div>
             </nav>
-            <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
+            <main className="mx-auto max-w-7xl px-6 py-8">
+              <AuthGuard>{children}</AuthGuard>
+            </main>
           </div>
         </Providers>
         <Toaster richColors position="top-right" theme="system" />

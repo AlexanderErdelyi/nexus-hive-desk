@@ -1,11 +1,16 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import jwt from '@fastify/jwt';
+import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import { aiRoutes } from './routes/ai';
+import { authRoutes } from './routes/auth';
 import { customerRoutes } from './routes/customers';
+import { customerMemberRoutes } from './routes/customer-members';
 import { glossaryRoutes } from './routes/glossary';
 import { projectRoutes } from './routes/projects';
+import { projectMemberRoutes } from './routes/project-members';
 import { remoteRoutes } from './routes/remote';
 import { translationRoutes } from './routes/translations';
 
@@ -15,12 +20,22 @@ async function bootstrap() {
   await app.register(cors, {
     origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    credentials: true,
   });
+
+  await app.register(jwt, {
+    secret: process.env.JWT_SECRET ?? 'nexus-hive-desk-dev-secret-change-in-production',
+  });
+
+  await app.register(cookie);
 
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
+  await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(customerRoutes, { prefix: '/api/customers' });
+  await app.register(customerMemberRoutes, { prefix: '/api/customers' });
   await app.register(projectRoutes, { prefix: '/api/projects' });
+  await app.register(projectMemberRoutes, { prefix: '/api/projects' });
   await app.register(translationRoutes, { prefix: '/api/translations' });
   await app.register(glossaryRoutes, { prefix: '/api/glossary' });
   await app.register(aiRoutes, { prefix: '/api/ai' });

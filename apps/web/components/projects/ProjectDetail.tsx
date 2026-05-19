@@ -8,6 +8,7 @@ import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { ProjectMembers } from './ProjectMembers';
 import { formatDate } from '@/lib/utils';
 
 interface Project {
@@ -332,6 +333,11 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Members Section */}
+      <div className="mt-6">
+        <ProjectMembers projectId={projectId} />
       </div>
     </div>
   );
