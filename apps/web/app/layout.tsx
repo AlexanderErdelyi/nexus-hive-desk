@@ -35,6 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/customers" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
                 Customers
               </Link>
+              <Link href="/settings" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
+                Settings
+              </Link>
               <div className="ml-auto flex items-center gap-3">
                 <UserMenu />
                 <ThemeToggle />
