@@ -1,8 +1,96 @@
+// ─── Customer ─────────────────────────────────────────────────────────────────
+export interface Customer {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  connections?: CustomerConnection[];
+  projects?: Project[];
+  _count?: { connections: number; projects: number };
+}
+
+export interface CreateCustomerInput {
+  name: string;
+  description?: string;
+}
+
+export type ConnectionType = 'azure-devops' | 'github';
+
+export interface CustomerConnection {
+  id: string;
+  customerId: string;
+  type: ConnectionType;
+  name: string;
+  baseUrl?: string;
+  pat: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateConnectionInput {
+  customerId: string;
+  type: ConnectionType;
+  name: string;
+  baseUrl?: string;
+  pat: string;
+}
+
+// ─── Remote Repository Browsing ──────────────────────────────────────────────
+export interface RemoteOrganization {
+  id: string;
+  name: string;
+}
+
+export interface RemoteProject {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface RemoteRepo {
+  id: string;
+  name: string;
+  defaultBranch?: string;
+  url?: string;
+}
+
+export interface RemoteBranch {
+  name: string;
+  isDefault?: boolean;
+}
+
+export interface RemoteFileEntry {
+  path: string;
+  name: string;
+  type: 'file' | 'directory';
+  size?: number;
+}
+
+export interface RemoteFileContent {
+  path: string;
+  content: string;
+  sha?: string; // GitHub blob SHA for commit
+  objectId?: string; // Azure DevOps object ID
+}
+
+export interface CommitFileInput {
+  connectionId: string;
+  repo: string; // "org/project/repo" (AzDO) or "owner/repo" (GitHub)
+  branch: string;
+  path: string;
+  content: string;
+  message: string;
+  sha?: string; // required for GitHub updates
+  objectId?: string; // required for Azure DevOps
+}
+
 // ─── Project ─────────────────────────────────────────────────────────────────
 export interface Project {
   id: string;
   name: string;
   description?: string;
+  customerId?: string;
   sourceLanguage: string;
   targetLanguage: string;
   createdAt: Date;
@@ -12,6 +100,7 @@ export interface Project {
 export interface CreateProjectInput {
   name: string;
   description?: string;
+  customerId?: string;
   sourceLanguage: string;
   targetLanguage: string;
 }
@@ -62,6 +151,10 @@ export interface XliffFile {
   translationCount: number;
   translatedCount: number;
   uploadedAt: Date;
+  remoteConnectionId?: string;
+  remotePath?: string;
+  remoteBranch?: string;
+  remoteRepo?: string;
 }
 
 export interface XliffUnit {
