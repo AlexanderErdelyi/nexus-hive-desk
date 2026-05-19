@@ -1,0 +1,10 @@
+node_modules/
+.turbo/
+dist/
+.next/
+*.db
+*.db-journal
+.env
+.env.local
+.env*.local
+prisma/dev.db

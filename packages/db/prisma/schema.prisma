@@ -1,0 +1,67 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id              String          @id @default(cuid())
+  name            String
+  description     String?
+  sourceLanguage  String          @default("en")
+  targetLanguage  String          @default("de")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  xliffFiles      XliffFile[]
+  glossaryEntries GlossaryEntry[]
+}
+
+model XliffFile {
+  id             String        @id @default(cuid())
+  projectId      String
+  filename       String
+  originalXml    String
+  sourceLanguage String
+  targetLanguage String
+  uploadedAt     DateTime      @default(now())
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  translations   Translation[]
+}
+
+model Translation {
+  id            String    @id @default(cuid())
+  xliffFileId   String
+  projectId     String
+  unitId        String
+  source        String
+  target        String    @default("")
+  state         String    @default("needs-translation")
+  note          String?
+  developerNote String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  xliffFile     XliffFile @relation(fields: [xliffFileId], references: [id], onDelete: Cascade)
+
+  @@unique([xliffFileId, unitId])
+  @@index([projectId])
+  @@index([state])
+}
+
+model GlossaryEntry {
+  id             String   @id @default(cuid())
+  projectId      String
+  sourceTerm     String
+  targetTerm     String
+  sourceLanguage String
+  targetLanguage String
+  description    String?
+  caseSensitive  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sourceTerm, sourceLanguage, targetLanguage])
+}

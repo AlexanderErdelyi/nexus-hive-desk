@@ -1,0 +1,26 @@
+{
+  "name": "nexus-hive-desk",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.1.3",
+  "description": "AI-powered translation management and developer workflow hub",
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "db:generate": "pnpm --filter @nexus/db run generate",
+    "db:migrate": "pnpm --filter @nexus/db run migrate",
+    "db:push": "pnpm --filter @nexus/db run push",
+    "db:studio": "pnpm --filter @nexus/db run studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.5"
+  }
+}

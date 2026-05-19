@@ -1,0 +1,169 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FolderOpen, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { api } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
+
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  createdAt: string;
+  _count?: { xliffFiles: number };
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Request failed';
+}
+
+export function ProjectsList() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: '', description: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.get<{ data: Project[] }>('/api/projects'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (input: typeof form) => api.post('/api/projects', input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      setShowCreate(false);
+      setForm({ name: '', description: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+      toast.success('Project created');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/projects/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Project deleted');
+    },
+  });
+
+  const projects = data?.data ?? [];
+
+  return (
+    <div>
+      <div className="mb-4 flex justify-end">
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          <Plus size={16} /> New Project
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className="mb-6 rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-900">
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create Project</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Name *</label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="My BC Module"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Source Language</label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                value={form.sourceLanguage}
+                onChange={(e) => setForm((f) => ({ ...f, sourceLanguage: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Target Language</label>
+              <input
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                value={form.targetLanguage}
+                onChange={(e) => setForm((f) => ({ ...f, targetLanguage: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => createMutation.mutate(form)}
+              disabled={!form.name || createMutation.isPending}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+            <button
+              onClick={() => setShowCreate(false)}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="py-12 text-center text-gray-400">Loading...</div>
+      ) : projects.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <FolderOpen size={40} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+          <p className="text-gray-500 dark:text-gray-400">No projects yet. Create your first project.</p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {projects.map((p) => (
+            <div
+              key={p.id}
+              className="rounded-xl border border-gray-200 bg-white p-5 transition-colors hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-900 dark:hover:border-indigo-500"
+            >
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <a href={`/projects/${p.id}`} className="block truncate font-semibold text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">
+                    {p.name}
+                  </a>
+                  {p.description && <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{p.description}</p>}
+                </div>
+                <button
+                  onClick={() => { if (confirm('Delete project?')) deleteMutation.mutate(p.id); }}
+                  className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span className="rounded bg-gray-100 px-2 py-0.5 dark:bg-gray-800">{p.sourceLanguage} → {p.targetLanguage}</span>
+                <span>{p._count?.xliffFiles ?? 0} file(s)</span>
+              </div>
+              <div className="mt-3 text-xs text-gray-400 dark:text-gray-600">{formatDate(p.createdAt)}</div>
+              <div className="mt-4 flex gap-2">
+                <a href={`/projects/${p.id}/translations`} className="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50">
+                  Translations
+                </a>
+                <a href={`/projects/${p.id}/glossary`} className="rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">
+                  Glossary
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
