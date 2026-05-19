@@ -22,22 +22,24 @@ function githubHeaders(pat: string): Record<string, string> {
   };
 }
 
-async function fetchJson(url: string, headers: Record<string, string>) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchJson<T = any>(url: string, headers: Record<string, string>): Promise<T> {
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`HTTP ${res.status}: ${text}`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
-async function fetchJsonWithInit(url: string, init: RequestInit) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     throw new Error(`HTTP ${res.status}: ${text}`);
   }
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
