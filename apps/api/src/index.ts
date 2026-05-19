@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { aiRoutes } from './routes/ai';
 import { authRoutes } from './routes/auth';
@@ -28,6 +29,11 @@ async function bootstrap() {
   });
 
   await app.register(cookie);
+
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+  });
 
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 

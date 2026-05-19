@@ -6,6 +6,7 @@ export async function authRoutes(app: FastifyInstance) {
   // ─── Sign up ────────────────────────────────────────────────────────────────
   app.post<{ Body: { email: string; name: string; password: string } }>(
     '/signup',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const { email, name, password } = req.body;
 
@@ -45,6 +46,7 @@ export async function authRoutes(app: FastifyInstance) {
   // ─── Login ──────────────────────────────────────────────────────────────────
   app.post<{ Body: { email: string; password: string } }>(
     '/login',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (req, reply) => {
       const { email, password } = req.body;
 
