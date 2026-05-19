@@ -17,7 +17,17 @@ export async function projectRoutes(app: FastifyInstance) {
       where: { id: req.params.id },
       include: {
         xliffFiles: {
-          select: { id: true, filename: true, uploadedAt: true, sourceLanguage: true, targetLanguage: true },
+          select: {
+            id: true,
+            filename: true,
+            uploadedAt: true,
+            sourceLanguage: true,
+            targetLanguage: true,
+            remoteConnectionId: true,
+            remotePath: true,
+            remoteBranch: true,
+            remoteRepo: true,
+          },
         },
         _count: { select: { glossaryEntries: true } },
       },
@@ -155,6 +165,42 @@ export async function projectRoutes(app: FastifyInstance) {
     await prisma.translation.deleteMany({ where: { xliffFileId: req.params.fileId } });
     await prisma.xliffFile.delete({ where: { id: req.params.fileId } });
     return reply.status(204).send();
+  });
+
+  // Update remote source info on a file
+  app.patch<{
+    Params: { id: string; fileId: string };
+    Body: { remoteConnectionId?: string; remotePath?: string; remoteBranch?: string; remoteRepo?: string };
+  }>('/:id/xliff/:fileId/remote', async (req, reply) => {
+    const file = await prisma.xliffFile.update({
+      where: { id: req.params.fileId },
+      data: {
+        remoteConnectionId: req.body.remoteConnectionId,
+        remotePath: req.body.remotePath,
+        remoteBranch: req.body.remoteBranch,
+        remoteRepo: req.body.remoteRepo,
+      },
+    });
+    return { data: file };
+  });
+
+  // Get the serialized XLIFF content for a file (for committing back to remote)
+  app.get<{ Params: { id: string; fileId: string } }>('/:id/xliff/:fileId/content', async (req, reply) => {
+    const file = await prisma.xliffFile.findUnique({ where: { id: req.params.fileId } });
+    if (!file) {
+      return reply.status(404).send({ error: 'not_found', message: 'File not found' });
+    }
+
+    const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
+    const updates = new Map(
+      translations.map((translation) => [
+        translation.unitId,
+        { target: translation.target, state: translation.state as TranslationState },
+      ])
+    );
+
+    const xml = serializeXliff(file.originalXml, updates);
+    return { data: { content: xml, filename: file.filename } };
   });
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
