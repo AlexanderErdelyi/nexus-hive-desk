@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { CustomerMembers } from './CustomerMembers';
 
 interface Connection {
   id: string;
@@ -851,6 +852,11 @@ export function CustomerDetail({ customerId }: { customerId: string }) {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Members Section */}
+      <div className="mt-6">
+        <CustomerMembers customerId={customerId} />
       </div>
     </div>
   );

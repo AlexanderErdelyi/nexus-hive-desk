@@ -9,18 +9,23 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@nexus/types": "workspace:*",
-    "@nexus/xliff": "workspace:*",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/jwt": "^10.1.0",
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/rate-limit": "^10.3.0",
     "@nexus/ai": "workspace:*",
     "@nexus/db": "workspace:*",
-    "fastify": "^5.2.1",
-    "@fastify/cors": "^10.0.2",
-    "@fastify/multipart": "^9.0.3",
-    "dotenv": "^16.4.7"
+    "@nexus/types": "workspace:*",
+    "@nexus/xliff": "workspace:*",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^22.10.5",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
   }
 }
