@@ -16,6 +16,27 @@ model User {
   updatedAt      DateTime          @updatedAt
   customerMembers CustomerMember[]
   projectMembers  ProjectMember[]
+  tokens          UserToken[]
+}
+
+model UserToken {
+  id             String    @id @default(cuid())
+  userId         String
+  provider       String    // 'github' | 'azuredevops'
+  scopeType      String    @default("global") // 'global' | 'customer' | 'project'
+  scopeId        String?   // customerId or projectId (null if global)
+  encryptedToken String    // AES-256-GCM encrypted PAT
+  tokenIv        String    // initialization vector for decryption
+  tokenTag       String    // auth tag for AES-GCM
+  label          String    // friendly name e.g. 'My GitHub (Nobilis)'
+  baseUrl        String?   // for Azure DevOps: organization URL
+  expiresAt      DateTime? // optional, for display/warning
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, scopeType, scopeId])
+  @@index([userId])
 }
 
 model Customer {

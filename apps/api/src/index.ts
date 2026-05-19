@@ -14,6 +14,7 @@ import { projectRoutes } from './routes/projects';
 import { projectMemberRoutes } from './routes/project-members';
 import { remoteRoutes } from './routes/remote';
 import { translationRoutes } from './routes/translations';
+import { userTokenRoutes } from './routes/user-tokens';
 
 async function bootstrap() {
   const app = Fastify({ logger: true });
@@ -46,6 +47,7 @@ async function bootstrap() {
   await app.register(glossaryRoutes, { prefix: '/api/glossary' });
   await app.register(aiRoutes, { prefix: '/api/ai' });
   await app.register(remoteRoutes, { prefix: '/api/remote' });
+  await app.register(userTokenRoutes, { prefix: '/api/user/tokens' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
