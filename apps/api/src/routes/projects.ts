@@ -30,16 +30,16 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: project };
   });
 
-  app.post<{ Body: { name: string; description?: string; sourceLanguage: string; targetLanguage: string } }>(
+  app.post<{ Body: { name: string; description?: string; customerId?: string; sourceLanguage: string; targetLanguage: string } }>(
     '/',
     async (req, reply) => {
-      const { name, description, sourceLanguage = 'en', targetLanguage = 'de' } = req.body;
+      const { name, description, customerId, sourceLanguage = 'en', targetLanguage = 'de' } = req.body;
       if (!name) {
         return reply.status(400).send({ error: 'validation', message: 'name is required' });
       }
 
       const project = await prisma.project.create({
-        data: { name, description, sourceLanguage, targetLanguage },
+        data: { name, description, customerId, sourceLanguage, targetLanguage },
       });
 
       return reply.status(201).send({ data: project });

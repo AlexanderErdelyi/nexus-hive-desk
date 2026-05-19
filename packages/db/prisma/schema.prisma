@@ -7,28 +7,60 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Customer {
+  id          String               @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  connections CustomerConnection[]
+  projects    Project[]
+}
+
+model CustomerConnection {
+  id         String   @id @default(cuid())
+  customerId String
+  type       String   // 'azure-devops' | 'github'
+  name       String   // display name, e.g. "My Azure Org" or "GitHub Account"
+  baseUrl    String?  // for Azure DevOps: https://dev.azure.com/{org}, for GitHub: https://api.github.com
+  pat        String   // Personal Access Token
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+}
+
 model Project {
   id              String          @id @default(cuid())
   name            String
   description     String?
+  customerId      String?
   sourceLanguage  String          @default("en")
   targetLanguage  String          @default("de")
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
+  customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   xliffFiles      XliffFile[]
   glossaryEntries GlossaryEntry[]
+
+  @@index([customerId])
 }
 
 model XliffFile {
-  id             String        @id @default(cuid())
-  projectId      String
-  filename       String
-  originalXml    String
-  sourceLanguage String
-  targetLanguage String
-  uploadedAt     DateTime      @default(now())
-  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  translations   Translation[]
+  id               String        @id @default(cuid())
+  projectId        String
+  filename         String
+  originalXml      String
+  sourceLanguage   String
+  targetLanguage   String
+  uploadedAt       DateTime      @default(now())
+  remoteConnectionId String?     // which connection fetched this file
+  remotePath       String?       // full path in repo e.g. "Translations/App.de-DE.xlf"
+  remoteBranch     String?       // branch name
+  remoteRepo       String?       // repo identifier: "org/project/repo" (AzDO) or "owner/repo" (GitHub)
+  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  translations     Translation[]
 }
 
 model Translation {
