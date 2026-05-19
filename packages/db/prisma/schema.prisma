@@ -161,3 +161,103 @@ model GlossaryEntry {
 
   @@unique([projectId, sourceTerm, sourceLanguage, targetLanguage])
 }
+
+// ─── AI Agents, Skills & MCP Connections ─────────────────────────────────────
+
+model Agent {
+  id              String              @id @default(cuid())
+  name            String
+  description     String?
+  customerId      String?
+  projectId       String?
+  modelProvider   String              @default("github-models") // 'github-models' | 'openai' | 'azure-openai' | 'ollama'
+  systemPrompt    String?
+  triggerType     String              @default("manual") // 'manual' | 'scheduled' | 'event-driven'
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  skills          AgentSkill[]
+  mcpConnections  AgentMCPConnection[]
+  runs            AgentRun[]
+
+  @@index([customerId])
+  @@index([projectId])
+}
+
+model Skill {
+  id              String        @id @default(cuid())
+  name            String
+  description     String?
+  builtIn         Boolean       @default(false)
+  type            String        @default("prompt") // 'prompt' | 'code' | 'mcp-tool'
+  promptTemplate  String?       // for prompt-type skills (with {{variable}} interpolation)
+  inputSchema     String?       // JSON Schema as JSON string
+  outputSchema    String?       // JSON Schema as JSON string
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  agents          AgentSkill[]
+
+  @@unique([name, builtIn])
+}
+
+model AgentSkill {
+  id        String   @id @default(cuid())
+  agentId   String
+  skillId   String
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skill     Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, skillId])
+  @@index([agentId])
+  @@index([skillId])
+}
+
+model MCPConnection {
+  id                  String              @id @default(cuid())
+  name                String
+  customerId          String?
+  projectId           String?
+  type                String              // 'wiki_js' | 'azure_devops_wiki' | 'github' | 'azure_devops' | 'custom'
+  baseUrl             String?
+  authType            String              @default("pat") // 'pat' | 'oauth' | 'api_key'
+  encryptedCredential String?
+  credentialIv        String?
+  credentialTag       String?
+  capabilities        String?             // JSON array of capability strings
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  agents              AgentMCPConnection[]
+
+  @@index([customerId])
+  @@index([projectId])
+}
+
+model AgentMCPConnection {
+  id              String        @id @default(cuid())
+  agentId         String
+  mcpConnectionId String
+  createdAt       DateTime      @default(now())
+  agent           Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  mcpConnection   MCPConnection @relation(fields: [mcpConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, mcpConnectionId])
+  @@index([agentId])
+  @@index([mcpConnectionId])
+}
+
+model AgentRun {
+  id        String   @id @default(cuid())
+  agentId   String
+  status    String   @default("pending") // 'pending' | 'running' | 'completed' | 'failed'
+  input     String?  // JSON string of input parameters
+  output    String?  // JSON string of output/results
+  logs      String?  // JSON array of log entries
+  error     String?
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([status])
+}

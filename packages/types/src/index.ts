@@ -280,6 +280,149 @@ export interface AIGlossaryResponse {
   model: string;
 }
 
+// ─── AI Agents ────────────────────────────────────────────────────────────────
+export type AgentTriggerType = 'manual' | 'scheduled' | 'event-driven';
+
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  customerId?: string;
+  projectId?: string;
+  modelProvider: AIProviderType;
+  systemPrompt?: string;
+  triggerType: AgentTriggerType;
+  createdAt: Date;
+  updatedAt: Date;
+  skills?: AgentSkill[];
+  mcpConnections?: AgentMCPConnection[];
+  runs?: AgentRun[];
+}
+
+export interface CreateAgentInput {
+  name: string;
+  description?: string;
+  customerId?: string;
+  projectId?: string;
+  modelProvider?: AIProviderType;
+  systemPrompt?: string;
+  triggerType?: AgentTriggerType;
+  skillIds?: string[];
+  mcpConnectionIds?: string[];
+}
+
+export interface UpdateAgentInput {
+  name?: string;
+  description?: string;
+  modelProvider?: AIProviderType;
+  systemPrompt?: string;
+  triggerType?: AgentTriggerType;
+  skillIds?: string[];
+  mcpConnectionIds?: string[];
+}
+
+export interface AgentSkill {
+  id: string;
+  agentId: string;
+  skillId: string;
+  skill?: Skill;
+  createdAt: Date;
+}
+
+export interface AgentMCPConnection {
+  id: string;
+  agentId: string;
+  mcpConnectionId: string;
+  mcpConnection?: MCPConnection;
+  createdAt: Date;
+}
+
+export type AgentRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface AgentRun {
+  id: string;
+  agentId: string;
+  status: AgentRunStatus;
+  input?: string;
+  output?: string;
+  logs?: string;
+  error?: string;
+  startedAt?: Date;
+  endedAt?: Date;
+  createdAt: Date;
+}
+
+// ─── Skills ───────────────────────────────────────────────────────────────────
+export type SkillType = 'prompt' | 'code' | 'mcp-tool';
+
+export interface Skill {
+  id: string;
+  name: string;
+  description?: string;
+  builtIn: boolean;
+  type: SkillType;
+  promptTemplate?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  description?: string;
+  type?: SkillType;
+  promptTemplate?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+export interface UpdateSkillInput {
+  name?: string;
+  description?: string;
+  type?: SkillType;
+  promptTemplate?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+// ─── MCP Connections ──────────────────────────────────────────────────────────
+export type MCPConnectionType = 'wiki_js' | 'azure_devops_wiki' | 'github' | 'azure_devops' | 'custom';
+export type MCPAuthType = 'pat' | 'oauth' | 'api_key';
+
+export interface MCPConnection {
+  id: string;
+  name: string;
+  customerId?: string;
+  projectId?: string;
+  type: MCPConnectionType;
+  baseUrl?: string;
+  authType: MCPAuthType;
+  capabilities?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateMCPConnectionInput {
+  name: string;
+  customerId?: string;
+  projectId?: string;
+  type: MCPConnectionType;
+  baseUrl?: string;
+  authType?: MCPAuthType;
+  credential?: string;
+  capabilities?: string[];
+}
+
+export interface UpdateMCPConnectionInput {
+  name?: string;
+  type?: MCPConnectionType;
+  baseUrl?: string;
+  authType?: MCPAuthType;
+  credential?: string;
+  capabilities?: string[];
+}
+
 // ─── API Response Wrappers ────────────────────────────────────────────────────
 export interface ApiResponse<T> {
   data: T;
