@@ -2,10 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertCircle, BookOpen, Bug, CheckSquare, ChevronRight, ExternalLink,
-  Filter, Loader2, Plus, RefreshCw, Search, Sparkles, Star, X, Zap, Info,
+  AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronRight, ExternalLink,
+  Filter, Loader2, Plus, RefreshCw, Search, Sparkles, Star, X, Zap,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
@@ -45,6 +45,22 @@ interface WorkItemType {
   color?: string;
 }
 
+interface ChatMessage {
+  role: 'user' | 'agent' | 'log';
+  content: string;
+  timestamp: Date;
+}
+
+interface GeneratedWorkItem {
+  title?: string;
+  description?: string;
+  acceptanceCriteria?: string;
+  type?: string;
+  priority?: number | string;
+  tags?: string;
+  areaPath?: string;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function typeIcon(type: string, size = 14) {
@@ -80,6 +96,18 @@ function priorityBadge(p?: number) {
   const entry = p ? map[p] : null;
   if (!entry) return null;
   return <span className={`text-xs font-medium ${entry.cls}`}>{entry.label}</span>;
+}
+
+function markdownToHtml(content: string) {
+  return content
+    .replace(/\r\n/g, '\n')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Detail side panel ─────────────────────────────────────────────────────────
@@ -178,12 +206,32 @@ function WorkItemForm({
     acceptanceCriteria: '',
     priority: 2,
     tags: '',
+    areaPath: '',
   });
-  const [aiDesc, setAiDesc] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [aiMode, setAiMode] = useState<'direct' | 'agent'>('direct');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiGenerated, setAiGenerated] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [descriptionTab, setDescriptionTab] = useState<'edit' | 'preview'>('edit');
+  const [acceptanceTab, setAcceptanceTab] = useState<'edit' | 'preview'>('edit');
+  const chatRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!selectedAgentId && agents[0]?.id) setSelectedAgentId(agents[0].id);
+  }, [agents, selectedAgentId]);
+
+  useEffect(() => {
+    if (!form.type && defaultType) {
+      setForm((prev) => ({ ...prev, type: defaultType }));
+    }
+  }, [defaultType, form.type]);
+
+  useEffect(() => {
+    if (!chatRef.current) return;
+    chatRef.current.scrollTop = chatRef.current.scrollHeight;
+  }, [chatMessages]);
 
   const createMutation = useMutation({
     mutationFn: () => api.post(`/api/projects/${projectId}/work-items`, form),
@@ -194,185 +242,424 @@ function WorkItemForm({
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
-  function applyGenerated(data: Record<string, string | number>) {
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
+  const isc = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:bg-gray-800 dark:focus:ring-indigo-900/40';
+  const lastLogIndex = chatMessages.reduce((last, message, index) => (message.role === 'log' ? index : last), -1);
+
+  function addChatMessage(role: ChatMessage['role'], content: string) {
+    setChatMessages((prev) => [...prev, { role, content, timestamp: new Date() }]);
+  }
+
+  function applyGenerated(data: GeneratedWorkItem) {
+    const parsedPriority = typeof data.priority === 'number'
+      ? data.priority
+      : typeof data.priority === 'string' && !Number.isNaN(Number(data.priority))
+        ? Number(data.priority)
+        : undefined;
+
+    const nextTitle = data.title ? String(data.title) : '';
+
     setForm((prev) => ({
       ...prev,
-      title: String(data.title ?? prev.title),
-      description: String(data.description ?? prev.description),
-      acceptanceCriteria: String(data.acceptanceCriteria ?? prev.acceptanceCriteria),
+      title: nextTitle || prev.title,
+      description: data.description !== undefined ? String(data.description) : prev.description,
+      acceptanceCriteria: data.acceptanceCriteria !== undefined ? String(data.acceptanceCriteria) : prev.acceptanceCriteria,
       type: data.type ? String(data.type) : prev.type,
-      priority: typeof data.priority === 'number' ? data.priority : prev.priority,
-      tags: String(data.tags ?? prev.tags),
+      priority: parsedPriority ?? prev.priority,
+      tags: data.tags !== undefined ? String(data.tags) : prev.tags,
+      areaPath: data.areaPath !== undefined ? String(data.areaPath) : prev.areaPath,
     }));
+
     setAiGenerated(true);
+    addChatMessage('agent', nextTitle
+      ? `Draft ready: **${nextTitle}**. Review the generated fields below and adjust anything you need.`
+      : 'I generated a draft work item. Review the fields below and adjust anything you need.');
     toast.success('Fields pre-filled by AI — review and adjust ✨');
   }
 
-  async function generateWithAI() {
-    if (!aiDesc.trim()) { toast.error('Describe what you want to create'); return; }
-    setAiLoading(true);
-    try {
-      if (aiMode === 'direct') {
-        const res = await api.post<{ data: Record<string, string | number> }>('/api/ai/generate', {
-          type: 'work-item', description: aiDesc, workItemType: form.type,
-        });
-        applyGenerated(res.data);
-      } else {
-        if (!selectedAgentId) { toast.error('Select an agent first'); return; }
-        const res = await api.post<{ data: Record<string, string | number> }>(
-          `/api/projects/${projectId}/work-items/agent-generate`,
-          { agentId: selectedAgentId, description: aiDesc, workItemType: form.type }
-        );
-        applyGenerated(res.data);
-        const agent = agents.find((a) => a.id === selectedAgentId);
-        toast.success(`Generated via "${agent?.name}" using ${agent?.skills.length ?? 0} skill(s) ✨`);
+  async function generateStreaming(agentId: string, description: string) {
+    const token = localStorage.getItem('nexus_auth_token');
+    const response = await fetch(`/api/projects/${projectId}/work-items/generate-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ agentId, description, workItemType: form.type }),
+    });
+
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => response.statusText);
+      throw new Error(text || 'Streaming request failed');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
+
+      for (const part of parts) {
+        let eventType = 'message';
+        let data = '';
+
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+          if (line.startsWith('data: ')) data += line.slice(6).trim();
+        }
+
+        if (!data) continue;
+        const parsed = JSON.parse(data) as GeneratedWorkItem & { message?: string };
+
+        if (eventType === 'log' && parsed.message) addChatMessage('log', parsed.message);
+        if (eventType === 'result') applyGenerated(parsed);
+        if (eventType === 'error') throw new Error(parsed.message ?? 'Streaming generation failed');
+        if (eventType === 'done') return;
       }
-    } catch (err) {
-      toast.error(getErrorMessage(err));
+    }
+  }
+
+  async function generateDirect(description: string) {
+    addChatMessage('log', 'Analyzing request...');
+    await sleep(500);
+    addChatMessage('log', 'Generating work item content...');
+    await sleep(500);
+
+    const res = await api.post<{ data: GeneratedWorkItem }>('/api/ai/generate', {
+      type: 'work-item',
+      description,
+      workItemType: form.type,
+    });
+
+    applyGenerated(res.data);
+  }
+
+  async function handleGenerate() {
+    const description = prompt.trim();
+    if (!description) {
+      toast.error('Describe what you want to create');
+      return;
+    }
+
+    if (aiMode === 'agent' && !selectedAgentId) {
+      toast.error('Select an agent first');
+      return;
+    }
+
+    addChatMessage('user', description);
+    setPrompt('');
+    setAiLoading(true);
+
+    try {
+      if (aiMode === 'agent') {
+        await generateStreaming(selectedAgentId, description);
+      } else {
+        await generateDirect(description);
+      }
+    } catch (error) {
+      const message = getErrorMessage(error);
+      addChatMessage('log', `Generation failed: ${message}`);
+      toast.error(message);
     } finally {
       setAiLoading(false);
     }
   }
 
-  const selectedAgent = agents.find((a) => a.id === selectedAgentId);
-  const isc = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:bg-gray-800 dark:focus:ring-indigo-900/40';
+  const previewBoxClassName = 'min-h-[9rem] rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200';
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-semibold text-gray-900 dark:text-white">New Work Item</h3>
-          <p className="text-xs text-gray-400 dark:text-gray-600 mt-0.5">Create directly in Azure DevOps</p>
+          <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-600">Create directly in Azure DevOps</p>
         </div>
         <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800">
           <X size={15} />
         </button>
       </div>
 
-      {/* AI Generation box */}
-      <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-violet-50/80 p-4 dark:border-indigo-800/50 dark:from-indigo-900/20 dark:to-violet-900/20">
-        <div className="mb-3 flex items-center gap-2">
-          <Sparkles size={15} className="text-indigo-500" />
-          <span className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Generate with AI</span>
+      <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/90 p-4 shadow-sm dark:border-indigo-900/60 dark:from-indigo-950/40 dark:via-gray-950 dark:to-violet-950/30">
+        <div className="rounded-2xl border border-indigo-200/80 bg-white/90 p-4 shadow-inner dark:border-indigo-900/70 dark:bg-gray-950/80">
+          <div className="mb-4 flex items-start gap-3">
+            <div className="rounded-xl bg-indigo-100 p-2 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300">
+              <Sparkles size={18} />
+            </div>
+            <div className="flex-1">
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Describe what you want to create</h4>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use direct AI for quick drafts or an agent for step-by-step generation with skills and project context.</p>
+            </div>
+          </div>
+
           {agents.length > 0 && (
-            <div className="ml-auto flex rounded-lg border border-indigo-200 bg-white/60 text-xs dark:border-indigo-800 dark:bg-gray-900/40">
+            <div className="mb-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-xl border border-indigo-200 bg-indigo-50 p-1 text-xs dark:border-indigo-900/70 dark:bg-indigo-950/50">
+                  <button
+                    type="button"
+                    onClick={() => setAiMode('direct')}
+                    className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'direct' ? 'bg-indigo-600 text-white shadow-sm' : 'text-indigo-700 hover:bg-white dark:text-indigo-300 dark:hover:bg-gray-900'}`}
+                  >
+                    Direct AI
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAiMode('agent')}
+                    className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'agent' ? 'bg-indigo-600 text-white shadow-sm' : 'text-indigo-700 hover:bg-white dark:text-indigo-300 dark:hover:bg-gray-900'}`}
+                  >
+                    Agent
+                  </button>
+                </div>
+                {aiMode === 'agent' && (
+                  <select
+                    value={selectedAgentId}
+                    onChange={(e) => setSelectedAgentId(e.target.value)}
+                    className="min-w-[13rem] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:focus:ring-indigo-900/40"
+                  >
+                    <option value="">Select an agent…</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {aiMode === 'agent' && selectedAgent && (
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/80 p-3 text-xs text-indigo-900 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-100">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Bot size={13} /> {selectedAgent.name}
+                  </div>
+                  {selectedAgent.description && (
+                    <p className="mt-1 text-indigo-700 dark:text-indigo-200/80">{selectedAgent.description}</p>
+                  )}
+                  <p className="mt-2 text-indigo-700 dark:text-indigo-200/80">
+                    Skills: {selectedAgent.skills.length > 0 ? selectedAgent.skills.map((entry) => entry.skill.name).join(', ') : 'No skills attached'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-gray-200 bg-gray-50/80 p-3 dark:border-gray-800 dark:bg-gray-900/60">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">Message history</div>
+            <div ref={chatRef} className="max-h-72 space-y-3 overflow-y-auto pr-1">
+              {chatMessages.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-4 py-6 text-sm text-gray-400 dark:border-gray-800 dark:bg-gray-950/40 dark:text-gray-500">
+                  Ask for a bug, task, user story, or feature. The agent will show each step as it works.
+                </div>
+              ) : chatMessages.map((message, index) => {
+                if (message.role === 'log') {
+                  const pending = aiLoading && index === lastLogIndex;
+                  return (
+                    <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      {pending ? (
+                        <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
+                      ) : (
+                        <CheckCircle2 size={12} className="shrink-0 text-emerald-500" />
+                      )}
+                      <span>{message.content}</span>
+                    </div>
+                  );
+                }
+
+                if (message.role === 'user') {
+                  return (
+                    <div key={`${message.timestamp.toISOString()}-${index}`} className="flex justify-end">
+                      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-3 text-sm text-white shadow-sm">
+                        {message.content}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-start gap-3">
+                    <div className="mt-1 rounded-xl bg-violet-100 p-2 text-violet-600 dark:bg-violet-900/40 dark:text-violet-300">
+                      <Bot size={14} />
+                    </div>
+                    <div className="max-w-[85%] rounded-2xl rounded-tl-md border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-950 shadow-sm dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-100">
+                      <div dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void handleGenerate();
+              }}
+              rows={4}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/40"
+              placeholder={`What do you want to create? Describe the ${form.type || 'work item'} in plain language… (Ctrl+Enter)`}
+            />
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                {aiGenerated ? 'Latest draft applied below — keep editing before you create it.' : 'The generated draft stays fully editable.'}
+              </div>
               <button
-                onClick={() => setAiMode('direct')}
-                className={`rounded-l-lg px-2.5 py-1 font-medium transition-colors ${aiMode === 'direct' ? 'bg-indigo-600 text-white' : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                type="button"
+                onClick={handleGenerate}
+                disabled={aiLoading || !prompt.trim()}
+                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Direct AI
+                {aiLoading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                {aiLoading ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between border-b border-gray-100 pb-2 dark:border-gray-800">
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Generated Fields</h4>
+          {form.areaPath && (
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-200">
+              Area: {form.areaPath}
+            </span>
+          )}
+        </div>
+
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Type</label>
+            <select value={form.type} onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))} className={isc}>
+              {(workItemTypes.length > 0 ? workItemTypes : [
+                { name: 'User Story' }, { name: 'Bug' }, { name: 'Task' }, { name: 'Feature' }, { name: 'Epic' },
+              ]).map((type) => (
+                <option key={type.name} value={type.name}>{type.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="w-32">
+            <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Priority</label>
+            <select value={form.priority} onChange={(e) => setForm((prev) => ({ ...prev, priority: Number(e.target.value) }))} className={isc}>
+              <option value={1}>Critical</option>
+              <option value={2}>High</option>
+              <option value={3}>Medium</option>
+              <option value={4}>Low</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Title <span className="text-red-400">*</span></label>
+          <input
+            value={form.title}
+            onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
+            className={isc}
+            placeholder="Short, actionable title"
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
+              <button
+                type="button"
+                onClick={() => setDescriptionTab('edit')}
+                className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+              >
+                Edit
               </button>
               <button
-                onClick={() => setAiMode('agent')}
-                className={`flex items-center gap-1 rounded-r-lg px-2.5 py-1 font-medium transition-colors ${aiMode === 'agent' ? 'bg-indigo-600 text-white' : 'text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30'}`}
+                type="button"
+                onClick={() => setDescriptionTab('preview')}
+                className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
               >
-                <Zap size={10} /> Agent
+                Preview
               </button>
+            </div>
+          </div>
+
+          {descriptionTab === 'edit' ? (
+            <textarea
+              value={form.description}
+              onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+              rows={6}
+              className={isc}
+              placeholder="Context, background, technical details…"
+            />
+          ) : form.description ? (
+            <div className={previewBoxClassName}>
+              <div
+                className="prose prose-sm max-w-none dark:prose-invert"
+                dangerouslySetInnerHTML={{ __html: markdownToHtml(form.description) }}
+              />
+            </div>
+          ) : (
+            <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
+              Nothing to preview yet.
             </div>
           )}
         </div>
 
-        {/* Agent picker */}
-        {aiMode === 'agent' && (
-          <div className="mb-3">
-            <select
-              value={selectedAgentId}
-              onChange={(e) => setSelectedAgentId(e.target.value)}
-              className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-indigo-800 dark:bg-gray-800 dark:text-gray-200"
-            >
-              <option value="">Select an agent…</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-            {selectedAgent && (
-              <div className="mt-2 rounded-lg bg-white/80 p-2.5 text-xs dark:bg-gray-900/50">
-                {selectedAgent.description && (
-                  <p className="text-gray-500 dark:text-gray-400 mb-1">{selectedAgent.description}</p>
-                )}
-                {selectedAgent.skills.length > 0 ? (
-                  <p className="text-indigo-600 dark:text-indigo-400">
-                    Skills: {selectedAgent.skills.map((s) => s.skill.name).join(', ')}
-                  </p>
-                ) : (
-                  <p className="flex items-center gap-1 text-amber-500"><Info size={10} /> No skills attached — will use system prompt only</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        <textarea
-          value={aiDesc}
-          onChange={(e) => setAiDesc(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void generateWithAI(); }}
-          rows={2}
-          className="w-full rounded-lg border border-indigo-200 bg-white/80 px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-indigo-800 dark:bg-gray-800/60 dark:text-gray-200 dark:placeholder-gray-500"
-          placeholder={`Describe the ${form.type} you want to create… (Ctrl+Enter)`}
-        />
-
-        <div className="mt-2 flex items-center justify-between">
-          {aiGenerated && (
-            <span className="text-xs text-emerald-600 dark:text-emerald-400">✔ Fields pre-filled — review below</span>
-          )}
-          <button
-            onClick={generateWithAI}
-            disabled={aiLoading || !aiDesc.trim()}
-            className="ml-auto flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {aiLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-            {aiLoading ? 'Generating…' : 'Generate'}
-          </button>
-        </div>
-      </div>
-
-      {/* Form fields */}
-      <div className="flex gap-3">
-        <div className="flex-1">
-          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Type</label>
-          <select value={form.type} onChange={(e) => setForm((p) => ({ ...p, type: e.target.value }))} className={isc}>
-            {(workItemTypes.length > 0 ? workItemTypes : [
-              { name: 'User Story' }, { name: 'Bug' }, { name: 'Task' }, { name: 'Feature' }, { name: 'Epic' }
-            ]).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-          </select>
-        </div>
-        <div className="w-32">
-          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Priority</label>
-          <select value={form.priority} onChange={(e) => setForm((p) => ({ ...p, priority: Number(e.target.value) }))} className={isc}>
-            <option value={1}>Critical</option>
-            <option value={2}>High</option>
-            <option value={3}>Medium</option>
-            <option value={4}>Low</option>
-          </select>
-        </div>
-      </div>
-
-      <div>
-        <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Title <span className="text-red-400">*</span></label>
-        <input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} className={isc} placeholder="Short, actionable title" />
-      </div>
-
-      <div>
-        <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
-        <textarea value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-          rows={5} className={isc} placeholder="Context, background, technical details…" />
-      </div>
-
-      {['user story', 'feature'].includes(form.type.toLowerCase()) && (
         <div>
-          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Acceptance Criteria</label>
-          <textarea value={form.acceptanceCriteria} onChange={(e) => setForm((p) => ({ ...p, acceptanceCriteria: e.target.value }))}
-            rows={5} className={isc} placeholder="Given / When / Then…" />
-        </div>
-      )}
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Acceptance Criteria</label>
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
+              <button
+                type="button"
+                onClick={() => setAcceptanceTab('edit')}
+                className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => setAcceptanceTab('preview')}
+                className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+              >
+                Preview
+              </button>
+            </div>
+          </div>
 
-      <div>
-        <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Tags <span className="text-gray-400 font-normal">(semicolon-separated)</span></label>
-        <input value={form.tags} onChange={(e) => setForm((p) => ({ ...p, tags: e.target.value }))} className={isc} placeholder="BC; translation; sprint-12" />
+          {acceptanceTab === 'edit' ? (
+            <textarea
+              value={form.acceptanceCriteria}
+              onChange={(e) => setForm((prev) => ({ ...prev, acceptanceCriteria: e.target.value }))}
+              rows={6}
+              className={isc}
+              placeholder={['user story', 'feature'].includes(form.type.toLowerCase()) ? 'Given / When / Then…' : 'Definition of done, repro steps, or validation notes…'}
+            />
+          ) : form.acceptanceCriteria ? (
+            <div className={previewBoxClassName}>
+              <div
+                className="prose prose-sm max-w-none dark:prose-invert"
+                dangerouslySetInnerHTML={{ __html: markdownToHtml(form.acceptanceCriteria) }}
+              />
+            </div>
+          ) : (
+            <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
+              Nothing to preview yet.
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Tags <span className="font-normal text-gray-400">(semicolon-separated)</span></label>
+          <input
+            value={form.tags}
+            onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))}
+            className={isc}
+            placeholder="BC; translation; sprint-12"
+          />
+        </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-800">
         <button
           onClick={onClose}

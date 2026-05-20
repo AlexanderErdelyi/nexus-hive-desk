@@ -25,6 +25,72 @@ async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promi
   return res.json() as Promise<T>;
 }
 
+
+type ChatModelMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+type AdoClassificationNode = {
+  name: string;
+  path?: string;
+  children?: AdoClassificationNode[];
+  attributes?: { startDate?: string; finishDate?: string };
+};
+
+async function fetchModelJson<T = Record<string, unknown>>(
+  token: string,
+  model: string,
+  messages: ChatModelMessage[],
+  temperature = 0.7
+): Promise<T> {
+  const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      response_format: { type: 'json_object' },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => response.statusText);
+    throw new Error(`AI API error: ${text}`);
+  }
+
+  const aiResponse = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+  return JSON.parse(content) as T;
+}
+
+function getFirstLevelPaths(root?: AdoClassificationNode | null): string[] {
+  return (root?.children ?? [])
+    .map((child) => child.path ?? child.name)
+    .filter((value): value is string => Boolean(value));
+}
+
+function getActiveIterationPaths(root?: AdoClassificationNode | null): string[] {
+  const now = Date.now();
+  const paths = new Set<string>();
+
+  const visit = (node: AdoClassificationNode, depth: number) => {
+    if (depth > 0 && node.path) {
+      const finishDate = node.attributes?.finishDate ? Date.parse(node.attributes.finishDate) : Number.POSITIVE_INFINITY;
+      if (Number.isNaN(finishDate) || finishDate >= now) {
+        paths.add(node.path);
+      }
+    }
+
+    if (depth >= 2) return;
+    for (const child of node.children ?? []) visit(child, depth + 1);
+  };
+
+  if (root) visit(root, 0);
+  return [...paths];
+}
+
 export async function workItemRoutes(app: FastifyInstance) {
   // ─── List work items ───────────────────────────────────────────────────────
   app.get<{
@@ -313,6 +379,167 @@ export async function workItemRoutes(app: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       return reply.status(502).send({ error: 'remote_error', message });
+    }
+  });
+
+  // ─── AI agent streaming run for work item generation ───────────────────────
+  app.post<{
+    Params: { id: string };
+    Body: { agentId?: string; description: string; workItemType?: string };
+  }>('/:id/work-items/generate-stream', async (req, reply) => {
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.flushHeaders?.();
+
+    const sendEvent = (type: string, payload: Record<string, unknown>) => {
+      reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    const sendLog = (message: string) => sendEvent('log', { message });
+    const endStream = () => {
+      if (!reply.raw.writableEnded) reply.raw.end();
+    };
+
+    try {
+      const { agentId, description, workItemType } = req.body;
+      if (!description?.trim()) throw new Error('description is required');
+
+      const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+      if (!project) throw new Error('Project not found');
+
+      const token = process.env.GITHUB_TOKEN;
+      if (!token) throw new Error('AI provider token not configured');
+
+      const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+      const trimmedDescription = description.trim();
+      let adoContext = 'Azure DevOps project context was not available for this request.';
+
+      sendLog('Loading project context from Azure DevOps...');
+      if (project.connectionId && project.adoProjectName) {
+        const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+        if (!conn || conn.type !== 'azure-devops') {
+          throw new Error('Azure DevOps connection not found');
+        }
+
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const adoProject = encodeURIComponent(project.adoProjectName);
+        const [typesData, areasData, iterationsData] = await Promise.all([
+          fetchJsonWithInit<{ value?: Array<{ name: string }> }>(
+            `${baseUrl}/${adoProject}/_apis/wit/workitemtypes?api-version=7.1`,
+            { method: 'GET', headers: azureHeaders(conn.pat) }
+          ),
+          fetchJsonWithInit<AdoClassificationNode>(
+            `${baseUrl}/${adoProject}/_apis/wit/classificationnodes/areas?$depth=2&api-version=7.1`,
+            { method: 'GET', headers: azureHeaders(conn.pat) }
+          ),
+          fetchJsonWithInit<AdoClassificationNode>(
+            `${baseUrl}/${adoProject}/_apis/wit/classificationnodes/iterations?$depth=2&api-version=7.1`,
+            { method: 'GET', headers: azureHeaders(conn.pat) }
+          ),
+        ]);
+
+        const workItemTypes = (typesData.value ?? []).map((item) => item.name).filter(Boolean);
+        const areaPaths = getFirstLevelPaths(areasData);
+        const iterationPaths = getActiveIterationPaths(iterationsData).filter((path) => path !== project.adoProjectName);
+
+        adoContext = [
+          `Azure DevOps project: ${project.adoProjectName}`,
+          `Allowed work item types:\n${workItemTypes.length > 0 ? workItemTypes.map((item) => `- ${item}`).join('\n') : '- None returned'}`,
+          `Available area paths:\n${areaPaths.length > 0 ? areaPaths.map((item) => `- ${item}`).join('\n') : '- None returned'}`,
+          `Active iterations:\n${iterationPaths.length > 0 ? iterationPaths.map((item) => `- ${item}`).join('\n') : '- None returned'}`,
+        ].join('\n\n');
+
+        sendLog(`Context loaded: ${workItemTypes.length} work item types, ${areaPaths.length} area paths, ${iterationPaths.length} iterations`);
+      } else {
+        sendLog('Context loaded: 0 work item types, 0 area paths, 0 iterations');
+      }
+
+      let agent: Awaited<ReturnType<typeof prisma.agent.findUnique>> | null = null;
+      let selectedSkillLinks: Array<{ skill: { name: string; type: string; promptTemplate: string | null } }> = [];
+
+      if (agentId) {
+        agent = await prisma.agent.findUnique({
+          where: { id: agentId },
+          include: { skills: { include: { skill: true } } },
+        });
+
+        if (!agent) throw new Error('Agent not found');
+
+        sendLog(`Loading agent: ${agent.name}...`);
+        const skillNames = agent.skills.map((entry) => entry.skill.name);
+        sendLog(`Agent has ${agent.skills.length} skill(s): ${skillNames.length > 0 ? skillNames.join(', ') : 'none'}`);
+
+        if (agent.skills.length > 0) {
+          sendLog('Selecting relevant skills for this request...');
+          const skillSelection = await fetchModelJson<{ selectedSkills?: string[] }>(
+            token,
+            model,
+            [
+              {
+                role: 'system',
+                content: 'You are a skill selector. Given a user request and a list of skills, select the most relevant skills to use. Return JSON: { "selectedSkills": ["skill name 1", "skill name 2"] }',
+              },
+              {
+                role: 'user',
+                content: `Request: ${trimmedDescription}\nAvailable skills:\n${agent.skills.map((entry) => `- ${entry.skill.name}: ${entry.skill.description ?? 'No description provided.'}`).join('\n')}`,
+              },
+            ],
+            0.2
+          );
+
+          const selectedSkillNames = Array.isArray(skillSelection.selectedSkills)
+            ? skillSelection.selectedSkills.map((name) => String(name))
+            : [];
+
+          selectedSkillLinks = agent.skills.filter((entry) => selectedSkillNames.includes(entry.skill.name));
+          for (const entry of selectedSkillLinks) {
+            sendLog(`Using skill: ${entry.skill.name}`);
+          }
+        }
+      }
+
+      sendLog('Generating work item content...');
+      const selectedSkillPrompts = selectedSkillLinks
+        .filter((entry) => entry.skill.type === 'prompt' && entry.skill.promptTemplate)
+        .map((entry) => `## Skill: ${entry.skill.name}\n${entry.skill.promptTemplate}`)
+        .join('\n\n');
+
+      const systemContent = [
+        agent?.systemPrompt?.trim() || 'You are a helpful work item writer.',
+        selectedSkillPrompts,
+        adoContext,
+        `Your task is to generate a work item. IMPORTANT: Follow the language and style instructions above exactly.
+Return ONLY valid JSON with these fields (plain text or markdown only, no HTML):
+{
+  "title": "concise title",
+  "description": "plain text or markdown description of the work item",
+  "acceptanceCriteria": "plain text or markdown acceptance criteria",
+  "type": "${workItemType ?? 'User Story'}",
+  "priority": 2,
+  "tags": "comma-separated tags or empty string",
+  "areaPath": "best matching Azure DevOps area path or empty string"
+}
+If the system prompt above specifies a language, ALL text fields must be written in that language. Prefer one of the provided work item types and area paths when context is available.`,
+      ].filter(Boolean).join('\n\n');
+
+      const generated = await fetchModelJson<Record<string, unknown>>(
+        token,
+        model,
+        [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: trimmedDescription },
+        ]
+      );
+
+      sendEvent('result', generated);
+      sendEvent('done', { ok: true });
+      endStream();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      sendEvent('error', { message });
+      endStream();
     }
   });
 
