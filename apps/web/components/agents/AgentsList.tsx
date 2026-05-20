@@ -712,7 +712,7 @@ function McpTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat' });
+  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '' });
 
   const { data, isLoading } = useQuery({
     queryKey: ['mcp-connections'],
@@ -724,7 +724,7 @@ function McpTab() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-connections'] });
       setShowCreate(false);
-      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat' });
+      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '' });
       toast.success('MCP connection created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -753,6 +753,7 @@ function McpTab() {
       type: String(data.type ?? 'custom'),
       baseUrl: String(data.baseUrl ?? ''),
       authType: String(data.authType ?? 'pat'),
+      credential: '',
     });
     setShowAIPanel(false);
     setShowCreate(true);
@@ -846,6 +847,23 @@ function McpTab() {
                 <option value="oauth">OAuth</option>
                 <option value="api_key">API Key</option>
               </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>
+                {form.type === 'teams_recorder' ? 'GitHub Token (GITHUB_TOKEN)' : 'Credential / Token'}
+              </label>
+              <input
+                className={inputClass}
+                type="password"
+                value={form.credential}
+                onChange={(e) => setForm((f) => ({ ...f, credential: e.target.value }))}
+                placeholder={form.type === 'teams_recorder' ? 'ghp_... (required for AI analysis)' : 'PAT or API key'}
+              />
+              {form.type === 'teams_recorder' && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  GitHub token with Copilot/models access. Required for AI analysis; list_recordings works without it.
+                </p>
+              )}
             </div>
           </div>
           <div className="mt-4 flex gap-3">

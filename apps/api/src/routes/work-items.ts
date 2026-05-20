@@ -658,6 +658,7 @@ export async function workItemRoutes(app: FastifyInstance) {
               }
             } catch (mcpErr) {
               sendLog(`Teams MCP unavailable: ${mcpErr instanceof Error ? mcpErr.message : 'unknown'}`);
+              mcpContext = '## Note\nThe Teams Recording MCP was unavailable. Do NOT create a work item about recording, transcription, or audio processing features. Instead, use the user\'s message as a plain feature/bug description and generate a work item based on the actual intent.';
             }
           }
         }
@@ -673,7 +674,8 @@ export async function workItemRoutes(app: FastifyInstance) {
         includeTechnicalSpec
           ? 'The user requested a technical specification. Fill the technicalSpec field with a concise, implementation-oriented technical specification based on the repository context when possible.'
           : 'Only populate the technicalSpec field when the user explicitly asks for a technical specification; otherwise return an empty string.',
-        `Your task is to generate a work item. IMPORTANT: Follow the language and style instructions above exactly.
+        `Your task is to generate a work item. The user's message is an INSTRUCTION to you — it tells you what kind of work item to create, possibly referencing a recording or file for context. Do NOT create a work item whose subject IS the user's instruction.
+IMPORTANT: Follow the language and style instructions above exactly.
 Return ONLY valid JSON with these fields (plain text or markdown only, no HTML):
 {
   "title": "concise title",

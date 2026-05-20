@@ -14,7 +14,7 @@
     "@fastify/jwt": "^10.1.0",
     "@fastify/multipart": "^9.0.3",
     "@fastify/rate-limit": "^10.3.0",
-    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@nexus/ai": "workspace:*",
     "@nexus/db": "workspace:*",
     "@nexus/types": "workspace:*",
