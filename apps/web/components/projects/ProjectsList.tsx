@@ -31,7 +31,7 @@ function getErrorMessage(error: unknown) {
 export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string }) {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(!!defaultCustomerId);
-  const [form, setForm] = useState({ name: '', description: '', customerId: defaultCustomerId ?? '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+  const [form, setForm] = useState({ name: '', description: '', customerId: defaultCustomerId ?? '' });
   const [customerFilter, setCustomerFilter] = useState('');
 
   const { data: customersData } = useQuery({
@@ -55,7 +55,7 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', customerId: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+      setForm({ name: '', description: '', customerId: '' });
       toast.success('Project created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -131,22 +131,6 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
                 ))}
               </select>
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Source Language</label>
-              <input
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                value={form.sourceLanguage}
-                onChange={(e) => setForm((f) => ({ ...f, sourceLanguage: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Target Language</label>
-              <input
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                value={form.targetLanguage}
-                onChange={(e) => setForm((f) => ({ ...f, targetLanguage: e.target.value }))}
-              />
-            </div>
           </div>
           <div className="mt-4 flex gap-3">
             <button
@@ -195,7 +179,6 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
                 </button>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <span className="rounded bg-gray-100 px-2 py-0.5 dark:bg-gray-800">{p.sourceLanguage} → {p.targetLanguage}</span>
                 {p.customer && (
                   <a
                     href={`/customers/${p.customer.id}`}
