@@ -643,7 +643,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </button>
           </div>
         ) : (
-          <WorkItemsView projectId={projectId} />
+          <WorkItemsView projectId={projectId} customerId={project.customerId} />
         )}
       </div>
     );

@@ -54,7 +54,7 @@ export async function workItemRoutes(app: FastifyInstance) {
     if (state) conditions.push(`[System.State] = '${state}'`);
     if (assignedTo) conditions.push(`[System.AssignedTo] = '${assignedTo}'`);
 
-    const wiql = `SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.AssignedTo], [System.CreatedDate], [System.ChangedDate], [System.Priority] FROM WorkItems WHERE ${conditions.join(' AND ')} ORDER BY [System.ChangedDate] DESC`;
+    const wiql = `SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.AssignedTo], [System.CreatedDate], [System.ChangedDate] FROM WorkItems WHERE ${conditions.join(' AND ')} ORDER BY [System.ChangedDate] DESC`;
 
     try {
       const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
@@ -72,7 +72,8 @@ export async function workItemRoutes(app: FastifyInstance) {
       const fields = [
         'System.Id', 'System.Title', 'System.WorkItemType', 'System.State',
         'System.AssignedTo', 'System.CreatedDate', 'System.ChangedDate',
-        'System.Priority', 'System.Description', 'Microsoft.VSTS.Common.AcceptanceCriteria',
+        'Microsoft.VSTS.Common.Priority', 'System.Description',
+        'Microsoft.VSTS.Common.AcceptanceCriteria',
         'System.Tags', 'System.AreaPath', 'System.IterationPath',
       ].join(',');
 
@@ -90,7 +91,7 @@ export async function workItemRoutes(app: FastifyInstance) {
           title: f['System.Title'],
           type: f['System.WorkItemType'],
           state: f['System.State'],
-          priority: f['System.Priority'],
+          priority: f['Microsoft.VSTS.Common.Priority'],
           assignedTo: assignee ? (assignee.displayName ?? assignee.uniqueName ?? null) : null,
           description: f['System.Description'] ?? null,
           acceptanceCriteria: f['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? null,
@@ -129,7 +130,8 @@ export async function workItemRoutes(app: FastifyInstance) {
         const fields = [
           'System.Id', 'System.Title', 'System.WorkItemType', 'System.State',
           'System.AssignedTo', 'System.CreatedDate', 'System.ChangedDate',
-          'System.Priority', 'System.Description', 'Microsoft.VSTS.Common.AcceptanceCriteria',
+          'Microsoft.VSTS.Common.Priority', 'System.Description',
+          'Microsoft.VSTS.Common.AcceptanceCriteria',
           'System.Tags', 'System.AreaPath', 'System.IterationPath', 'System.History',
         ].join(',');
 
@@ -146,7 +148,7 @@ export async function workItemRoutes(app: FastifyInstance) {
             title: f['System.Title'],
             type: f['System.WorkItemType'],
             state: f['System.State'],
-            priority: f['System.Priority'],
+            priority: f['Microsoft.VSTS.Common.Priority'],
             assignedTo: assignee ? (assignee.displayName ?? assignee.uniqueName ?? null) : null,
             description: f['System.Description'] ?? null,
             acceptanceCriteria: f['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? null,
