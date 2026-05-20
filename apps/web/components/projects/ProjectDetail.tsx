@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
+import { ProjectRemoteSettings } from './ProjectRemoteSettings';
 import { formatDate } from '@/lib/utils';
 
 interface Customer {
@@ -23,6 +24,10 @@ interface Project {
   description?: string;
   customerId?: string | null;
   customer?: Customer | null;
+  connectionId?: string | null;
+  adoProjectName?: string | null;
+  adoRepoName?: string | null;
+  defaultBranch?: string | null;
   sourceLanguage: string;
   targetLanguage: string;
   xliffFiles: Array<{
@@ -51,6 +56,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [commitMsg, setCommitMsg] = useState('');
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
+  const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -165,6 +171,14 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   const project = data?.data;
 
+  // Sync remote config from project data on load
+  const effectiveRemoteConfig = {
+    connectionId: remoteConfig.connectionId !== undefined ? remoteConfig.connectionId : project?.connectionId,
+    adoProjectName: remoteConfig.adoProjectName !== undefined ? remoteConfig.adoProjectName : project?.adoProjectName,
+    adoRepoName: remoteConfig.adoRepoName !== undefined ? remoteConfig.adoRepoName : project?.adoRepoName,
+    defaultBranch: remoteConfig.defaultBranch !== undefined ? remoteConfig.defaultBranch : project?.defaultBranch,
+  };
+
   if (isLoading) return <div className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</div>;
   if (!project) return <div className="py-12 text-center text-red-500">Project not found</div>;
 
@@ -253,6 +267,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               </a>
             </div>
           </div>
+
+          <ProjectRemoteSettings
+            projectId={projectId}
+            customerId={project.customerId}
+            current={effectiveRemoteConfig}
+            onSaved={(cfg) => setRemoteConfig(cfg)}
+          />
         </div>
 
         {/* Files list */}
@@ -372,6 +393,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <RemoteFileBrowser
           projectId={projectId}
           customerId={project.customerId}
+          preConnId={effectiveRemoteConfig.connectionId ?? undefined}
+          preADOProject={effectiveRemoteConfig.adoProjectName ?? undefined}
+          preRepo={effectiveRemoteConfig.adoRepoName ?? undefined}
+          preBranch={effectiveRemoteConfig.defaultBranch ?? undefined}
           onClose={() => setShowRemoteBrowser(false)}
           onImported={(fileId, filename, total) => {
             setShowRemoteBrowser(false);

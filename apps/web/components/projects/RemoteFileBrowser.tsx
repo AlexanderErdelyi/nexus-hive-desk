@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronRight, Folder, FileCode2, Loader2, X, ArrowLeft } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -16,12 +16,23 @@ type Step = 'connection' | 'adoProject' | 'repo' | 'branch' | 'files';
 interface Props {
   projectId: string;
   customerId?: string | null;
+  /** Pre-configured values — when all four are set, skip straight to file browsing */
+  preConnId?: string;
+  preADOProject?: string;
+  preRepo?: string;
+  preBranch?: string;
   onImported: (xliffFileId: string, filename: string, total: number) => void;
   onClose: () => void;
 }
 
-export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }: Props) {
-  const [step, setStep] = useState<Step>('connection');
+export function RemoteFileBrowser({
+  projectId, customerId,
+  preConnId, preADOProject, preRepo, preBranch,
+  onImported, onClose,
+}: Props) {
+  const allPreConfigured = !!(preConnId && preADOProject && preRepo && preBranch);
+
+  const [step, setStep] = useState<Step>(allPreConfigured ? 'files' : 'connection');
   const [loading, setLoading] = useState(false);
 
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -31,12 +42,48 @@ export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }
   const [files, setFiles] = useState<FileEntry[]>([]);
 
   const [selectedConn, setSelectedConn] = useState<Connection | null>(null);
-  const [selectedADOProject, setSelectedADOProject] = useState<ADOProject | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [selectedBranch, setSelectedBranch] = useState<string>('');
+  const [selectedADOProject, setSelectedADOProject] = useState<ADOProject | null>(
+    preADOProject ? { id: preADOProject, name: preADOProject } : null
+  );
+  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(
+    preRepo ? { id: preRepo, name: preRepo } : null
+  );
+  const [selectedBranch, setSelectedBranch] = useState<string>(preBranch ?? '');
   const [currentPath, setCurrentPath] = useState('/');
 
   const [importing, setImporting] = useState(false);
+
+  // ─── Mount: load connections or jump straight to file browsing ────────────
+  useEffect(() => {
+    if (allPreConfigured) {
+      // Resolve the connection object, then browse immediately
+      resolvePreConfiguredAndBrowse();
+    } else {
+      loadConnections();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function resolvePreConfiguredAndBrowse() {
+    if (!customerId || !preConnId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<{ data: { connections: Connection[] } }>(`/api/customers/${customerId}`);
+      const conn = (res.data.connections ?? []).find((c) => c.id === preConnId);
+      if (!conn) {
+        toast.error('Configured connection not found. Please reconfigure.');
+        loadConnections();
+        return;
+      }
+      setSelectedConn(conn);
+      await browsePathWithContext(conn, preADOProject!, preRepo!, preBranch!, '/');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load pre-configured repo');
+      loadConnections();
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // ─── Step: Connections ──────────────────────────────────────────────────────
   async function loadConnections() {
@@ -61,9 +108,6 @@ export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }
     }
   }
 
-  // Call on mount (component renders → load connections immediately)
-  useState(() => { loadConnections(); });
-
   // ─── Step: ADO Projects ─────────────────────────────────────────────────────
   async function selectConnection(conn: Connection) {
     setSelectedConn(conn);
@@ -74,7 +118,6 @@ export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }
         setAdoProjects(res.data);
         setStep('adoProject');
       } else {
-        // GitHub — skip ADO project step, go straight to repos
         const res = await api.get<{ data: Repo[] }>(`/api/remote/connections/${conn.id}/github/repos`);
         setRepos(res.data);
         setStep('repo');
@@ -123,6 +166,27 @@ export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }
   }
 
   // ─── Step: Files ────────────────────────────────────────────────────────────
+  /** Browse using explicit context (used when skipping steps with pre-configured values) */
+  async function browsePathWithContext(
+    conn: Connection, adoProject: string, repoName: string, branch: string, path = '/'
+  ) {
+    setLoading(true);
+    setCurrentPath(path);
+    try {
+      const params = new URLSearchParams({ branch, path });
+      const res = await api.get<{ data: FileEntry[] }>(
+        `/api/remote/connections/${conn.id}/azure/projects/${encodeURIComponent(adoProject)}/repos/${encodeURIComponent(repoName)}/files?${params}`
+      );
+      setFiles(res.data);
+      setSelectedBranch(branch);
+      setStep('files');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to browse files');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function browsePath(branch: string, path = '/') {
     setLoading(true);
     setCurrentPath(path);
@@ -188,7 +252,12 @@ export function RemoteFileBrowser({ projectId, customerId, onImported, onClose }
 
   // ─── Navigation helpers ─────────────────────────────────────────────────────
   function goBack() {
-    if (step === 'files')       { setStep('branch'); return; }
+    if (step === 'files') {
+      // If pre-configured, there's nowhere to go back to — just close
+      if (allPreConfigured && currentPath === '/') { onClose(); return; }
+      if (currentPath !== '/') { browsePath(selectedBranch, currentPath.split('/').slice(0, -1).join('/') || '/'); return; }
+      setStep('branch'); return;
+    }
     if (step === 'branch')      { setStep('repo'); return; }
     if (step === 'repo')        { setStep(selectedConn?.type === 'azure-devops' ? 'adoProject' : 'connection'); return; }
     if (step === 'adoProject')  { setStep('connection'); return; }
