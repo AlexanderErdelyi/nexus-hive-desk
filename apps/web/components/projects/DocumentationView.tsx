@@ -293,7 +293,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLogs, setAiLogs] = useState<string[]>([]);
   const [aiStreamText, setAiStreamText] = useState('');
-  const [refineInput, setRefineInput] = useState('');
+  const refineInputRef = useRef<HTMLTextAreaElement>(null);
   const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string; ts: number }>>([]);
   const [editorFormat, setEditorFormat] = useState<'markdown' | 'html'>('markdown');
   const [htmlViewMode, setHtmlViewMode] = useState<'edit' | 'preview'>('edit');
@@ -679,12 +679,12 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
 
   async function handleRefine() {
     if (!activeMcpId) return;
-    const message = refineInput.trim();
+    const message = (refineInputRef.current?.value ?? '').trim();
     if (!message) return;
 
     const userTurn = { role: 'user' as const, content: message, ts: Date.now() };
     setChatHistory((prev) => [...prev, userTurn]);
-    setRefineInput('');
+    if (refineInputRef.current) refineInputRef.current.value = '';
     setAiLoading(true);
 
     try {
@@ -1331,10 +1331,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                       {/* Input */}
                       <div className="flex gap-2">
                         <textarea
+                          ref={refineInputRef}
                           rows={2}
                           className={`${inputClass} resize-none`}
-                          value={refineInput}
-                          onChange={(e) => setRefineInput(e.target.value)}
+                          defaultValue=""
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
@@ -1347,7 +1347,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                         <button
                           type="button"
                           onClick={() => void handleRefine()}
-                          disabled={aiLoading || !refineInput.trim()}
+                          disabled={aiLoading}
                           className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
                         >
                           {aiLoading ? <Loader2 size={15} className="animate-spin" /> : '↑'}
