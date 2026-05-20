@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { encryptToken, decryptToken } from '../lib/crypto';
 
 const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom'] as const;
 
@@ -69,6 +70,16 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       });
     }
 
+    let encryptedCredential: string | undefined;
+    let credentialIv: string | undefined;
+    let credentialTag: string | undefined;
+    if (credential) {
+      const enc = encryptToken(credential);
+      encryptedCredential = enc.encrypted;
+      credentialIv = enc.iv;
+      credentialTag = enc.tag;
+    }
+
     const connection = await prisma.mCPConnection.create({
       data: {
         name,
@@ -77,7 +88,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         projectId,
         baseUrl,
         authType,
-        encryptedCredential: credential,
+        encryptedCredential,
+        credentialIv,
+        credentialTag,
         capabilities,
       },
     });
@@ -110,7 +123,10 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
 
     const data: Record<string, unknown> = { ...rest };
     if (credential !== undefined) {
-      data.encryptedCredential = credential;
+      const enc = encryptToken(credential);
+      data.encryptedCredential = enc.encrypted;
+      data.credentialIv = enc.iv;
+      data.credentialTag = enc.tag;
     }
 
     const connection = await prisma.mCPConnection.update({
@@ -137,6 +153,71 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
     }
 
-    return { data: { status: 'ok', message: 'Connection test not yet implemented' } };
+    try {
+      let credential: string | null = null;
+      if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+        credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+      }
+
+      if (!credential) {
+        return reply.status(400).send({ data: { status: 'error', message: 'No credential configured' } });
+      }
+
+      if (connection.type === 'github') {
+        const res = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${credential}`, Accept: 'application/vnd.github+json' },
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          return { data: { status: 'error', message: `GitHub API returned ${res.status}: ${errText}` } };
+        }
+        const user = (await res.json()) as { login?: string };
+        return { data: { status: 'ok', message: `Connected as ${user.login ?? 'unknown'}` } };
+      }
+
+      if (connection.type === 'azure_devops_wiki' || connection.type === 'azure_devops') {
+        const baseUrl = connection.baseUrl?.replace(/\/$/, '');
+        if (!baseUrl) {
+          return { data: { status: 'error', message: 'No baseUrl configured' } };
+        }
+        const res = await fetch(`${baseUrl}/_apis/projects?api-version=7.1`, {
+          headers: {
+            Authorization: `Basic ${Buffer.from(':' + credential).toString('base64')}`,
+            Accept: 'application/json',
+          },
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          return { data: { status: 'error', message: `Azure DevOps API returned ${res.status}: ${errText}` } };
+        }
+        const body = (await res.json()) as { count?: number };
+        return { data: { status: 'ok', message: `Connected — ${body.count ?? 0} project(s) found` } };
+      }
+
+      if (connection.type === 'wiki_js') {
+        const baseUrl = connection.baseUrl?.replace(/\/$/, '');
+        if (!baseUrl) {
+          return { data: { status: 'error', message: 'No baseUrl configured' } };
+        }
+        const res = await fetch(`${baseUrl}/graphql`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${credential}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query: '{ site { title } }' }),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          return { data: { status: 'error', message: `Wiki.js API returned ${res.status}: ${errText}` } };
+        }
+        return { data: { status: 'ok', message: 'Connected to Wiki.js' } };
+      }
+
+      return { data: { status: 'ok', message: `Connection type '${connection.type}' stored — no adapter test available` } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return { data: { status: 'error', message } };
+    }
   });
 }
