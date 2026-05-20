@@ -215,10 +215,111 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: { content: xml, filename: file.filename } };
   });
 
-  // ─── Update project ──────────────────────────────────────────────────────────
+  // ─── Sync file from remote ───────────────────────────────────────────────────
+  // Fetches the latest XLIFF from the remote repo and merges it:
+  // - Updates source text for existing units (preserves local target/state)
+  // - Adds new units found in remote
+  // - Marks units no longer in remote as 'obsolete' (does not delete them)
+  app.post<{ Params: { id: string; fileId: string } }>('/:id/xliff/:fileId/sync-from-remote', async (req, reply) => {
+    const file = await prisma.xliffFile.findUnique({ where: { id: req.params.fileId } });
+    if (!file) return reply.status(404).send({ error: 'not_found', message: 'File not found' });
+    if (!file.remoteConnectionId || !file.remotePath || !file.remoteBranch || !file.remoteRepo) {
+      return reply.status(400).send({ error: 'no_remote', message: 'File has no remote configuration' });
+    }
+
+    const conn = await prisma.customerConnection.findUnique({ where: { id: file.remoteConnectionId } });
+    if (!conn) return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+
+    // Decrypt PAT
+    const { TokenEncryption } = await import('../lib/token-encryption.js');
+    const pat = TokenEncryption.decrypt(conn.encryptedPat);
+
+    // Fetch remote content
+    let remoteXml: string;
+    const repoParts = file.remoteRepo.split('/');
+    try {
+      if (conn.type === 'azure-devops') {
+        const [, adoProject, repoName] = repoParts.length === 3 ? repoParts : ['', repoParts[0], repoParts[1] ?? ''];
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const encodedPath = encodeURIComponent(file.remotePath);
+        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodedPath}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&$format=text&api-version=7.1`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+        remoteXml = await res.text();
+      } else {
+        const [owner, repoName] = repoParts;
+        const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/contents/${file.remotePath}?ref=${encodeURIComponent(file.remoteBranch)}`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+        remoteXml = await res.text();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.status(502).send({ error: 'remote_error', message });
+    }
+
+    // Parse remote XLIFF
+    let parsed;
+    try {
+      parsed = parseXliff(remoteXml);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(400).send({ error: 'parse_error', message });
+    }
+
+    // Merge: update originalXml, upsert units
+    await prisma.xliffFile.update({
+      where: { id: file.id },
+      data: { originalXml: remoteXml },
+    });
+
+    const existing = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
+    const existingMap = new Map(existing.map((t) => [t.unitId, t]));
+    const remoteIds = new Set(parsed.units.map((u) => u.id));
+
+    let added = 0;
+    let updated = 0;
+
+    for (const unit of parsed.units) {
+      const local = existingMap.get(unit.id);
+      if (!local) {
+        await prisma.translation.create({
+          data: {
+            xliffFileId: file.id,
+            projectId: req.params.id,
+            unitId: unit.id,
+            source: unit.source,
+            target: unit.target ?? '',
+            state: unit.state,
+            note: unit.note,
+            developerNote: unit.developerNote,
+          },
+        });
+        added++;
+      } else if (local.source !== unit.source) {
+        await prisma.translation.update({
+          where: { id: local.id },
+          data: { source: unit.source, note: unit.note, developerNote: unit.developerNote },
+        });
+        updated++;
+      }
+    }
+
+    // Mark removed units
+    const removed = existing.filter((t) => !remoteIds.has(t.unitId));
+    for (const t of removed) {
+      await prisma.translation.update({ where: { id: t.id }, data: { state: 'needs-review' } });
+    }
+
+    return { data: { added, updated, obsolete: removed.length, total: parsed.units.length } };
+  });
   app.patch<{
     Params: { id: string };
-    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string; targetLanguage?: string };
+    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string; targetLanguage?: string; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null };
   }>('/:id', async (req, reply) => {
     const existing = await prisma.project.findUnique({ where: { id: req.params.id } });
     if (!existing) {

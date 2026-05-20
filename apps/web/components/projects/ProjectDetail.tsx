@@ -58,7 +58,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [committingFile, setCommittingFile] = useState<string | null>(null);
+  const [syncingFile, setSyncingFile] = useState<string | null>(null);
   const [commitMsg, setCommitMsg] = useState('');
+  const [commitNewBranch, setCommitNewBranch] = useState(false);
+  const [newBranchName, setNewBranchName] = useState('');
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
@@ -105,68 +108,101 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const commitToRemote = useCallback(
     async (file: Project['xliffFiles'][0]) => {
       if (!file.remoteConnectionId || !file.remotePath || !file.remoteBranch || !file.remoteRepo) return;
-      if (!commitMsg.trim()) {
-        toast.error('Please enter a commit message');
-        return;
-      }
+      if (!commitMsg.trim()) { toast.error('Please enter a commit message'); return; }
+      if (commitNewBranch && !newBranchName.trim()) { toast.error('Please enter a branch name'); return; }
 
       setCommittingFile(file.id);
       try {
-        // Get the current XLIFF content with all translations applied
         const contentRes = await api.get<{ data: { content: string } }>(
           `/api/projects/${projectId}/xliff/${file.id}/content`
         );
 
         const connId = file.remoteConnectionId;
         const repo = file.remoteRepo;
-
-        // Determine if Azure DevOps or GitHub based on repo format
-        // Azure DevOps: "org/project/repo", GitHub: "owner/repo"
         const repoParts = repo.split('/');
+        const targetBranch = commitNewBranch ? newBranchName.trim() : file.remoteBranch;
 
         if (repoParts.length === 3) {
           // Azure DevOps
           const [, azProject, repoId] = repoParts;
+
+          // Create new branch first if requested
+          if (commitNewBranch) {
+            await api.post(
+              `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(azProject)}/repos/${encodeURIComponent(repoId)}/branches`,
+              { name: newBranchName.trim(), sourceBranch: file.remoteBranch }
+            );
+          }
+
           await api.post(
             `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(azProject)}/repos/${encodeURIComponent(repoId)}/commit`,
-            {
-              branch: file.remoteBranch,
-              path: file.remotePath,
-              content: contentRes.data.content,
-              message: commitMsg,
-            }
+            { branch: targetBranch, path: file.remotePath, content: contentRes.data.content, message: commitMsg }
           );
         } else {
           // GitHub
           const [owner, repoName] = repoParts;
-          // Need to get the current SHA first
-          const params = new URLSearchParams({ path: file.remotePath, branch: file.remoteBranch });
+
+          if (commitNewBranch) {
+            await api.post(
+              `/api/remote/connections/${connId}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/branches`,
+              { name: newBranchName.trim(), sourceBranch: file.remoteBranch }
+            );
+          }
+
+          const params = new URLSearchParams({ path: file.remotePath, branch: targetBranch });
           const fileInfo = await api.get<{ data: { sha: string } }>(
             `/api/remote/connections/${connId}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/file-content?${params}`
           );
-
           await api.post(
             `/api/remote/connections/${connId}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/commit`,
-            {
-              branch: file.remoteBranch,
-              path: file.remotePath,
-              content: contentRes.data.content,
-              message: commitMsg,
-              sha: fileInfo.data.sha,
-            }
+            { branch: targetBranch, path: file.remotePath, content: contentRes.data.content, message: commitMsg, sha: fileInfo.data.sha }
           );
         }
 
-        toast.success(`Committed to ${file.remoteBranch}`);
+        // Update stored branch if committed to new branch
+        if (commitNewBranch) {
+          await api.patch(`/api/projects/${projectId}/xliff/${file.id}/remote`, {
+            remoteConnectionId: file.remoteConnectionId,
+            remotePath: file.remotePath,
+            remoteBranch: targetBranch,
+            remoteRepo: file.remoteRepo,
+          });
+          qc.invalidateQueries({ queryKey: ['project', projectId] });
+        }
+
+        toast.success(`Committed to ${targetBranch}`);
         setShowCommitDialog(null);
         setCommitMsg('');
+        setCommitNewBranch(false);
+        setNewBranchName('');
       } catch (error) {
         toast.error(getErrorMessage(error));
       } finally {
         setCommittingFile(null);
       }
     },
-    [projectId, commitMsg]
+    [projectId, commitMsg, commitNewBranch, newBranchName, qc]
+  );
+
+  const syncFromRemote = useCallback(
+    async (file: Project['xliffFiles'][0]) => {
+      if (!file.remoteConnectionId) return;
+      setSyncingFile(file.id);
+      try {
+        const res = await api.post<{ data: { added: number; updated: number; obsolete: number; total: number } }>(
+          `/api/projects/${projectId}/xliff/${file.id}/sync-from-remote`,
+          {}
+        );
+        qc.invalidateQueries({ queryKey: ['project', projectId] });
+        const { added, updated, obsolete } = res.data;
+        toast.success(`Synced — ${added} new, ${updated} updated, ${obsolete} obsolete`);
+      } catch (error) {
+        toast.error(getErrorMessage(error));
+      } finally {
+        setSyncingFile(null);
+      }
+    },
+    [projectId, qc]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -373,11 +409,12 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               ) : (
                 <div className="space-y-2">
                   {project.xliffFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      className="rounded-lg border border-gray-100 p-3 hover:border-gray-200 dark:border-gray-800 dark:hover:border-gray-700"
-                    >
-                      <div className="flex items-center justify-between">
+                    <div key={file.id} className="rounded-lg border border-gray-100 dark:border-gray-800">
+                      {/* Clickable main row */}
+                      <a
+                        href={`/projects/${project.id}/translations?fileId=${file.id}`}
+                        className="flex items-center justify-between rounded-t-lg p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                      >
                         <div>
                           <p className="text-sm font-medium text-gray-900 dark:text-white">{file.filename}</p>
                           <p className="text-xs text-gray-400 dark:text-gray-600">{formatDate(file.uploadedAt)}</p>
@@ -388,43 +425,64 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                             </p>
                           )}
                         </div>
-                        <div className="flex gap-2">
-                          <a
-                            href={`/projects/${project.id}/translations?fileId=${file.id}`}
-                            className="flex items-center gap-1 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
-                          >
-                            <Sparkles size={13} /> Translate
-                          </a>
-                          {file.remoteRepo && (
+                        <ArrowRight size={15} className="shrink-0 text-gray-300 dark:text-gray-700" />
+                      </a>
+
+                      {/* Action buttons row */}
+                      <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-3 py-2 dark:border-gray-800">
+                        <a
+                          href={`/projects/${project.id}/translations?fileId=${file.id}`}
+                          className="flex items-center gap-1 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Sparkles size={13} /> Translate
+                        </a>
+                        {file.remoteRepo && (
+                          <>
                             <button
-                              onClick={() => { setShowCommitDialog(file.id); setCommitMsg(`Update translations in ${file.filename}`); }}
+                              onClick={() => syncFromRemote(file)}
+                              disabled={syncingFile === file.id}
+                              className="flex items-center gap-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50"
+                              title="Fetch latest from remote and merge"
+                            >
+                              {syncingFile === file.id ? <Loader2 size={13} className="animate-spin" /> : <CloudDownload size={13} />}
+                              {syncingFile === file.id ? 'Fetching...' : 'Fetch'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowCommitDialog(file.id);
+                                setCommitMsg(`Update translations in ${file.filename}`);
+                                setCommitNewBranch(false);
+                                setNewBranchName(`translations/${new Date().toISOString().slice(0, 10)}`);
+                              }}
                               className="flex items-center gap-1 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
                             >
                               <GitCommit size={13} /> Commit
                             </button>
-                          )}
-                          <a
-                            href={`/api/projects/${project.id}/xliff/${file.id}/download`}
-                            className="flex items-center gap-1 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                            download
-                          >
-                            <Download size={13} /> Download
-                          </a>
-                          <button
-                            onClick={() => { if (confirm(`Delete "${file.filename}"? This cannot be undone.`)) deleteFileMutation.mutate(file.id); }}
-                            disabled={deleteFileMutation.isPending}
-                            className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:text-gray-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                          </>
+                        )}
+                        <a
+                          href={`/api/projects/${project.id}/xliff/${file.id}/download`}
+                          className="flex items-center gap-1 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                          download
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Download size={13} /> Download
+                        </a>
+                        <button
+                          onClick={() => { if (confirm(`Delete "${file.filename}"? This cannot be undone.`)) deleteFileMutation.mutate(file.id); }}
+                          disabled={deleteFileMutation.isPending}
+                          className="ml-auto flex items-center gap-1 rounded-lg px-2 py-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:text-gray-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
 
                       {/* Commit dialog */}
                       {showCommitDialog === file.id && (
-                        <div className="mt-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
+                        <div className="rounded-b-lg border-t border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
                           <p className="mb-2 text-xs font-medium text-green-800 dark:text-green-300">
-                            Commit to: {file.remoteRepo} ({file.remoteBranch})
+                            Committing: {file.remoteRepo}
                           </p>
                           <input
                             className="mb-2 w-full rounded border border-green-300 px-2 py-1.5 text-sm dark:border-green-700 dark:bg-gray-800 dark:text-white"
@@ -432,6 +490,30 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                             onChange={(e) => setCommitMsg(e.target.value)}
                             placeholder="Commit message"
                           />
+
+                          {/* New branch toggle */}
+                          <label className="mb-2 flex cursor-pointer items-center gap-2 text-xs text-green-800 dark:text-green-300">
+                            <input
+                              type="checkbox"
+                              checked={commitNewBranch}
+                              onChange={(e) => setCommitNewBranch(e.target.checked)}
+                              className="rounded"
+                            />
+                            Create new branch
+                          </label>
+                          {commitNewBranch ? (
+                            <input
+                              className="mb-2 w-full rounded border border-green-300 px-2 py-1.5 text-sm dark:border-green-700 dark:bg-gray-800 dark:text-white"
+                              value={newBranchName}
+                              onChange={(e) => setNewBranchName(e.target.value)}
+                              placeholder="New branch name"
+                            />
+                          ) : (
+                            <p className="mb-2 text-xs text-green-700 dark:text-green-400">
+                              → Committing to: <span className="rounded bg-green-100 px-1 font-mono dark:bg-green-900/40">{file.remoteBranch}</span>
+                            </p>
+                          )}
+
                           <div className="flex gap-2">
                             <button
                               onClick={() => commitToRemote(file)}
@@ -439,10 +521,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                               className="flex items-center gap-1 rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700 disabled:opacity-50"
                             >
                               {committingFile === file.id ? <Loader2 size={12} className="animate-spin" /> : <GitCommit size={12} />}
-                              {committingFile === file.id ? 'Committing...' : 'Commit'}
+                              {committingFile === file.id ? 'Committing...' : commitNewBranch ? 'Create & Commit' : 'Commit'}
                             </button>
                             <button
-                              onClick={() => setShowCommitDialog(null)}
+                              onClick={() => { setShowCommitDialog(null); setCommitNewBranch(false); }}
                               className="rounded border border-green-300 px-3 py-1 text-xs text-green-700 dark:border-green-700 dark:text-green-400"
                             >
                               Cancel
