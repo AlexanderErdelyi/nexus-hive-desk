@@ -230,6 +230,8 @@ function WorkItemForm({
   const [recordings, setRecordings] = useState<Array<{ id: string; title?: string; processedAt?: string; duration?: number }>>([]);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsFolder, setRecordingsFolder] = useState('');
+  const [recordingsMcpId, setRecordingsMcpId] = useState('');
   const [portalReady, setPortalReady] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
 
@@ -257,9 +259,11 @@ function WorkItemForm({
     if (!teamsMcp) {
       setRecordings([]);
       setSelectedRecordingId('');
+      setRecordingsMcpId('');
       return;
     }
 
+    setRecordingsMcpId(teamsMcp.mcpConnection.id);
     setRecordingsLoading(true);
     setSelectedRecordingId('');
     api.get(`/api/mcp-connections/${teamsMcp.mcpConnection.id}/recordings`)
@@ -267,6 +271,19 @@ function WorkItemForm({
       .catch(() => setRecordings([]))
       .finally(() => setRecordingsLoading(false));
   }, [selectedAgent]);
+
+  function scanRecordingsFolder() {
+    if (!recordingsMcpId || !recordingsFolder.trim()) return;
+    setRecordingsLoading(true);
+    // Save folder to MCP connection capabilities, then refresh
+    api.patch(`/api/mcp-connections/${recordingsMcpId}`, {
+      capabilities: JSON.stringify({ recordingsFolder: recordingsFolder.trim() }),
+    })
+      .then(() => api.get(`/api/mcp-connections/${recordingsMcpId}/recordings`))
+      .then((res: any) => setRecordings(Array.isArray(res?.data) ? res.data : []))
+      .catch(() => {})
+      .finally(() => setRecordingsLoading(false));
+  }
 
   useEffect(() => {
     setPortalReady(true);
@@ -543,14 +560,31 @@ function WorkItemForm({
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
-                {(recordingsLoading || recordings.length > 0) && (
+                {(recordingsLoading || recordings.length > 0 || recordingsMcpId) && (
                   <div className="mb-4 rounded-xl border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/50">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-sm font-medium text-gray-700 dark:text-gray-300">📹 Teams Recordings</span>
                       {recordingsLoading && <Loader2 size={12} className="animate-spin text-gray-400" />}
                     </div>
+                    {/* Folder input */}
+                    <div className="flex gap-1.5 mb-2">
+                      <input
+                        className="flex-1 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 px-2.5 py-1.5 text-xs text-gray-700 dark:text-gray-300 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        value={recordingsFolder}
+                        onChange={(e) => setRecordingsFolder(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') scanRecordingsFolder(); }}
+                        placeholder="C:/Temp/nexus (folder with .mp4 / .vtt)"
+                      />
+                      <button
+                        onClick={scanRecordingsFolder}
+                        disabled={!recordingsFolder.trim() || recordingsLoading}
+                        className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                      >
+                        Scan
+                      </button>
+                    </div>
                     {recordings.length === 0 && !recordingsLoading && (
-                      <p className="text-xs text-gray-400">No recordings in cache yet</p>
+                      <p className="text-xs text-gray-400">No recordings in cache yet — enter a folder path and click Scan</p>
                     )}
                     {recordings.map((rec) => (
                       <button
