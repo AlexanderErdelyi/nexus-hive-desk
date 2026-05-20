@@ -385,7 +385,7 @@ export async function workItemRoutes(app: FastifyInstance) {
   // ─── AI agent streaming run for work item generation ───────────────────────
   app.post<{
     Params: { id: string };
-    Body: { agentId?: string; description: string; workItemType?: string };
+    Body: { agentId?: string; description: string; workItemType?: string; includeRepoContext?: boolean };
   }>('/:id/work-items/generate-stream', async (req, reply) => {
     reply.hijack();
     reply.raw.statusCode = 200;
@@ -403,7 +403,7 @@ export async function workItemRoutes(app: FastifyInstance) {
     };
 
     try {
-      const { agentId, description, workItemType } = req.body;
+      const { agentId, description, workItemType, includeRepoContext = true } = req.body;
       if (!description?.trim()) throw new Error('description is required');
 
       const project = await prisma.project.findUnique({ where: { id: req.params.id } });
@@ -456,17 +456,95 @@ export async function workItemRoutes(app: FastifyInstance) {
         sendLog('Context loaded: 0 work item types, 0 area paths, 0 iterations');
       }
 
-      let agent: Awaited<ReturnType<typeof prisma.agent.findUnique>> | null = null;
-      let selectedSkillLinks: Array<{ skill: { name: string; type: string; promptTemplate: string | null } }> = [];
+      let repoContext = '';
+      if (includeRepoContext) {
+        sendLog('Loading repository context...');
+        try {
+          const repos = await prisma.projectRepository.findMany({ where: { projectId: project.id } });
+
+          if (repos.length > 0) {
+            const repoContextParts: string[] = [];
+
+            for (const repo of repos.slice(0, 2)) {
+              const repoConn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+              if (!repoConn || repoConn.type !== 'azure-devops') continue;
+
+              const baseUrl = repoConn.baseUrl?.replace(/\/$/, '') ?? '';
+              const adoProj = encodeURIComponent(repo.adoProjectName ?? project.adoProjectName ?? '');
+              const branch = repo.defaultBranch ?? 'main';
+
+              sendLog(`Scanning repo: ${repo.repoName} (${branch})...`);
+
+              const treeUrl = `${baseUrl}/${adoProj}/_apis/git/repositories/${encodeURIComponent(repo.repoName)}/items?recursionLevel=Full&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
+              const treeData = await fetchJsonWithInit<{ value?: Array<{ path: string; gitObjectType?: string }> }>(
+                treeUrl,
+                { method: 'GET', headers: azureHeaders(repoConn.pat) }
+              );
+
+              const allFiles = (treeData.value ?? [])
+                .filter((item) => item.gitObjectType === 'blob')
+                .map((item) => item.path);
+
+              const xliffFiles = allFiles.filter((path) => /\.(xlf|xliff|xlf2)$/i.test(path));
+              const alFiles = allFiles.filter((path) => /\.al$/i.test(path)).slice(0, 10);
+
+              sendLog(`Found ${xliffFiles.length} XLIFF file(s) and ${alFiles.length} AL file(s)`);
+
+              const repoParts: string[] = [`Repository: ${repo.label ?? repo.repoName}`];
+              repoParts.push(`File tree summary:\n${allFiles.slice(0, 50).map((path) => `  ${path}`).join('\n')}${allFiles.length > 50 ? `\n  ... and ${allFiles.length - 50} more files` : ''}`);
+
+              if (xliffFiles.length > 0) {
+                const xliffPath = xliffFiles[0];
+                sendLog(`Reading XLIFF: ${xliffPath}...`);
+                try {
+                  const contentUrl = `${baseUrl}/${adoProj}/_apis/git/repositories/${encodeURIComponent(repo.repoName)}/items?path=${encodeURIComponent(xliffPath)}&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
+                  const contentRes = await fetch(contentUrl, { headers: azureHeaders(repoConn.pat) });
+                  if (contentRes.ok) {
+                    const xliffContent = await contentRes.text();
+                    repoParts.push(`XLIFF file (${xliffPath}) — first 3000 chars:\n${xliffContent.slice(0, 3000)}`);
+                  }
+                } catch {
+                  // ignore XLIFF content errors
+                }
+
+                if (xliffFiles.length > 1) {
+                  repoParts.push(`Other XLIFF files:\n${xliffFiles.slice(1).map((path) => `  ${path}`).join('\n')}`);
+                }
+              }
+
+              if (alFiles.length > 0) {
+                repoParts.push(`Relevant AL files:\n${alFiles.map((path) => `  ${path}`).join('\n')}`);
+              }
+
+              repoContextParts.push(repoParts.join('\n\n'));
+            }
+
+            if (repoContextParts.length > 0) {
+              repoContext = `## Repository Context\n\n${repoContextParts.join('\n\n---\n\n')}`;
+              sendLog('Repository context loaded');
+            }
+          } else {
+            sendLog('No repositories configured for this project');
+          }
+        } catch (repoError) {
+          sendLog(`Repository context unavailable: ${repoError instanceof Error ? repoError.message : 'unknown error'}`);
+        }
+      } else {
+        sendLog('Repository context skipped for this request');
+      }
+
+      let agentSystemPrompt: string | null = null;
+      let selectedSkillLinks: Array<{ skill: { name: string; type: string; promptTemplate: string | null; description?: string | null } }> = [];
 
       if (agentId) {
-        agent = await prisma.agent.findUnique({
+        const agent = await prisma.agent.findUnique({
           where: { id: agentId },
           include: { skills: { include: { skill: true } } },
         });
 
         if (!agent) throw new Error('Agent not found');
 
+        agentSystemPrompt = agent.systemPrompt;
         sendLog(`Loading agent: ${agent.name}...`);
         const skillNames = agent.skills.map((entry) => entry.skill.name);
         sendLog(`Agent has ${agent.skills.length} skill(s): ${skillNames.length > 0 ? skillNames.join(', ') : 'none'}`);
@@ -506,16 +584,22 @@ export async function workItemRoutes(app: FastifyInstance) {
         .map((entry) => `## Skill: ${entry.skill.name}\n${entry.skill.promptTemplate}`)
         .join('\n\n');
 
+      const includeTechnicalSpec = /(technical\s+spec|technische|specification)/i.test(trimmedDescription);
       const systemContent = [
-        agent?.systemPrompt?.trim() || 'You are a helpful work item writer.',
+        agentSystemPrompt?.trim() || 'You are a helpful work item writer.',
         selectedSkillPrompts,
         adoContext,
+        repoContext,
+        includeTechnicalSpec
+          ? 'The user requested a technical specification. Fill the technicalSpec field with a concise, implementation-oriented technical specification based on the repository context when possible.'
+          : 'Only populate the technicalSpec field when the user explicitly asks for a technical specification; otherwise return an empty string.',
         `Your task is to generate a work item. IMPORTANT: Follow the language and style instructions above exactly.
 Return ONLY valid JSON with these fields (plain text or markdown only, no HTML):
 {
   "title": "concise title",
-  "description": "plain text or markdown description of the work item",
+  "description": "plain text or markdown description",
   "acceptanceCriteria": "plain text or markdown acceptance criteria",
+  "technicalSpec": "optional: technical specification based on repo context, or empty string",
   "type": "${workItemType ?? 'User Story'}",
   "priority": 2,
   "tags": "comma-separated tags or empty string",

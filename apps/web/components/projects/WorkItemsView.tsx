@@ -2,10 +2,11 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronRight, ExternalLink,
+  AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
   Filter, Loader2, Plus, RefreshCw, Search, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
@@ -55,6 +56,7 @@ interface GeneratedWorkItem {
   title?: string;
   description?: string;
   acceptanceCriteria?: string;
+  technicalSpec?: string;
   type?: string;
   priority?: number | string;
   tags?: string;
@@ -216,7 +218,12 @@ function WorkItemForm({
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [descriptionTab, setDescriptionTab] = useState<'edit' | 'preview'>('edit');
   const [acceptanceTab, setAcceptanceTab] = useState<'edit' | 'preview'>('edit');
+  const [technicalSpec, setTechnicalSpec] = useState('');
+  const [technicalSpecOpen, setTechnicalSpecOpen] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
+
+  const technicalSpecSeparator = '\n\n---\n**Technical Spec:**\n';
 
   useEffect(() => {
     if (!selectedAgentId && agents[0]?.id) setSelectedAgentId(agents[0].id);
@@ -233,8 +240,43 @@ function WorkItemForm({
     chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [chatMessages]);
 
+  useEffect(() => {
+    setPortalReady(true);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+      setPortalReady(false);
+    };
+  }, [onClose]);
+
+  function stripTechnicalSpecSection(value: string) {
+    const markerIndex = value.indexOf(technicalSpecSeparator);
+    return markerIndex === -1 ? value : value.slice(0, markerIndex);
+  }
+
+  function mergeDescriptionWithTechnicalSpec(value: string, spec: string) {
+    const baseDescription = stripTechnicalSpecSection(value).trimEnd();
+    const trimmedSpec = spec.trim();
+    if (!trimmedSpec) return baseDescription;
+    return baseDescription
+      ? `${baseDescription}${technicalSpecSeparator}${trimmedSpec}`
+      : `**Technical Spec:**\n${trimmedSpec}`;
+  }
+
   const createMutation = useMutation({
-    mutationFn: () => api.post(`/api/projects/${projectId}/work-items`, form),
+    mutationFn: () => api.post(`/api/projects/${projectId}/work-items`, {
+      ...form,
+      description: mergeDescriptionWithTechnicalSpec(form.description, technicalSpec),
+    }),
     onSuccess: () => {
       toast.success('Work item created in Azure DevOps ✔');
       onSuccess();
@@ -258,18 +300,29 @@ function WorkItemForm({
         : undefined;
 
     const nextTitle = data.title ? String(data.title) : '';
+    const nextTechnicalSpec = data.technicalSpec ? String(data.technicalSpec).trim() : '';
 
-    setForm((prev) => ({
-      ...prev,
-      title: nextTitle || prev.title,
-      description: data.description !== undefined ? String(data.description) : prev.description,
-      acceptanceCriteria: data.acceptanceCriteria !== undefined ? String(data.acceptanceCriteria) : prev.acceptanceCriteria,
-      type: data.type ? String(data.type) : prev.type,
-      priority: parsedPriority ?? prev.priority,
-      tags: data.tags !== undefined ? String(data.tags) : prev.tags,
-      areaPath: data.areaPath !== undefined ? String(data.areaPath) : prev.areaPath,
-    }));
+    setForm((prev) => {
+      const nextDescription = data.description !== undefined
+        ? mergeDescriptionWithTechnicalSpec(String(data.description), nextTechnicalSpec)
+        : nextTechnicalSpec
+          ? mergeDescriptionWithTechnicalSpec(prev.description, nextTechnicalSpec)
+          : prev.description;
 
+      return {
+        ...prev,
+        title: nextTitle || prev.title,
+        description: nextDescription,
+        acceptanceCriteria: data.acceptanceCriteria !== undefined ? String(data.acceptanceCriteria) : prev.acceptanceCriteria,
+        type: data.type ? String(data.type) : prev.type,
+        priority: parsedPriority ?? prev.priority,
+        tags: data.tags !== undefined ? String(data.tags) : prev.tags,
+        areaPath: data.areaPath !== undefined ? String(data.areaPath) : prev.areaPath,
+      };
+    });
+
+    setTechnicalSpec(nextTechnicalSpec);
+    setTechnicalSpecOpen(Boolean(nextTechnicalSpec));
     setAiGenerated(true);
     addChatMessage('agent', nextTitle
       ? `Draft ready: **${nextTitle}**. Review the generated fields below and adjust anything you need.`
@@ -285,7 +338,7 @@ function WorkItemForm({
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ agentId, description, workItemType: form.type }),
+      body: JSON.stringify({ agentId, description, workItemType: form.type, includeRepoContext: true }),
     });
 
     if (!response.ok || !response.body) {
@@ -373,310 +426,368 @@ function WorkItemForm({
 
   const previewBoxClassName = 'min-h-[9rem] rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200';
 
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="font-semibold text-gray-900 dark:text-white">New Work Item</h3>
-          <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-600">Create directly in Azure DevOps</p>
-        </div>
-        <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800">
-          <X size={15} />
-        </button>
-      </div>
+  if (!portalReady) return null;
 
-      <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50/90 via-white to-violet-50/90 p-4 shadow-sm dark:border-indigo-900/60 dark:from-indigo-950/40 dark:via-gray-950 dark:to-violet-950/30">
-        <div className="rounded-2xl border border-indigo-200/80 bg-white/90 p-4 shadow-inner dark:border-indigo-900/70 dark:bg-gray-950/80">
-          <div className="mb-4 flex items-start gap-3">
-            <div className="rounded-xl bg-indigo-100 p-2 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300">
-              <Sparkles size={18} />
-            </div>
-            <div className="flex-1">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Describe what you want to create</h4>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Use direct AI for quick drafts or an agent for step-by-step generation with skills and project context.</p>
-            </div>
-          </div>
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-black/70 px-4 py-6 backdrop-blur-sm" onClick={onClose}>
+      <div className="mx-auto flex h-full max-w-6xl items-center justify-center">
+        <div
+          className="relative flex h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-950"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute right-5 top-5 z-10 rounded-full border border-gray-200 bg-white/90 p-2 text-gray-500 shadow-sm transition hover:text-gray-700 dark:border-gray-700 dark:bg-gray-900/90 dark:text-gray-400 dark:hover:text-white"
+            aria-label="Close create work item modal"
+          >
+            <X size={16} />
+          </button>
 
-          {agents.length > 0 && (
-            <div className="mb-4 space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex rounded-xl border border-indigo-200 bg-indigo-50 p-1 text-xs dark:border-indigo-900/70 dark:bg-indigo-950/50">
-                  <button
-                    type="button"
-                    onClick={() => setAiMode('direct')}
-                    className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'direct' ? 'bg-indigo-600 text-white shadow-sm' : 'text-indigo-700 hover:bg-white dark:text-indigo-300 dark:hover:bg-gray-900'}`}
-                  >
-                    Direct AI
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAiMode('agent')}
-                    className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'agent' ? 'bg-indigo-600 text-white shadow-sm' : 'text-indigo-700 hover:bg-white dark:text-indigo-300 dark:hover:bg-gray-900'}`}
-                  >
-                    Agent
-                  </button>
-                </div>
-                {aiMode === 'agent' && (
-                  <select
-                    value={selectedAgentId}
-                    onChange={(e) => setSelectedAgentId(e.target.value)}
-                    className="min-w-[13rem] rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:focus:ring-indigo-900/40"
-                  >
-                    <option value="">Select an agent…</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>{agent.name}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
-
-              {aiMode === 'agent' && selectedAgent && (
-                <div className="rounded-xl border border-indigo-100 bg-indigo-50/80 p-3 text-xs text-indigo-900 dark:border-indigo-900/60 dark:bg-indigo-950/40 dark:text-indigo-100">
-                  <div className="flex items-center gap-2 font-medium">
-                    <Bot size={13} /> {selectedAgent.name}
+          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            <div className="flex min-h-0 flex-col border-b border-gray-200 bg-gradient-to-br from-violet-950 via-indigo-950 to-slate-950 text-white lg:border-b-0 lg:border-r lg:border-r-violet-900/70">
+              <div className="border-b border-white/10 px-6 py-6">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-2xl bg-white/10 p-3 text-violet-200">
+                    <Sparkles size={20} />
                   </div>
-                  {selectedAgent.description && (
-                    <p className="mt-1 text-indigo-700 dark:text-indigo-200/80">{selectedAgent.description}</p>
-                  )}
-                  <p className="mt-2 text-indigo-700 dark:text-indigo-200/80">
-                    Skills: {selectedAgent.skills.length > 0 ? selectedAgent.skills.map((entry) => entry.skill.name).join(', ') : 'No skills attached'}
-                  </p>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Generate with AI</h2>
+                    <p className="mt-1 text-sm text-violet-100/75">Draft a work item with direct AI or an agent using project and repository context.</p>
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
 
-          <div className="rounded-2xl border border-gray-200 bg-gray-50/80 p-3 dark:border-gray-800 dark:bg-gray-900/60">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">Message history</div>
-            <div ref={chatRef} className="max-h-72 space-y-3 overflow-y-auto pr-1">
-              {chatMessages.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-4 py-6 text-sm text-gray-400 dark:border-gray-800 dark:bg-gray-950/40 dark:text-gray-500">
-                  Ask for a bug, task, user story, or feature. The agent will show each step as it works.
-                </div>
-              ) : chatMessages.map((message, index) => {
-                if (message.role === 'log') {
-                  const pending = aiLoading && index === lastLogIndex;
-                  return (
-                    <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                      {pending ? (
-                        <Loader2 size={12} className="shrink-0 animate-spin text-indigo-500" />
-                      ) : (
-                        <CheckCircle2 size={12} className="shrink-0 text-emerald-500" />
-                      )}
-                      <span>{message.content}</span>
+                <div className="mt-5 space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-xl border border-white/10 bg-white/5 p-1 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setAiMode('direct')}
+                        className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'direct' ? 'bg-violet-500 text-white shadow-sm' : 'text-violet-100/80 hover:bg-white/10'}`}
+                      >
+                        Direct AI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAiMode('agent')}
+                        className={`rounded-lg px-3 py-1.5 font-medium transition ${aiMode === 'agent' ? 'bg-violet-500 text-white shadow-sm' : 'text-violet-100/80 hover:bg-white/10'}`}
+                      >
+                        Agent
+                      </button>
                     </div>
-                  );
-                }
+                    {aiMode === 'agent' && (
+                      <select
+                        value={selectedAgentId}
+                        onChange={(event) => setSelectedAgentId(event.target.value)}
+                        className="min-w-[13rem] rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-violet-400"
+                      >
+                        <option value="">Select an agent…</option>
+                        {agents.map((agent) => (
+                          <option key={agent.id} value={agent.id}>{agent.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
 
-                if (message.role === 'user') {
-                  return (
-                    <div key={`${message.timestamp.toISOString()}-${index}`} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-4 py-3 text-sm text-white shadow-sm">
-                        {message.content}
+                  {aiMode === 'agent' && selectedAgent && (
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-violet-50">
+                      <div className="flex items-center gap-2 font-medium text-white">
+                        <Bot size={15} />
+                        <span>{selectedAgent.name}</span>
+                      </div>
+                      {selectedAgent.description && (
+                        <p className="mt-2 text-sm text-violet-100/80">{selectedAgent.description}</p>
+                      )}
+                      <div className="mt-3 space-y-2">
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-200/70">Skills</div>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedAgent.skills.length > 0 ? selectedAgent.skills.map((entry) => (
+                            <span key={entry.skill.name} className="rounded-full border border-violet-400/30 bg-violet-500/10 px-2.5 py-1 text-xs text-violet-100">
+                              {entry.skill.name}
+                            </span>
+                          )) : (
+                            <span className="text-xs text-violet-100/70">No skills attached</span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  );
-                }
+                  )}
+                </div>
+              </div>
 
-                return (
-                  <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-start gap-3">
-                    <div className="mt-1 rounded-xl bg-violet-100 p-2 text-violet-600 dark:bg-violet-900/40 dark:text-violet-300">
-                      <Bot size={14} />
+              <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
+                <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-violet-200/70">Chat history</div>
+                <div ref={chatRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                  {chatMessages.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-6 text-sm text-violet-100/70">
+                      Ask for a bug, task, user story, feature, or a technical specification. Streaming steps will appear here.
                     </div>
-                    <div className="max-w-[85%] rounded-2xl rounded-tl-md border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-950 shadow-sm dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-100">
-                      <div dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }} />
+                  ) : chatMessages.map((message, index) => {
+                    if (message.role === 'log') {
+                      const pending = aiLoading && index === lastLogIndex;
+                      return (
+                        <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-center gap-2 text-xs font-mono text-slate-300">
+                          {pending ? (
+                            <Loader2 size={12} className="shrink-0 animate-spin text-violet-300" />
+                          ) : (
+                            <CheckCircle2 size={12} className="shrink-0 text-emerald-400" />
+                          )}
+                          <span>{message.content}</span>
+                        </div>
+                      );
+                    }
+
+                    if (message.role === 'user') {
+                      return (
+                        <div key={`${message.timestamp.toISOString()}-${index}`} className="flex justify-end">
+                          <div className="max-w-[88%] rounded-2xl rounded-br-md bg-violet-600 px-4 py-3 text-sm text-white shadow-lg shadow-violet-950/30">
+                            {message.content}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-start gap-3">
+                        <div className="mt-1 rounded-xl bg-white/10 p-2 text-violet-200">
+                          <Bot size={14} />
+                        </div>
+                        <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-100 shadow-lg shadow-black/20">
+                          <div dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-5 border-t border-white/10 pt-4">
+                  <textarea
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void handleGenerate();
+                    }}
+                    rows={5}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                    placeholder={`What do you want to create? Describe the ${form.type || 'work item'} in plain language… (Ctrl+Enter)`}
+                  />
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <div className="text-xs text-violet-100/70">
+                      {aiGenerated ? 'Latest draft applied on the right — review before creating it.' : 'Generated drafts stay fully editable.'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGenerate}
+                      disabled={aiLoading || !prompt.trim()}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {aiLoading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                      {aiLoading ? 'Sending…' : 'Send'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex min-h-0 flex-col bg-white dark:bg-gray-950">
+              <div className="border-b border-gray-200 px-6 py-6 dark:border-gray-800">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Work Item Details</h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Review the generated draft and create it in Azure DevOps.</p>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+                <div className="space-y-5">
+                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_9rem]">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Type</label>
+                      <select value={form.type} onChange={(event) => setForm((prev) => ({ ...prev, type: event.target.value }))} className={isc}>
+                        {(workItemTypes.length > 0 ? workItemTypes : [
+                          { name: 'User Story' }, { name: 'Bug' }, { name: 'Task' }, { name: 'Feature' }, { name: 'Epic' },
+                        ]).map((type) => (
+                          <option key={type.name} value={type.name}>{type.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Priority</label>
+                      <select value={form.priority} onChange={(event) => setForm((prev) => ({ ...prev, priority: Number(event.target.value) }))} className={isc}>
+                        <option value={1}>1 - Critical</option>
+                        <option value={2}>2 - High</option>
+                        <option value={3}>3 - Medium</option>
+                        <option value={4}>4 - Low</option>
+                      </select>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
 
-          <div className="mt-4 space-y-3">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void handleGenerate();
-              }}
-              rows={4}
-              className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-3 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/40"
-              placeholder={`What do you want to create? Describe the ${form.type || 'work item'} in plain language… (Ctrl+Enter)`}
-            />
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-gray-500 dark:text-gray-400">
-                {aiGenerated ? 'Latest draft applied below — keep editing before you create it.' : 'The generated draft stays fully editable.'}
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Title <span className="text-red-400">*</span></label>
+                    <input
+                      value={form.title}
+                      onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))}
+                      className={isc}
+                      placeholder="Short, actionable title"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between gap-3">
+                      <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
+                      <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
+                        <button
+                          type="button"
+                          onClick={() => setDescriptionTab('edit')}
+                          className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDescriptionTab('preview')}
+                          className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+                        >
+                          Preview
+                        </button>
+                      </div>
+                    </div>
+
+                    {descriptionTab === 'edit' ? (
+                      <textarea
+                        value={form.description}
+                        onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                        rows={8}
+                        className={isc}
+                        placeholder="Context, background, technical details…"
+                      />
+                    ) : form.description ? (
+                      <div className={previewBoxClassName}>
+                        <div
+                          className="prose prose-sm max-w-none dark:prose-invert"
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(form.description) }}
+                        />
+                      </div>
+                    ) : (
+                      <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
+                        Nothing to preview yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between gap-3">
+                      <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Acceptance Criteria</label>
+                      <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
+                        <button
+                          type="button"
+                          onClick={() => setAcceptanceTab('edit')}
+                          className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAcceptanceTab('preview')}
+                          className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
+                        >
+                          Preview
+                        </button>
+                      </div>
+                    </div>
+
+                    {acceptanceTab === 'edit' ? (
+                      <textarea
+                        value={form.acceptanceCriteria}
+                        onChange={(event) => setForm((prev) => ({ ...prev, acceptanceCriteria: event.target.value }))}
+                        rows={7}
+                        className={isc}
+                        placeholder={['user story', 'feature'].includes(form.type.toLowerCase()) ? 'Given / When / Then…' : 'Definition of done, repro steps, or validation notes…'}
+                      />
+                    ) : form.acceptanceCriteria ? (
+                      <div className={previewBoxClassName}>
+                        <div
+                          className="prose prose-sm max-w-none dark:prose-invert"
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(form.acceptanceCriteria) }}
+                        />
+                      </div>
+                    ) : (
+                      <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
+                        Nothing to preview yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-gray-200 bg-gray-50/70 dark:border-gray-800 dark:bg-gray-900/40">
+                    <button
+                      type="button"
+                      onClick={() => setTechnicalSpecOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                    >
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-gray-400">Technical Spec</div>
+                        <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                          {technicalSpec ? 'Repository-based technical details included in the generated draft.' : 'No technical spec generated yet.'}
+                        </div>
+                      </div>
+                      <ChevronDown size={16} className={`shrink-0 text-gray-400 transition-transform ${technicalSpecOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {technicalSpecOpen && (
+                      <div className="border-t border-gray-200 px-4 pb-4 pt-3 dark:border-gray-800">
+                        <textarea
+                          value={technicalSpec}
+                          readOnly
+                          rows={8}
+                          className={`${isc} resize-y bg-white dark:bg-gray-950`}
+                          placeholder="Technical specification details will appear here when requested."
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Tags <span className="font-normal text-gray-400">(semicolon-separated)</span></label>
+                    <input
+                      value={form.tags}
+                      onChange={(event) => setForm((prev) => ({ ...prev, tags: event.target.value }))}
+                      className={isc}
+                      placeholder="BC; translation; sprint-12"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Area Path</label>
+                    <input
+                      value={form.areaPath}
+                      onChange={(event) => setForm((prev) => ({ ...prev, areaPath: event.target.value }))}
+                      className={isc}
+                      placeholder="Project\Area\Subarea"
+                    />
+                  </div>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={handleGenerate}
-                disabled={aiLoading || !prompt.trim()}
-                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {aiLoading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
-                {aiLoading ? 'Generating…' : 'Generate'}
-              </button>
+
+              <div className="border-t border-gray-200 px-6 py-4 dark:border-gray-800">
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    onClick={onClose}
+                    className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-900"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => createMutation.mutate()}
+                    disabled={createMutation.isPending || aiLoading || !form.title.trim()}
+                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    Create in Azure DevOps
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between border-b border-gray-100 pb-2 dark:border-gray-800">
-          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Generated Fields</h4>
-          {form.areaPath && (
-            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-200">
-              Area: {form.areaPath}
-            </span>
-          )}
-        </div>
-
-        <div className="flex gap-3">
-          <div className="flex-1">
-            <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Type</label>
-            <select value={form.type} onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))} className={isc}>
-              {(workItemTypes.length > 0 ? workItemTypes : [
-                { name: 'User Story' }, { name: 'Bug' }, { name: 'Task' }, { name: 'Feature' }, { name: 'Epic' },
-              ]).map((type) => (
-                <option key={type.name} value={type.name}>{type.name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="w-32">
-            <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Priority</label>
-            <select value={form.priority} onChange={(e) => setForm((prev) => ({ ...prev, priority: Number(e.target.value) }))} className={isc}>
-              <option value={1}>Critical</option>
-              <option value={2}>High</option>
-              <option value={3}>Medium</option>
-              <option value={4}>Low</option>
-            </select>
-          </div>
-        </div>
-
-        <div>
-          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Title <span className="text-red-400">*</span></label>
-          <input
-            value={form.title}
-            onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
-            className={isc}
-            placeholder="Short, actionable title"
-          />
-        </div>
-
-        <div>
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
-            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
-              <button
-                type="button"
-                onClick={() => setDescriptionTab('edit')}
-                className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => setDescriptionTab('preview')}
-                className={`rounded-md px-2.5 py-1 font-medium ${descriptionTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
-              >
-                Preview
-              </button>
-            </div>
-          </div>
-
-          {descriptionTab === 'edit' ? (
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-              rows={6}
-              className={isc}
-              placeholder="Context, background, technical details…"
-            />
-          ) : form.description ? (
-            <div className={previewBoxClassName}>
-              <div
-                className="prose prose-sm max-w-none dark:prose-invert"
-                dangerouslySetInnerHTML={{ __html: markdownToHtml(form.description) }}
-              />
-            </div>
-          ) : (
-            <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
-              Nothing to preview yet.
-            </div>
-          )}
-        </div>
-
-        <div>
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Acceptance Criteria</label>
-            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-xs dark:border-gray-700 dark:bg-gray-900">
-              <button
-                type="button"
-                onClick={() => setAcceptanceTab('edit')}
-                className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'edit' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => setAcceptanceTab('preview')}
-                className={`rounded-md px-2.5 py-1 font-medium ${acceptanceTab === 'preview' ? 'bg-indigo-600 text-white' : 'text-gray-500 dark:text-gray-400'}`}
-              >
-                Preview
-              </button>
-            </div>
-          </div>
-
-          {acceptanceTab === 'edit' ? (
-            <textarea
-              value={form.acceptanceCriteria}
-              onChange={(e) => setForm((prev) => ({ ...prev, acceptanceCriteria: e.target.value }))}
-              rows={6}
-              className={isc}
-              placeholder={['user story', 'feature'].includes(form.type.toLowerCase()) ? 'Given / When / Then…' : 'Definition of done, repro steps, or validation notes…'}
-            />
-          ) : form.acceptanceCriteria ? (
-            <div className={previewBoxClassName}>
-              <div
-                className="prose prose-sm max-w-none dark:prose-invert"
-                dangerouslySetInnerHTML={{ __html: markdownToHtml(form.acceptanceCriteria) }}
-              />
-            </div>
-          ) : (
-            <div className={`${previewBoxClassName} flex items-center text-gray-400 dark:text-gray-500`}>
-              Nothing to preview yet.
-            </div>
-          )}
-        </div>
-
-        <div>
-          <label className="mb-1.5 block text-xs font-semibold text-gray-500 dark:text-gray-400">Tags <span className="font-normal text-gray-400">(semicolon-separated)</span></label>
-          <input
-            value={form.tags}
-            onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))}
-            className={isc}
-            placeholder="BC; translation; sprint-12"
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-800">
-        <button
-          onClick={onClose}
-          className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || !form.title.trim()}
-          className="ml-auto flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {createMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-          Create Work Item
-        </button>
-      </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -688,7 +799,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [stateFilter, setStateFilter] = useState('');
   const [search, setSearch] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['work-items', projectId, typeFilter, stateFilter],
@@ -726,7 +837,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
     return wi.title.toLowerCase().includes(q) || String(wi.id).includes(q) || (wi.tags?.toLowerCase().includes(q) ?? false);
   });
 
-  const panelOpen = selectedItem !== null || showCreate;
+  const panelOpen = selectedItem !== null;
 
   return (
     <div className="flex gap-5">
@@ -761,7 +872,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           </button>
           <button
-            onClick={() => { setShowCreate(true); setSelectedItem(null); }}
+            onClick={() => { setShowCreateModal(true); setSelectedItem(null); }}
             className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 active:bg-indigo-800"
           >
             <Plus size={14} /> New Work Item
@@ -791,7 +902,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             {filtered.map((wi) => (
               <button
                 key={wi.id}
-                onClick={() => { setSelectedItem(wi); setShowCreate(false); }}
+                onClick={() => { setSelectedItem(wi); setShowCreateModal(false); }}
                 className={`group w-full rounded-xl border p-3.5 text-left transition-all hover:shadow-sm
                   ${selectedItem?.id === wi.id
                     ? 'border-indigo-300 bg-indigo-50 shadow-sm dark:border-indigo-700 dark:bg-indigo-900/20'
@@ -830,27 +941,30 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
       {panelOpen && (
         <div className="w-full shrink-0 lg:w-[26rem]">
           {/* Back button on mobile */}
-          <button onClick={() => { setSelectedItem(null); setShowCreate(false); }}
+          <button onClick={() => setSelectedItem(null)}
             className="mb-3 flex items-center gap-1 text-xs text-indigo-500 lg:hidden">
             ← Back to list
           </button>
           <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900 overflow-y-auto max-h-[calc(100vh-180px)]">
-            {showCreate ? (
-              <WorkItemForm
-                projectId={projectId}
-                agents={agents}
-                workItemTypes={workItemTypes}
-                onSuccess={() => {
-                  setShowCreate(false);
-                  qc.invalidateQueries({ queryKey: ['work-items', projectId] });
-                }}
-                onClose={() => setShowCreate(false)}
-              />
-            ) : selectedItem ? (
+            {selectedItem ? (
               <WorkItemDetail item={selectedItem} onClose={() => setSelectedItem(null)} />
             ) : null}
           </div>
         </div>
+      )}
+
+      {showCreateModal && (
+        <WorkItemForm
+          projectId={projectId}
+          agents={agents}
+          workItemTypes={workItemTypes}
+          onSuccess={() => {
+            setShowCreateModal(false);
+            void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+            void refetch();
+          }}
+          onClose={() => setShowCreateModal(false)}
+        />
       )}
     </div>
   );

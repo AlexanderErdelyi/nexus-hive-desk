@@ -4,6 +4,7 @@ import type {
   AIReviewResponse,
   AIReviewResult,
   AIReviewQuality,
+  AIReviewUnit,
   AITranslateRequest,
   AITranslateResponse,
   AITranslateResult,
