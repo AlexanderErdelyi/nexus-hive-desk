@@ -1592,11 +1592,20 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               disabled={!!selectedAgentId}
                             >
                               <option value="">Default (gpt-4o-mini)</option>
-                              <option value="gpt-4o-mini">gpt-4o-mini — fast, cheap</option>
-                              <option value="gpt-4o">gpt-4o — smarter, balanced</option>
-                              <option value="gpt-4.1">gpt-4.1 — most capable</option>
-                              <option value="gpt-4.1-mini">gpt-4.1-mini — fast + capable</option>
-                              <option value="o4-mini">o4-mini — reasoning</option>
+                              <optgroup label="OpenAI GPT">
+                                <option value="gpt-4o-mini">gpt-4o-mini — fast, cheap</option>
+                                <option value="gpt-4o">gpt-4o — smarter, balanced</option>
+                                <option value="gpt-4.1-mini">gpt-4.1-mini — fast + capable</option>
+                                <option value="gpt-4.1">gpt-4.1 — most capable GPT</option>
+                                <option value="o4-mini">o4-mini — reasoning</option>
+                              </optgroup>
+                              <optgroup label="OpenAI Codex">
+                                <option value="codex-mini-latest">codex-mini-latest — code-focused</option>
+                              </optgroup>
+                              <optgroup label="Anthropic Claude">
+                                <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+                                <option value="claude-sonnet-4-6">claude-sonnet-4-6 — latest</option>
+                              </optgroup>
                             </select>
                           </div>
                           {/* Agent */}

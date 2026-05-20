@@ -334,19 +334,25 @@ async function streamJsonCompletion(
   messages: ChatModelMessage[],
   onChunk: (chunk: string) => void,
 ): Promise<string> {
+  // Claude models don't support response_format: json_object — use prompt instruction instead
+  const isClaudeModel = model.startsWith('claude-');
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: 0.4,
+    stream: true,
+  };
+  if (!isClaudeModel) {
+    body.response_format = { type: 'json_object' };
+  }
+
   const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.4,
-      response_format: { type: 'json_object' },
-      stream: true,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
