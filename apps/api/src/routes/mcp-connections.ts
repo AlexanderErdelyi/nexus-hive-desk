@@ -908,6 +908,13 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const project = await prisma.project.findUnique({ where: { id: projectId } });
       if (!project) throw new Error('Project not found');
 
+      // Extract Wiki.js URL + credential for screenshot uploads
+      let credential: string | null = null;
+      if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+        credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+      }
+      const { wikiUrl } = getWikiJsConfig(connection);
+
       const contextParts: string[] = [
         `## Wiki Page Target`,
         `- Locale: ${locale}`,
@@ -952,6 +959,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
           const env: Record<string, string> = {};
           if (mcpCredential) env.GITHUB_TOKEN = mcpCredential;
 
+          // Load transcript
           const transcriptResult = await callMcpTool('node', [teamsConnection.baseUrl], env, 'get_full_transcript', {
             recording_id: sources.recordingId.trim(),
           });
@@ -961,6 +969,73 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
             : JSON.stringify(transcriptData, null, 2);
           contextParts.push(`## Teams Recording Transcript\n${transcriptText.slice(0, 12000)}`);
           sendLog('Teams recording transcript loaded');
+
+          // Load screenshots from analysis and upload relevant ones to Wiki.js
+          try {
+            sendLog('Loading recording screenshots...');
+            const analysisResult = await callMcpTool('node', [teamsConnection.baseUrl], env, 'get_recording_analysis', {
+              recording_id: sources.recordingId.trim(),
+            });
+            const analysisData = parseMcpToolResponse(analysisResult);
+            type ScreenshotMeta = { id: string; filePath: string; description: string; relevanceScore: number; tags: string[] };
+            const screenshots: ScreenshotMeta[] = Array.isArray(analysisData?.screenshots)
+              ? (analysisData.screenshots as ScreenshotMeta[])
+              : [];
+
+            if (screenshots.length > 0 && wikiUrl && credential) {
+              // Pick the top-N most relevant screenshots
+              const relevant = screenshots
+                .filter((s) => s.filePath && s.relevanceScore >= 0.4)
+                .sort((a, b) => b.relevanceScore - a.relevanceScore)
+                .slice(0, 5);
+
+              sendLog(`Uploading ${relevant.length} screenshot(s) to Wiki.js...`);
+              const uploadedScreenshots: { url: string; description: string }[] = [];
+
+              const { readFile } = await import('fs/promises');
+              for (const shot of relevant) {
+                try {
+                  const imageBytes = await readFile(shot.filePath);
+                  const filename = `recording-${sources.recordingId?.trim().slice(0, 8)}-${shot.id}.png`;
+
+                  // Upload via Wiki.js REST upload endpoint (same as Python MCP)
+                  // Sends two 'mediaUpload' parts: JSON metadata + image binary
+                  const formData = new FormData();
+                  formData.append('mediaUpload', new Blob([JSON.stringify({ folderId: 2 })], { type: 'application/json' }));
+                  formData.append('mediaUpload', new Blob([imageBytes], { type: 'image/png' }), filename);
+
+                  const uploadRes = await fetch(`${wikiUrl}/u`, {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${credential}` },
+                    body: formData,
+                  });
+                  if (uploadRes.ok) {
+                    const assetUrl = `${wikiUrl}/${filename}`;
+                    uploadedScreenshots.push({ url: assetUrl, description: shot.description });
+                    sendLog(`Uploaded: ${filename}`);
+                  } else {
+                    sendLog(`Upload skipped (HTTP ${uploadRes.status}): ${filename}`);
+                  }
+                } catch (uploadErr) {
+                  sendLog(`Screenshot ${shot.id} skipped: ${uploadErr instanceof Error ? uploadErr.message : 'unknown'}`);
+                }
+              }
+
+              if (uploadedScreenshots.length > 0) {
+                const screenshotContext = uploadedScreenshots
+                  .map((s, i) => `### Screenshot ${i + 1}\n- URL: ${s.url}\n- Description: ${s.description}`)
+                  .join('\n\n');
+                contextParts.push(
+                  `## Recording Screenshots\nThe following screenshots have been uploaded to Wiki.js. Embed them in the page content using their URLs.\n\n${screenshotContext}`
+                );
+                sendLog(`${uploadedScreenshots.length} screenshot(s) ready for embedding`);
+              }
+            } else if (screenshots.length === 0) {
+              sendLog('No screenshots found in recording analysis');
+            }
+          } catch (screenshotErr) {
+            sendLog(`Screenshot loading skipped: ${screenshotErr instanceof Error ? screenshotErr.message : 'unknown'}`);
+          }
         }
       }
 
@@ -982,6 +1057,11 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         sendLog('Custom instructions added');
       }
 
+      const hasScreenshots = contextParts.some((p) => p.startsWith('## Recording Screenshots'));
+      const screenshotInstruction = hasScreenshots
+        ? 'Screenshots from the recording have been uploaded to Wiki.js. IMPORTANT: embed ALL provided screenshot URLs in the content at relevant sections using the proper format for the output type (img tags for HTML, ![desc](url) for Markdown). Place each screenshot near the section it illustrates.'
+        : '';
+
       sendLog(`Generating ${format === 'html' ? 'HTML' : 'Markdown'} wiki page draft...`);
       const langInstruction = locale === 'de'
         ? 'Write the title and full page content in German.'
@@ -993,11 +1073,13 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
             langInstruction,
             'Generate a visually rich HTML page using only inline CSS (no external stylesheets, no <script>, no <link> tags).',
             'The HTML will be stored in Wiki.js using its HTML editor — it must render beautifully inside Wiki.js.',
+            screenshotInstruction,
             'Style guidelines:',
             '- Dark-friendly neutral colors (#1C1C1A text, #8A8985 secondary, white cards with box-shadow)',
             '- Hero/banner section at top: full-width colored div with bold white title and subtitle',
             '- Navigation tabs row for sub-pages (styled as pill buttons in a flex row)',
             '- Feature/function cards in a responsive grid (3 columns, each with icon area, bold heading, description, and link list)',
+            '- For screenshots: use <figure> with <img style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12)"> and <figcaption> for the description',
             '- Use <div> based layout with inline flex/grid styles',
             '- Section headings with bottom border, font-weight 600',
             '- Breadcrumb navigation at top using <a> tags with muted color and › separators',
@@ -1007,17 +1089,18 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
             'Do not invent unsupported facts. Clearly mark placeholders where information is missing.',
             `Prefer this path unless a better nested path is clearly justified: ${suggestedPath}`,
             contextParts.join('\n\n'),
-          ].join('\n\n')
+          ].filter(Boolean).join('\n\n')
         : [
             'You are a technical documentation writer for a Wiki.js knowledge base.',
             langInstruction,
+            screenshotInstruction,
             'Use the provided sources to generate a polished wiki page in Markdown.',
             'Return ONLY valid JSON with this shape: { "title": string, "content": string, "path": string }.',
             'The content should include a concise introduction, well-structured headings, bullet points where useful, and implementation details grounded in the source material.',
             'Do not invent unsupported facts. If the sources are incomplete, write sensible placeholders or clearly marked assumptions.',
             `Prefer this path unless a better nested path is clearly justified: ${suggestedPath}`,
             contextParts.join('\n\n'),
-          ].join('\n\n');
+          ].filter(Boolean).join('\n\n');
 
       const streamedJson = await streamJsonCompletion(
         token,
