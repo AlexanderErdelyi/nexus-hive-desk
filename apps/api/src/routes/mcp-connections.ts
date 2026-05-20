@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { encryptToken, decryptToken } from '../lib/crypto';
 
-const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom'] as const;
+const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom', 'teams_recorder'] as const;
 
 function stripCredentials(conn: any) {
   const { encryptedCredential, credentialIv, credentialTag, ...safe } = conn;
@@ -159,6 +159,22 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
       }
 
+      if (connection.type === 'teams_recorder') {
+        const mcpPath = connection.baseUrl;
+        if (!mcpPath) {
+          return { data: { status: 'error', message: 'baseUrl (MCP dist/index.js path) not configured' } };
+        }
+        try {
+          const { listMcpTools } = await import('../lib/mcp-client.js');
+          const env: Record<string, string> = {};
+          if (credential) env.GITHUB_TOKEN = credential;
+          const tools = await listMcpTools('node', [mcpPath], env);
+          return { data: { status: 'ok', message: `Connected — ${tools.length} tool(s) available: ${tools.map(t => t.name).join(', ')}` } };
+        } catch (err) {
+          return { data: { status: 'error', message: err instanceof Error ? err.message : 'Failed to connect to MCP' } };
+        }
+      }
+
       if (!credential) {
         return reply.status(400).send({ data: { status: 'error', message: 'No credential configured' } });
       }
@@ -218,6 +234,44 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return { data: { status: 'error', message } };
+    }
+  });
+
+  // ─── List recordings via MCP ──────────────────────────────────────────────
+  app.get<{ Params: { id: string } }>('/:id/recordings', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) {
+      return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    }
+    if (connection.type !== 'teams_recorder') {
+      return reply.status(400).send({ error: 'invalid_type', message: 'Only teams_recorder MCPs support recordings' });
+    }
+
+    try {
+      let credential: string | null = null;
+      if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+        credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+      }
+
+      const mcpPath = connection.baseUrl;
+      if (!mcpPath) {
+        return reply.status(400).send({ error: 'not_configured', message: 'MCP path not configured (set baseUrl to path of dist/index.js)' });
+      }
+
+      const { callMcpTool } = await import('../lib/mcp-client.js');
+      const env: Record<string, string> = {};
+      if (credential) env.GITHUB_TOKEN = credential;
+
+      const result = await callMcpTool('node', [mcpPath], env, 'list_recordings', {});
+      const text = result.content.find(c => c.type === 'text')?.text ?? '[]';
+
+      let recordings: unknown[] = [];
+      try { recordings = JSON.parse(text); } catch { recordings = []; }
+
+      return { data: recordings };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.status(502).send({ error: 'mcp_error', message });
     }
   });
 }

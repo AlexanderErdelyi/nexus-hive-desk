@@ -817,6 +817,7 @@ function McpTab() {
                 <option value="azure_devops_wiki">Azure DevOps Wiki</option>
                 <option value="github">GitHub</option>
                 <option value="azure_devops">Azure DevOps</option>
+                <option value="teams_recorder">Teams Recorder (Local MCP)</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
@@ -826,8 +827,13 @@ function McpTab() {
                 className={inputClass}
                 value={form.baseUrl}
                 onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
-                placeholder="https://wiki.example.com"
+                placeholder={form.type === 'teams_recorder' ? 'C:/VSCodeProjects/GitHub/mcp-teams-recorder/dist/index.js' : 'https://wiki.example.com'}
               />
+              {form.type === 'teams_recorder' && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  For Teams Recorder, baseUrl is the local path to the MCP server dist/index.js file.
+                </p>
+              )}
             </div>
             <div>
               <label className={labelClass}>Auth Type</label>

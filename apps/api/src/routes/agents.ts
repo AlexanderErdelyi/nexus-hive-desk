@@ -29,7 +29,11 @@ export async function agentRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
         include: {
           skills: { include: { skill: true } },
-          mcpConnections: { include: { mcpConnection: true } },
+          mcpConnections: {
+            include: {
+              mcpConnection: { select: { id: true, name: true, type: true } },
+            },
+          },
           _count: { select: { runs: true } },
         },
       });
@@ -44,7 +48,11 @@ export async function agentRoutes(app: FastifyInstance) {
       where: { id: req.params.id },
       include: {
         skills: { include: { skill: true } },
-        mcpConnections: { include: { mcpConnection: true } },
+        mcpConnections: {
+          include: {
+            mcpConnection: { select: { id: true, name: true, type: true } },
+          },
+        },
         _count: { select: { runs: true } },
       },
     });

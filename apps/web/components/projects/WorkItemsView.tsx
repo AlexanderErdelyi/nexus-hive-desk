@@ -39,6 +39,13 @@ interface Agent {
   description?: string;
   systemPrompt?: string;
   skills: Array<{ skill: { name: string; type: string; promptTemplate?: string } }>;
+  mcpConnections?: Array<{
+    mcpConnection: {
+      id: string;
+      name: string;
+      type: string;
+    };
+  }>;
 }
 
 interface WorkItemType {
@@ -220,10 +227,14 @@ function WorkItemForm({
   const [acceptanceTab, setAcceptanceTab] = useState<'edit' | 'preview'>('edit');
   const [technicalSpec, setTechnicalSpec] = useState('');
   const [technicalSpecOpen, setTechnicalSpecOpen] = useState(false);
+  const [recordings, setRecordings] = useState<Array<{ id: string; title?: string; processedAt?: string; duration?: number }>>([]);
+  const [selectedRecordingId, setSelectedRecordingId] = useState('');
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
 
   const technicalSpecSeparator = '\n\n---\n**Technical Spec:**\n';
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
 
   useEffect(() => {
     if (!selectedAgentId && agents[0]?.id) setSelectedAgentId(agents[0].id);
@@ -239,6 +250,23 @@ function WorkItemForm({
     if (!chatRef.current) return;
     chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [chatMessages]);
+
+  useEffect(() => {
+    if (!selectedAgent) return;
+    const teamsMcp = selectedAgent.mcpConnections?.find((m) => m.mcpConnection.type === 'teams_recorder');
+    if (!teamsMcp) {
+      setRecordings([]);
+      setSelectedRecordingId('');
+      return;
+    }
+
+    setRecordingsLoading(true);
+    setSelectedRecordingId('');
+    api.get(`/api/mcp-connections/${teamsMcp.mcpConnection.id}/recordings`)
+      .then((res: any) => setRecordings(Array.isArray(res?.data) ? res.data : []))
+      .catch(() => setRecordings([]))
+      .finally(() => setRecordingsLoading(false));
+  }, [selectedAgent]);
 
   useEffect(() => {
     setPortalReady(true);
@@ -284,7 +312,6 @@ function WorkItemForm({
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
-  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const isc = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:bg-gray-800 dark:focus:ring-indigo-900/40';
   const lastLogIndex = chatMessages.reduce((last, message, index) => (message.role === 'log' ? index : last), -1);
 
@@ -338,7 +365,7 @@ function WorkItemForm({
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ agentId, description, workItemType: form.type, includeRepoContext: true }),
+      body: JSON.stringify({ agentId, description, workItemType: form.type, recordingId: selectedRecordingId || undefined, includeRepoContext: true }),
     });
 
     if (!response.ok || !response.body) {
@@ -516,6 +543,36 @@ function WorkItemForm({
               </div>
 
               <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
+                {(recordingsLoading || recordings.length > 0) && (
+                  <div className="mb-4 rounded-xl border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/50">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">📹 Teams Recordings</span>
+                      {recordingsLoading && <Loader2 size={12} className="animate-spin text-gray-400" />}
+                    </div>
+                    {recordings.length === 0 && !recordingsLoading && (
+                      <p className="text-xs text-gray-400">No recordings in cache yet</p>
+                    )}
+                    {recordings.map((rec) => (
+                      <button
+                        key={rec.id}
+                        onClick={() => setSelectedRecordingId((prev) => prev === rec.id ? '' : rec.id)}
+                        className={`w-full text-left px-2.5 py-2 rounded-lg text-xs mb-1 transition-colors ${
+                          selectedRecordingId === rec.id
+                            ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-medium'
+                            : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400'
+                        }`}
+                      >
+                        <div className="font-medium truncate">{rec.title ?? rec.id}</div>
+                        {rec.processedAt && (
+                          <div className="text-gray-400 text-[10px]">{new Date(rec.processedAt).toLocaleString()}</div>
+                        )}
+                      </button>
+                    ))}
+                    {selectedRecordingId && (
+                      <p className="text-[11px] text-indigo-500 mt-1">✓ Recording attached — agent will use meeting context</p>
+                    )}
+                  </div>
+                )}
                 <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-violet-200/70">Chat history</div>
                 <div ref={chatRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                   {chatMessages.length === 0 ? (

@@ -385,7 +385,7 @@ export async function workItemRoutes(app: FastifyInstance) {
   // ─── AI agent streaming run for work item generation ───────────────────────
   app.post<{
     Params: { id: string };
-    Body: { agentId?: string; description: string; workItemType?: string; includeRepoContext?: boolean };
+    Body: { agentId?: string; description: string; workItemType?: string; recordingId?: string; includeRepoContext?: boolean };
   }>('/:id/work-items/generate-stream', async (req, reply) => {
     reply.hijack();
     reply.raw.statusCode = 200;
@@ -584,12 +584,92 @@ export async function workItemRoutes(app: FastifyInstance) {
         .map((entry) => `## Skill: ${entry.skill.name}\n${entry.skill.promptTemplate}`)
         .join('\n\n');
 
+      // ─── MCP Context (e.g. Teams recordings) ────────────────────────────────
+      let mcpContext = '';
+      if (agentId) {
+        const agentWithMcp = await prisma.agent.findUnique({
+          where: { id: agentId },
+          include: {
+            skills: { include: { skill: true } },
+            mcpConnections: { include: { mcpConnection: true } },
+          },
+        });
+
+        const teamsMcps = (agentWithMcp?.mcpConnections ?? [])
+          .filter((link) => link.mcpConnection.type === 'teams_recorder');
+
+        if (teamsMcps.length > 0) {
+          sendLog(`Agent has ${teamsMcps.length} Teams Recorder MCP(s) connected...`);
+
+          for (const link of teamsMcps.slice(0, 1)) {
+            const conn = link.mcpConnection;
+            const mcpPath = conn.baseUrl;
+            if (!mcpPath) continue;
+
+            let mcpCredential: string | null = null;
+            if (conn.encryptedCredential && conn.credentialIv && conn.credentialTag) {
+              const { decryptToken } = await import('../lib/crypto.js');
+              mcpCredential = decryptToken(conn.encryptedCredential, conn.credentialIv, conn.credentialTag);
+            }
+
+            const mcpEnv: Record<string, string> = {};
+            if (mcpCredential) mcpEnv.GITHUB_TOKEN = mcpCredential;
+
+            const { callMcpTool } = await import('../lib/mcp-client.js');
+
+            try {
+              const requestedRecordingId = (req.body as { recordingId?: string }).recordingId;
+
+              let recordingId = requestedRecordingId;
+
+              if (!recordingId) {
+                sendLog('Fetching available Teams recordings...');
+                const listResult = await callMcpTool('node', [mcpPath], mcpEnv, 'list_recordings', {});
+                const listText = listResult.content.find(c => c.type === 'text')?.text ?? '[]';
+                let recordings: Array<{ id: string; title?: string; processedAt?: string }> = [];
+                try { recordings = JSON.parse(listText); } catch { recordings = []; }
+
+                if (recordings.length > 0) {
+                  const mostRecent = recordings.sort((a, b) =>
+                    new Date(b.processedAt ?? 0).getTime() - new Date(a.processedAt ?? 0).getTime()
+                  )[0];
+                  recordingId = mostRecent.id;
+                  sendLog(`Found ${recordings.length} recording(s) — using most recent: ${mostRecent.title ?? recordingId}`);
+                } else {
+                  sendLog('No recordings found in cache');
+                }
+              }
+
+              if (recordingId) {
+                const wiType = (workItemType ?? '').toLowerCase();
+                let summarizerTool = 'summarize_for_user_story';
+                if (wiType.includes('bug')) summarizerTool = 'summarize_for_bug_report';
+                else if (wiType.includes('doc')) summarizerTool = 'summarize_for_documentation';
+                else if (wiType.includes('task')) summarizerTool = 'summarize_for_user_story';
+
+                sendLog(`Extracting meeting context (${summarizerTool.replace('summarize_for_', '')})...`);
+                const summaryResult = await callMcpTool('node', [mcpPath], mcpEnv, summarizerTool, { recording_id: recordingId });
+                const summaryText = summaryResult.content.find(c => c.type === 'text')?.text ?? '';
+
+                if (summaryText && !summaryResult.isError) {
+                  mcpContext = `## Teams Recording Context\n\n${summaryText}`;
+                  sendLog('Meeting context loaded ✓');
+                }
+              }
+            } catch (mcpErr) {
+              sendLog(`Teams MCP unavailable: ${mcpErr instanceof Error ? mcpErr.message : 'unknown'}`);
+            }
+          }
+        }
+      }
+
       const includeTechnicalSpec = /(technical\s+spec|technische|specification)/i.test(trimmedDescription);
       const systemContent = [
         agentSystemPrompt?.trim() || 'You are a helpful work item writer.',
         selectedSkillPrompts,
         adoContext,
         repoContext,
+        mcpContext,
         includeTechnicalSpec
           ? 'The user requested a technical specification. Fill the technicalSpec field with a concise, implementation-oriented technical specification based on the repository context when possible.'
           : 'Only populate the technicalSpec field when the user explicitly asks for a technical specification; otherwise return an empty string.',
