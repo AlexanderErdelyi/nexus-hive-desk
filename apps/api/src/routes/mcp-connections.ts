@@ -112,16 +112,19 @@ async function wikiJsGraphQL(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<unknown> {
+  // Send body as UTF-8 bytes — WAF blocks large string payloads (≥ ~3 KB) with 403 when body is a string.
+  const bodyJson = JSON.stringify({ query, variables });
   const res = await axios.post(
     `${wikiUrl}/graphql`,
-    { query, variables },
+    Buffer.from(bodyJson, 'utf8'),
     {
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+        // Content-Type with explicit charset — required by WAF. Must NOT be passed as a string body.
+        'Content-Type': 'application/json; charset=utf-8',
       },
       httpsAgent: tlsAgent,
-      validateStatus: null, // handle status manually
+      validateStatus: null,
     },
   );
   if (res.status < 200 || res.status >= 300) {
@@ -838,9 +841,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const locale = req.body.locale?.trim() || 'de';
     const content = req.body.content ?? '';
     const description = req.body.description?.trim() ?? '';
-    // Always use 'markdown' — Wiki.js has html:true in markdown-it so raw HTML blocks render unchanged.
-    // 'wysiwyg' and 'html' cause pages_editorkey_foreign FK violations on most Wiki.js 2.x instances.
-    const editor = 'markdown' as const;
+    // 'code' = Wiki.js CodeMirror editor, stores raw HTML as-is (confirmed working).
+    // 'markdown' = for markdown content. 'wysiwyg'/'html' cause FK constraint errors.
+    const editor = req.body.editor === 'html' ? 'code' : 'markdown';
     const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
