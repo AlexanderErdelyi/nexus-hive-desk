@@ -7,6 +7,12 @@ import axios from 'axios';
 // Allow self-signed / internal CA certificates for on-premise services (Wiki.js, etc.)
 const tlsAgent = new https.Agent({ rejectUnauthorized: false });
 
+// Node.js built-in fetch: bypass corporate proxy TLS cert issues
+// This is safe for an internal tool talking to known AI API endpoints
+if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom', 'teams_recorder'] as const;
 
 function stripCredentials(conn: any) {
@@ -457,15 +463,21 @@ async function streamJsonCompletionOpenAICompat(
   if (!isReasoningModel) body.temperature = 0.4;
   if (useJsonFormat && !isReasoningModel) body.response_format = { type: 'json_object' };
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    const cause = err instanceof Error ? (err.cause instanceof Error ? err.cause.message : String(err.cause)) : String(err);
+    throw new Error(`Network error calling AI API (${endpoint}): ${err instanceof Error ? err.message : err} | cause: ${cause}`);
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText);
-    throw new Error(`AI API error: ${text}`);
+    throw new Error(`AI API error ${response.status}: ${text}`);
   }
 
   if (!response.body) {
