@@ -239,7 +239,10 @@ export async function projectRoutes(app: FastifyInstance) {
     const repoParts = file.remoteRepo.split('/');
     try {
       if (conn.type === 'azure-devops') {
-        const [, adoProject, repoName] = repoParts.length === 3 ? repoParts : ['', repoParts[0], repoParts[1] ?? ''];
+        // repoKey format: "domain/org/project/repo" (4 parts) or "org/project/repo" (3 parts, legacy)
+        // Always use last two parts as adoProject and repoName
+        const adoProject = repoParts[repoParts.length - 2];
+        const repoName = repoParts[repoParts.length - 1];
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const encodedPath = encodeURIComponent(file.remotePath);
         const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodedPath}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&$format=text&api-version=7.1`;

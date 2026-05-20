@@ -122,9 +122,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         const repoParts = repo.split('/');
         const targetBranch = commitNewBranch ? newBranchName.trim() : file.remoteBranch;
 
-        if (repoParts.length === 3) {
+        // Azure DevOps repos are stored as "domain/org/project/repo" (4 parts)
+        // or "org/project/repo" (3 parts, legacy). GitHub is "owner/repo" (2 parts).
+        // Always use last two parts as [adoProject, repoId] for ADO.
+        if (repoParts.length >= 3) {
           // Azure DevOps
-          const [, azProject, repoId] = repoParts;
+          const azProject = repoParts[repoParts.length - 2];
+          const repoId = repoParts[repoParts.length - 1];
 
           // Create new branch first if requested
           if (commitNewBranch) {
@@ -139,7 +143,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             { branch: targetBranch, path: file.remotePath, content: contentRes.data.content, message: commitMsg }
           );
         } else {
-          // GitHub
+          // GitHub: "owner/repo"
           const [owner, repoName] = repoParts;
 
           if (commitNewBranch) {
