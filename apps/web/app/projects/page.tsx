@@ -1,6 +1,12 @@
+'use client';
+
 import { ProjectsList } from '@/components/projects/ProjectsList';
+import { useSearchParams } from 'next/navigation';
 
 export default function ProjectsPage() {
+  const searchParams = useSearchParams();
+  const newForCustomer = searchParams.get('newForCustomer') ?? undefined;
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -9,7 +15,7 @@ export default function ProjectsPage() {
           <p className="mt-1 text-gray-500">Manage your translation projects</p>
         </div>
       </div>
-      <ProjectsList />
+      <ProjectsList defaultCustomerId={newForCustomer} />
     </div>
   );
 }

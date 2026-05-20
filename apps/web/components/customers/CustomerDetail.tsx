@@ -668,10 +668,41 @@ export function CustomerDetail({ customerId }: { customerId: string }) {
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
   const [testingConn, setTestingConn] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, 'ok' | 'fail'>>({});
+  const [showLinkProject, setShowLinkProject] = useState(false);
+  const [linkProjectId, setLinkProjectId] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['customer', customerId],
     queryFn: () => api.get<{ data: Customer }>(`/api/customers/${customerId}`),
+  });
+
+  // Fetch unassigned projects for "Add Existing Project"
+  const { data: unassignedData } = useQuery({
+    queryKey: ['projects', 'unassigned'],
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; sourceLanguage: string; targetLanguage: string }> }>('/api/projects?customerId=none'),
+    enabled: showLinkProject,
+  });
+
+  const unlinkProjectMutation = useMutation({
+    mutationFn: (projectId: string) => api.patch(`/api/projects/${projectId}`, { customerId: null }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['customer', customerId] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Project unlinked');
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Failed to unlink'),
+  });
+
+  const linkProjectMutation = useMutation({
+    mutationFn: (projectId: string) => api.patch(`/api/projects/${projectId}`, { customerId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['customer', customerId] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      setShowLinkProject(false);
+      setLinkProjectId('');
+      toast.success('Project linked');
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'Failed to link'),
   });
 
   const deleteConnMutation = useMutation({
@@ -807,22 +838,87 @@ export function CustomerDetail({ customerId }: { customerId: string }) {
 
           {/* Projects */}
           <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-            <h3 className="mb-2 font-semibold text-gray-900 dark:text-white">Projects</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900 dark:text-white">Projects</h3>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setShowLinkProject(true)}
+                  className="flex items-center gap-1 rounded-lg bg-gray-50 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                  <Plus size={12} /> Add Existing
+                </button>
+                <a
+                  href={`/projects?newForCustomer=${customerId}`}
+                  className="flex items-center gap-1 rounded-lg bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400"
+                >
+                  <Plus size={12} /> Create New
+                </a>
+              </div>
+            </div>
+
+            {showLinkProject && (
+              <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+                <p className="mb-2 text-xs font-medium text-gray-700 dark:text-gray-300">Link an unassigned project:</p>
+                <div className="flex gap-2">
+                  <select
+                    className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+                    value={linkProjectId}
+                    onChange={(e) => setLinkProjectId(e.target.value)}
+                  >
+                    <option value="">Select project…</option>
+                    {(unassignedData?.data ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.sourceLanguage} → {p.targetLanguage})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => linkProjectId && linkProjectMutation.mutate(linkProjectId)}
+                    disabled={!linkProjectId || linkProjectMutation.isPending}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    Link
+                  </button>
+                  <button
+                    onClick={() => { setShowLinkProject(false); setLinkProjectId(''); }}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {customer.projects.length === 0 ? (
               <p className="py-2 text-sm text-gray-400 dark:text-gray-600">No projects linked</p>
             ) : (
               <div className="space-y-1">
                 {customer.projects.map((p) => (
-                  <a
+                  <div
                     key={p.id}
-                    href={`/projects/${p.id}`}
-                    className="block rounded-lg px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 dark:text-white dark:hover:bg-gray-800"
+                    className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800"
                   >
-                    {p.name}
-                    <span className="ml-2 text-xs text-gray-400">
-                      {p.sourceLanguage} → {p.targetLanguage}
-                    </span>
-                  </a>
+                    <a
+                      href={`/projects/${p.id}`}
+                      className="text-sm text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400"
+                    >
+                      {p.name}
+                      <span className="ml-2 text-xs text-gray-400">
+                        {p.sourceLanguage} → {p.targetLanguage}
+                      </span>
+                    </a>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Unlink "${p.name}" from this customer?`)) {
+                          unlinkProjectMutation.mutate(p.id);
+                        }
+                      }}
+                      className="rounded p-1 text-xs text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                      title="Unlink project"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

@@ -4,10 +4,21 @@ import { getXliffStats, parseXliff, serializeXliff } from '@nexus/xliff';
 import type { TranslationState } from '@nexus/types';
 
 export async function projectRoutes(app: FastifyInstance) {
-  app.get('/', async () => {
+  app.get<{ Querystring: { customerId?: string } }>('/', async (req) => {
+    const where: { customerId?: string | null } = {};
+    if (req.query.customerId === 'none') {
+      where.customerId = null;
+    } else if (req.query.customerId) {
+      where.customerId = req.query.customerId;
+    }
+
     const projects = await prisma.project.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { xliffFiles: true } } },
+      include: {
+        customer: { select: { id: true, name: true } },
+        _count: { select: { xliffFiles: true } },
+      },
     });
     return { data: projects };
   });
@@ -16,6 +27,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const project = await prisma.project.findUnique({
       where: { id: req.params.id },
       include: {
+        customer: { select: { id: true, name: true } },
         xliffFiles: {
           select: {
             id: true,
@@ -201,6 +213,24 @@ export async function projectRoutes(app: FastifyInstance) {
 
     const xml = serializeXliff(file.originalXml, updates);
     return { data: { content: xml, filename: file.filename } };
+  });
+
+  // ─── Update project ──────────────────────────────────────────────────────────
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string; targetLanguage?: string };
+  }>('/:id', async (req, reply) => {
+    const existing = await prisma.project.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
+    }
+
+    const project = await prisma.project.update({
+      where: { id: req.params.id },
+      data: req.body,
+      include: { customer: { select: { id: true, name: true } } },
+    });
+    return { data: project };
   });
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
