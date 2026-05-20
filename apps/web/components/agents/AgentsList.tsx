@@ -1,0 +1,642 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, TestTube2, Zap, Shield } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { api } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  modelProvider: string;
+  systemPrompt?: string;
+  triggerType: string;
+  createdAt: string;
+  _count?: { skills: number; mcpConnections: number; runs: number };
+}
+
+interface Skill {
+  id: string;
+  name: string;
+  description?: string;
+  type: 'prompt' | 'code' | 'mcp-tool';
+  builtIn: boolean;
+  promptTemplate?: string;
+  createdAt: string;
+}
+
+interface McpConnection {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl: string;
+  authType: string;
+  createdAt: string;
+}
+
+type Tab = 'agents' | 'skills' | 'mcp';
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Request failed';
+}
+
+const inputClass =
+  'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white';
+const labelClass = 'mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300';
+const primaryBtn =
+  'rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50';
+const secondaryBtn =
+  'rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800';
+const cardClass =
+  'rounded-xl border border-gray-200 bg-white p-5 transition-colors hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-900 dark:hover:border-indigo-500';
+const formCardClass =
+  'mb-6 rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-900';
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
+export function AgentsList() {
+  const [activeTab, setActiveTab] = useState<Tab>('agents');
+
+  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+    { key: 'agents', label: 'Agents', icon: <Bot size={16} /> },
+    { key: 'skills', label: 'Skills', icon: <Wrench size={16} /> },
+    { key: 'mcp', label: 'MCP Connections', icon: <Plug size={16} /> },
+  ];
+
+  return (
+    <div>
+      <div className="mb-6 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === t.key
+                ? 'bg-white text-indigo-600 shadow-sm dark:bg-gray-900 dark:text-indigo-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            }`}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'agents' && <AgentsTab />}
+      {activeTab === 'skills' && <SkillsTab />}
+      {activeTab === 'mcp' && <McpTab />}
+    </div>
+  );
+}
+
+// ── Agents Tab ─────────────────────────────────────────────────────────────────
+
+function AgentsTab() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({
+    name: '',
+    description: '',
+    modelProvider: 'github-models',
+    systemPrompt: '',
+    triggerType: 'manual',
+  });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['agents'],
+    queryFn: () => api.get<{ data: Agent[] }>('/api/agents'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (input: typeof form) => api.post('/api/agents', input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      setShowCreate(false);
+      setForm({ name: '', description: '', modelProvider: 'github-models', systemPrompt: '', triggerType: 'manual' });
+      toast.success('Agent created');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/agents/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('Agent deleted');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const agents = data?.data ?? [];
+
+  return (
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Agents</h2>
+        <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
+          <Plus size={16} /> New Agent
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className={formCardClass}>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create Agent</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Name *</label>
+              <input
+                className={inputClass}
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Translation Agent"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Model Provider</label>
+              <select
+                className={inputClass}
+                value={form.modelProvider}
+                onChange={(e) => setForm((f) => ({ ...f, modelProvider: e.target.value }))}
+              >
+                <option value="github-models">GitHub Models</option>
+                <option value="openai">OpenAI</option>
+                <option value="azure-openai">Azure OpenAI</option>
+                <option value="ollama">Ollama</option>
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Description</label>
+              <input
+                className={inputClass}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Handles automated translations"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Trigger Type</label>
+              <select
+                className={inputClass}
+                value={form.triggerType}
+                onChange={(e) => setForm((f) => ({ ...f, triggerType: e.target.value }))}
+              >
+                <option value="manual">Manual</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="event-driven">Event-driven</option>
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>System Prompt</label>
+              <textarea
+                className={`${inputClass} min-h-[80px]`}
+                value={form.systemPrompt}
+                onChange={(e) => setForm((f) => ({ ...f, systemPrompt: e.target.value }))}
+                placeholder="You are a helpful translation agent..."
+              />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => createMutation.mutate(form)}
+              disabled={!form.name || createMutation.isPending}
+              className={primaryBtn}
+            >
+              {createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+            <button onClick={() => setShowCreate(false)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="py-12 text-center text-gray-400">Loading...</div>
+      ) : agents.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <Bot size={40} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+          <p className="text-gray-500 dark:text-gray-400">No agents yet. Create your first AI agent.</p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {agents.map((a) => (
+            <div key={a.id} className={cardClass}>
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={`/agents/${a.id}`}
+                    className="block truncate font-semibold text-gray-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400"
+                  >
+                    {a.name}
+                  </a>
+                  {a.description && (
+                    <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{a.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => {
+                    if (confirm('Delete this agent?')) deleteMutation.mutate(a.id);
+                  }}
+                  className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
+                  <Shield size={10} /> {a.modelProvider}
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                  <Zap size={10} /> {a.triggerType}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                <span className="flex items-center gap-1"><Wrench size={12} /> {a._count?.skills ?? 0} skill(s)</span>
+                <span className="flex items-center gap-1"><Plug size={12} /> {a._count?.mcpConnections ?? 0} MCP</span>
+                <span className="flex items-center gap-1"><Play size={12} /> {a._count?.runs ?? 0} run(s)</span>
+              </div>
+              <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(a.createdAt)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Skills Tab ─────────────────────────────────────────────────────────────────
+
+function SkillsTab() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: '', description: '', type: 'prompt' as string, promptTemplate: '' });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () => api.get<{ data: Skill[] }>('/api/skills'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (input: typeof form) => api.post('/api/skills', input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skills'] });
+      setShowCreate(false);
+      setForm({ name: '', description: '', type: 'prompt', promptTemplate: '' });
+      toast.success('Skill created');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/skills/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skills'] });
+      toast.success('Skill deleted');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: () => api.post('/api/skills/seed-built-in', {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['skills'] });
+      toast.success('Built-in skills seeded');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const skills = data?.data ?? [];
+  const builtInSkills = skills.filter((s) => s.builtIn);
+  const customSkills = skills.filter((s) => !s.builtIn);
+
+  return (
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Skills</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={() => seedMutation.mutate()}
+            disabled={seedMutation.isPending}
+            className={`flex items-center gap-2 ${secondaryBtn}`}
+          >
+            <Zap size={16} /> {seedMutation.isPending ? 'Seeding...' : 'Seed Built-in Skills'}
+          </button>
+          <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
+            <Plus size={16} /> New Skill
+          </button>
+        </div>
+      </div>
+
+      {showCreate && (
+        <div className={formCardClass}>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create Skill</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Name *</label>
+              <input
+                className={inputClass}
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Translate Text"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Type</label>
+              <select
+                className={inputClass}
+                value={form.type}
+                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+              >
+                <option value="prompt">Prompt</option>
+                <option value="code">Code</option>
+                <option value="mcp-tool">MCP Tool</option>
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Description</label>
+              <input
+                className={inputClass}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Translates text between languages"
+              />
+            </div>
+            {form.type === 'prompt' && (
+              <div className="sm:col-span-2">
+                <label className={labelClass}>Prompt Template</label>
+                <textarea
+                  className={`${inputClass} min-h-[80px]`}
+                  value={form.promptTemplate}
+                  onChange={(e) => setForm((f) => ({ ...f, promptTemplate: e.target.value }))}
+                  placeholder="Translate the following text to {{targetLanguage}}:&#10;{{sourceText}}"
+                />
+              </div>
+            )}
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => createMutation.mutate(form)}
+              disabled={!form.name || createMutation.isPending}
+              className={primaryBtn}
+            >
+              {createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+            <button onClick={() => setShowCreate(false)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="py-12 text-center text-gray-400">Loading...</div>
+      ) : skills.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <Wrench size={40} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+          <p className="text-gray-500 dark:text-gray-400">No skills yet. Seed built-in skills or create a custom one.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {builtInSkills.length > 0 && (
+            <div>
+              <h3 className="mb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Built-in Skills</h3>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {builtInSkills.map((s) => (
+                  <SkillCard key={s.id} skill={s} onDelete={() => {}} canDelete={false} />
+                ))}
+              </div>
+            </div>
+          )}
+          {customSkills.length > 0 && (
+            <div>
+              <h3 className="mb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Custom Skills</h3>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {customSkills.map((s) => (
+                  <SkillCard
+                    key={s.id}
+                    skill={s}
+                    onDelete={() => {
+                      if (confirm('Delete this skill?')) deleteMutation.mutate(s.id);
+                    }}
+                    canDelete
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () => void; canDelete: boolean }) {
+  const typeColors: Record<string, string> = {
+    prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    'mcp-tool': 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  };
+
+  return (
+    <div className={cardClass}>
+      <div className="flex items-start justify-between">
+        <div className="min-w-0 flex-1">
+          <span className="block truncate font-semibold text-gray-900 dark:text-white">{skill.name}</span>
+          {skill.description && (
+            <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{skill.description}</p>
+          )}
+        </div>
+        {canDelete && (
+          <button
+            onClick={onDelete}
+            className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${typeColors[skill.type] ?? ''}`}>
+          {skill.type}
+        </span>
+        {skill.builtIn && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+            <Shield size={10} /> built-in
+          </span>
+        )}
+      </div>
+      <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(skill.createdAt)}</div>
+    </div>
+  );
+}
+
+// ── MCP Connections Tab ────────────────────────────────────────────────────────
+
+function McpTab() {
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat' });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['mcp-connections'],
+    queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (input: typeof form) => api.post('/api/mcp-connections', input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mcp-connections'] });
+      setShowCreate(false);
+      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat' });
+      toast.success('MCP connection created');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/mcp-connections/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mcp-connections'] });
+      toast.success('MCP connection deleted');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const testMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/api/mcp-connections/${id}/test`, {}),
+    onSuccess: () => toast.success('Connection test passed'),
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const connections = data?.data ?? [];
+
+  return (
+    <div>
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">MCP Connections</h2>
+        <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
+          <Plus size={16} /> New Connection
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className={formCardClass}>
+          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create MCP Connection</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Name *</label>
+              <input
+                className={inputClass}
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Wiki.js Production"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Type</label>
+              <select
+                className={inputClass}
+                value={form.type}
+                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+              >
+                <option value="wiki_js">Wiki.js</option>
+                <option value="azure_devops_wiki">Azure DevOps Wiki</option>
+                <option value="github">GitHub</option>
+                <option value="azure_devops">Azure DevOps</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Base URL *</label>
+              <input
+                className={inputClass}
+                value={form.baseUrl}
+                onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
+                placeholder="https://wiki.example.com"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Auth Type</label>
+              <select
+                className={inputClass}
+                value={form.authType}
+                onChange={(e) => setForm((f) => ({ ...f, authType: e.target.value }))}
+              >
+                <option value="pat">PAT</option>
+                <option value="oauth">OAuth</option>
+                <option value="api_key">API Key</option>
+              </select>
+            </div>
+          </div>
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={() => createMutation.mutate(form)}
+              disabled={!form.name || !form.baseUrl || createMutation.isPending}
+              className={primaryBtn}
+            >
+              {createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+            <button onClick={() => setShowCreate(false)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="py-12 text-center text-gray-400">Loading...</div>
+      ) : connections.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <Plug size={40} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
+          <p className="text-gray-500 dark:text-gray-400">No MCP connections yet. Create your first connection.</p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {connections.map((c) => (
+            <div key={c.id} className={cardClass}>
+              <div className="flex items-start justify-between">
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate font-semibold text-gray-900 dark:text-white">{c.name}</span>
+                  <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{c.baseUrl}</p>
+                </div>
+                <div className="ml-2 flex flex-shrink-0 gap-1">
+                  <button
+                    onClick={() => testMutation.mutate(c.id)}
+                    disabled={testMutation.isPending}
+                    className="text-gray-400 hover:text-green-500 dark:text-gray-600 dark:hover:text-green-400"
+                    title="Test connection"
+                  >
+                    <TestTube2 size={15} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm('Delete this connection?')) deleteMutation.mutate(c.id);
+                    }}
+                    className="text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                  {c.type}
+                </span>
+                <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                  {c.authType}
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(c.createdAt)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
