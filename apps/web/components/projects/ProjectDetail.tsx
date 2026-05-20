@@ -1,7 +1,10 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CloudDownload, Download, GitCommit, Loader2, Sparkles, Trash2, Upload } from 'lucide-react';
+import {
+  ArrowLeft, ArrowRight, BookOpen, ChevronRight, CloudDownload, Download,
+  FileCode2, GitCommit, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
@@ -12,6 +15,8 @@ import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { ProjectRemoteSettings } from './ProjectRemoteSettings';
 import { formatDate } from '@/lib/utils';
+
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
 
 interface Customer {
   id: string;
@@ -57,6 +62,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
+  const [view, setView] = useState<ProjectView>('hub');
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -182,230 +188,365 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   if (isLoading) return <div className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</div>;
   if (!project) return <div className="py-12 text-center text-red-500">Project not found</div>;
 
-  return (
-    <div>
-      <div className="mb-6 flex items-center gap-3">
+  const hasRemoteConfig = !!(effectiveRemoteConfig.connectionId && effectiveRemoteConfig.adoRepoName);
+
+  // ─── Shared header ──────────────────────────────────────────────────────────
+  const header = (
+    <div className="mb-6 flex items-center gap-3">
+      {view === 'hub' ? (
         <Link href="/projects" className="text-gray-400 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-300">
           <ArrowLeft size={20} />
         </Link>
-        <div>
+      ) : (
+        <button onClick={() => setView('hub')} className="text-gray-400 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-300">
+          <ArrowLeft size={20} />
+        </button>
+      )}
+      <div>
+        <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{project.name}</h1>
-          {project.description && <p className="text-sm text-gray-500 dark:text-gray-400">{project.description}</p>}
-          {project.customer && (
-            <p className="mt-1 text-sm">
-              <a
-                href={`/customers/${project.customer.id}`}
-                className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
-              >
-                {project.customer.name}
-              </a>
-            </p>
+          {view !== 'hub' && (
+            <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
+              <ChevronRight size={14} />
+              {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation'}[view]}
+            </span>
+          )}
+        </div>
+        {project.description && <p className="text-sm text-gray-500 dark:text-gray-400">{project.description}</p>}
+        {project.customer && (
+          <a href={`/customers/${project.customer.id}`}
+            className="mt-1 inline-block rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400">
+            {project.customer.name}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+
+  // ─── Hub view ───────────────────────────────────────────────────────────────
+  if (view === 'hub') {
+    const cards = [
+      {
+        key: 'translations' as ProjectView,
+        icon: <FileCode2 size={28} className="text-indigo-500" />,
+        title: 'Translations',
+        description: 'Upload, load and edit XLIFF translation files. Use AI to auto-translate and commit back to your repo.',
+        badge: project.xliffFiles.length > 0
+          ? `${project.xliffFiles.length} file${project.xliffFiles.length > 1 ? 's' : ''}`
+          : 'No files yet',
+        badgeColor: project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: true,
+      },
+      {
+        key: 'setup' as ProjectView,
+        icon: <Settings2 size={28} className="text-amber-500" />,
+        title: 'Setup',
+        description: 'Configure remote repository, glossary, and project connections to Azure DevOps or GitHub.',
+        badge: hasRemoteConfig ? 'Configured' : 'Not configured',
+        badgeColor: hasRemoteConfig ? 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: true,
+      },
+      {
+        key: 'work-items' as ProjectView,
+        icon: <ClipboardList size={28} className="text-sky-500" />,
+        title: 'Work Items',
+        description: 'Browse, create and manage Azure DevOps work items directly from the project.',
+        badge: hasRemoteConfig ? 'Ready' : 'Needs ADO setup',
+        badgeColor: hasRemoteConfig ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: false,
+        comingSoon: true,
+      },
+      {
+        key: 'documentation' as ProjectView,
+        icon: <BookOpen size={28} className="text-emerald-500" />,
+        title: 'Documentation',
+        description: 'Create and manage project documentation. Sync with wikis and generate docs from your codebase.',
+        badge: 'Coming soon',
+        badgeColor: 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: false,
+        comingSoon: true,
+      },
+    ];
+
+    return (
+      <div>
+        {header}
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          {cards.map((card) => (
+            <button
+              key={card.key}
+              onClick={() => card.available && setView(card.key)}
+              disabled={!card.available}
+              className={`group relative flex flex-col rounded-xl border bg-white p-6 text-left transition-all dark:bg-gray-900
+                ${card.available
+                  ? 'cursor-pointer border-gray-200 hover:border-indigo-300 hover:shadow-md dark:border-gray-700 dark:hover:border-indigo-600'
+                  : 'cursor-default border-gray-200 opacity-60 dark:border-gray-800'
+                }`}
+            >
+              <div className="mb-4">{card.icon}</div>
+              <div className="mb-1 flex items-center justify-between">
+                <h3 className="font-semibold text-gray-900 dark:text-white">{card.title}</h3>
+                {card.available && (
+                  <ArrowRight size={16} className="text-gray-300 transition-transform group-hover:translate-x-1 group-hover:text-indigo-500 dark:text-gray-700" />
+                )}
+              </div>
+              <p className="mb-4 flex-1 text-sm text-gray-500 dark:text-gray-400">{card.description}</p>
+              <div className="flex items-center justify-between">
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${card.badgeColor}`}>
+                  {card.badge}
+                </span>
+                {card.comingSoon && (
+                  <span className="text-xs text-gray-400 dark:text-gray-600">Planned</span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Quick stats row */}
+        <div className="mt-6 flex flex-wrap gap-4 text-sm text-gray-500 dark:text-gray-400">
+          <span>{project._count.glossaryEntries} glossary term{project._count.glossaryEntries !== 1 ? 's' : ''}</span>
+          {hasRemoteConfig && (
+            <span className="flex items-center gap-1">
+              <GitCommit size={13} />
+              {effectiveRemoteConfig.adoProjectName} / {effectiveRemoteConfig.adoRepoName}
+              <span className="rounded bg-gray-100 px-1.5 dark:bg-gray-800">{effectiveRemoteConfig.defaultBranch}</span>
+            </span>
           )}
         </div>
       </div>
+    );
+  }
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Upload panel */}
-        <div className="lg:col-span-1">
-          <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-            <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-900 dark:text-white">
-              <Upload size={16} /> Upload XLIFF
-            </h3>
-            <div
-              {...getRootProps()}
-              className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-                isDragActive
-                  ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20'
-                  : 'border-gray-300 hover:border-indigo-300 dark:border-gray-600 dark:hover:border-indigo-500'
-              }`}
-            >
-              <input {...getInputProps()} />
-              {uploading ? (
-                <p className="text-sm text-indigo-600 dark:text-indigo-400">Uploading...</p>
-              ) : (
-                <>
-                  <Upload size={24} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {isDragActive ? 'Drop here' : 'Drag & drop or click'}
-                  </p>
-                  <p className="mt-1 text-xs text-gray-400 dark:text-gray-600">.xlf / .xliff</p>
-                </>
+  // ─── Translations view ──────────────────────────────────────────────────────
+  if (view === 'translations') {
+    return (
+      <div>
+        {header}
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Upload panel */}
+          <div className="lg:col-span-1">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+              <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-900 dark:text-white">
+                <Upload size={16} /> Upload XLIFF
+              </h3>
+              <div
+                {...getRootProps()}
+                className={`cursor-pointer rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+                  isDragActive
+                    ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20'
+                    : 'border-gray-300 hover:border-indigo-300 dark:border-gray-600 dark:hover:border-indigo-500'
+                }`}
+              >
+                <input {...getInputProps()} />
+                {uploading ? (
+                  <p className="text-sm text-indigo-600 dark:text-indigo-400">Uploading...</p>
+                ) : (
+                  <>
+                    <Upload size={24} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {isDragActive ? 'Drop here' : 'Drag & drop or click'}
+                    </p>
+                    <p className="mt-1 text-xs text-gray-400 dark:text-gray-600">.xlf / .xliff</p>
+                  </>
+                )}
+              </div>
+              {project.customerId && (
+                <button
+                  onClick={() => setShowRemoteBrowser(true)}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+                >
+                  <CloudDownload size={15} /> Load from Remote
+                </button>
               )}
             </div>
-            {project.customerId && (
-              <button
-                onClick={() => setShowRemoteBrowser(true)}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
-              >
-                <CloudDownload size={15} /> Load from Remote
-              </button>
-            )}
           </div>
 
-          <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-            <h3 className="mb-2 font-semibold text-gray-900 dark:text-white">Settings</h3>
-            <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
-              <div className="flex justify-between">
-                <span>Source</span>
-                <span className="font-mono text-gray-900 dark:text-gray-200">{project.sourceLanguage}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Target</span>
-                <span className="font-mono text-gray-900 dark:text-gray-200">{project.targetLanguage}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Glossary terms</span>
-                <span className="text-gray-900 dark:text-gray-200">{project._count.glossaryEntries}</span>
-              </div>
-            </div>
-            <div className="mt-3">
-              <a
-                href={`/projects/${project.id}/glossary`}
-                className="rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                Manage Glossary
-              </a>
+          {/* Files list */}
+          <div className="lg:col-span-2">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+              <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">XLIFF Files</h3>
+              {project.xliffFiles.length === 0 ? (
+                <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-600">
+                  No files yet. Upload an XLIFF file to start.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {project.xliffFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="rounded-lg border border-gray-100 p-3 hover:border-gray-200 dark:border-gray-800 dark:hover:border-gray-700"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">{file.filename}</p>
+                          <p className="text-xs text-gray-400 dark:text-gray-600">{formatDate(file.uploadedAt)}</p>
+                          {file.remoteRepo && (
+                            <p className="mt-0.5 flex items-center gap-1 text-xs text-indigo-500 dark:text-indigo-400">
+                              <GitCommit size={11} />
+                              {file.remoteRepo} / {file.remoteBranch}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <a
+                            href={`/projects/${project.id}/translations?fileId=${file.id}`}
+                            className="flex items-center gap-1 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                          >
+                            <Sparkles size={13} /> Translate
+                          </a>
+                          {file.remoteRepo && (
+                            <button
+                              onClick={() => { setShowCommitDialog(file.id); setCommitMsg(`Update translations in ${file.filename}`); }}
+                              className="flex items-center gap-1 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
+                            >
+                              <GitCommit size={13} /> Commit
+                            </button>
+                          )}
+                          <a
+                            href={`/api/projects/${project.id}/xliff/${file.id}/download`}
+                            className="flex items-center gap-1 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                            download
+                          >
+                            <Download size={13} /> Download
+                          </a>
+                          <button
+                            onClick={() => { if (confirm(`Delete "${file.filename}"? This cannot be undone.`)) deleteFileMutation.mutate(file.id); }}
+                            disabled={deleteFileMutation.isPending}
+                            className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:text-gray-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Commit dialog */}
+                      {showCommitDialog === file.id && (
+                        <div className="mt-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
+                          <p className="mb-2 text-xs font-medium text-green-800 dark:text-green-300">
+                            Commit to: {file.remoteRepo} ({file.remoteBranch})
+                          </p>
+                          <input
+                            className="mb-2 w-full rounded border border-green-300 px-2 py-1.5 text-sm dark:border-green-700 dark:bg-gray-800 dark:text-white"
+                            value={commitMsg}
+                            onChange={(e) => setCommitMsg(e.target.value)}
+                            placeholder="Commit message"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => commitToRemote(file)}
+                              disabled={committingFile === file.id || !commitMsg.trim()}
+                              className="flex items-center gap-1 rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700 disabled:opacity-50"
+                            >
+                              {committingFile === file.id ? <Loader2 size={12} className="animate-spin" /> : <GitCommit size={12} />}
+                              {committingFile === file.id ? 'Committing...' : 'Commit'}
+                            </button>
+                            <button
+                              onClick={() => setShowCommitDialog(null)}
+                              className="rounded border border-green-300 px-3 py-1 text-xs text-green-700 dark:border-green-700 dark:text-green-400"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
+        </div>
 
+        {/* Remote file browser modal */}
+        {showRemoteBrowser && (
+          <RemoteFileBrowser
+            projectId={projectId}
+            customerId={project.customerId}
+            preConnId={effectiveRemoteConfig.connectionId ?? undefined}
+            preADOProject={effectiveRemoteConfig.adoProjectName ?? undefined}
+            preRepo={effectiveRemoteConfig.adoRepoName ?? undefined}
+            preBranch={effectiveRemoteConfig.defaultBranch ?? undefined}
+            onClose={() => setShowRemoteBrowser(false)}
+            onImported={(fileId, filename, total) => {
+              setShowRemoteBrowser(false);
+              qc.invalidateQueries({ queryKey: ['project', projectId] });
+              toast.success(`${filename} imported — ${total} strings`);
+              router.push(`/projects/${projectId}/translations?fileId=${fileId}`);
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ─── Setup view ─────────────────────────────────────────────────────────────
+  if (view === 'setup') {
+    return (
+      <div>
+        {header}
+        <div className="grid gap-6 lg:grid-cols-2">
           <ProjectRemoteSettings
             projectId={projectId}
             customerId={project.customerId}
             current={effectiveRemoteConfig}
             onSaved={(cfg) => setRemoteConfig(cfg)}
           />
-        </div>
-
-        {/* Files list */}
-        <div className="lg:col-span-2">
           <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-            <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">XLIFF Files</h3>
-            {project.xliffFiles.length === 0 ? (
-              <p className="py-8 text-center text-sm text-gray-400 dark:text-gray-600">
-                No files yet. Upload an XLIFF file to start.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {project.xliffFiles.map((file) => (
-                  <div
-                    key={file.id}
-                    className="rounded-lg border border-gray-100 p-3 hover:border-gray-200 dark:border-gray-800 dark:hover:border-gray-700"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">{file.filename}</p>
-                        <p className="text-xs text-gray-400 dark:text-gray-600">{formatDate(file.uploadedAt)}</p>
-                        {file.remoteRepo && (
-                          <p className="mt-0.5 flex items-center gap-1 text-xs text-indigo-500 dark:text-indigo-400">
-                            <GitCommit size={11} />
-                            {file.remoteRepo} / {file.remoteBranch}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <a
-                          href={`/projects/${project.id}/translations?fileId=${file.id}`}
-                          className="flex items-center gap-1 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
-                        >
-                          <Sparkles size={13} /> Translate
-                        </a>
-                        {file.remoteRepo && (
-                          <button
-                            onClick={() => {
-                              setShowCommitDialog(file.id);
-                              setCommitMsg(`Update translations in ${file.filename}`);
-                            }}
-                            className="flex items-center gap-1 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50"
-                          >
-                            <GitCommit size={13} /> Commit
-                          </button>
-                        )}
-                        <a
-                          href={`/api/projects/${project.id}/xliff/${file.id}/download`}
-                          className="flex items-center gap-1 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                          download
-                        >
-                          <Download size={13} /> Download
-                        </a>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete "${file.filename}"? This cannot be undone.`)) {
-                              deleteFileMutation.mutate(file.id);
-                            }
-                          }}
-                          disabled={deleteFileMutation.isPending}
-                          className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:text-gray-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Commit dialog */}
-                    {showCommitDialog === file.id && (
-                      <div className="mt-3 rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-900/20">
-                        <p className="mb-2 text-xs font-medium text-green-800 dark:text-green-300">
-                          Commit to: {file.remoteRepo} ({file.remoteBranch})
-                        </p>
-                        <input
-                          className="mb-2 w-full rounded border border-green-300 px-2 py-1.5 text-sm dark:border-green-700 dark:bg-gray-800 dark:text-white"
-                          value={commitMsg}
-                          onChange={(e) => setCommitMsg(e.target.value)}
-                          placeholder="Commit message"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => commitToRemote(file)}
-                            disabled={committingFile === file.id || !commitMsg.trim()}
-                            className="flex items-center gap-1 rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-700 disabled:opacity-50"
-                          >
-                            {committingFile === file.id ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : (
-                              <GitCommit size={12} />
-                            )}
-                            {committingFile === file.id ? 'Committing...' : 'Commit'}
-                          </button>
-                          <button
-                            onClick={() => setShowCommitDialog(null)}
-                            className="rounded border border-green-300 px-3 py-1 text-xs text-green-700 dark:border-green-700 dark:text-green-400"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            <h3 className="mb-3 font-semibold text-gray-900 dark:text-white">Glossary</h3>
+            <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
+              {project._count.glossaryEntries} term{project._count.glossaryEntries !== 1 ? 's' : ''} defined. Glossary terms guide AI translations to use the correct terminology.
+            </p>
+            <a
+              href={`/projects/${project.id}/glossary`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              Manage Glossary <ArrowRight size={14} />
+            </a>
+          </div>
+          <div className="lg:col-span-2">
+            <ProjectMembers projectId={projectId} />
           </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Members Section */}
-      <div className="mt-6">
-        <ProjectMembers projectId={projectId} />
+  // ─── Work Items view (coming soon) ──────────────────────────────────────────
+  if (view === 'work-items') {
+    return (
+      <div>
+        {header}
+        <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-900">
+          <ClipboardList size={40} className="mx-auto mb-4 text-sky-400 dark:text-sky-600" />
+          <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">Work Items — Coming Soon</h3>
+          <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
+            Browse and create Azure DevOps work items directly from NexusHiveDesk. Track bugs, user stories, and tasks without leaving your workflow.
+          </p>
+          {!hasRemoteConfig && (
+            <button
+              onClick={() => setView('setup')}
+              className="mt-6 inline-flex items-center gap-2 rounded-lg bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:bg-sky-900/30 dark:text-sky-300"
+            >
+              <Settings2 size={15} /> Configure ADO connection first
+            </button>
+          )}
+        </div>
       </div>
+    );
+  }
 
-      {/* Remote file browser modal */}
-      {showRemoteBrowser && (
-        <RemoteFileBrowser
-          projectId={projectId}
-          customerId={project.customerId}
-          preConnId={effectiveRemoteConfig.connectionId ?? undefined}
-          preADOProject={effectiveRemoteConfig.adoProjectName ?? undefined}
-          preRepo={effectiveRemoteConfig.adoRepoName ?? undefined}
-          preBranch={effectiveRemoteConfig.defaultBranch ?? undefined}
-          onClose={() => setShowRemoteBrowser(false)}
-          onImported={(fileId, filename, total) => {
-            setShowRemoteBrowser(false);
-            qc.invalidateQueries({ queryKey: ['project', projectId] });
-            toast.success(`${filename} imported — ${total} strings`);
-            router.push(`/projects/${projectId}/translations?fileId=${fileId}`);
-          }}
-        />
-      )}
+  // ─── Documentation view (coming soon) ───────────────────────────────────────
+  return (
+    <div>
+      {header}
+      <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-900">
+        <BookOpen size={40} className="mx-auto mb-4 text-emerald-400 dark:text-emerald-600" />
+        <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">Documentation — Coming Soon</h3>
+        <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
+          Create and manage project documentation, sync with wiki platforms, and generate docs from your codebase using AI agents.
+        </p>
+      </div>
     </div>
   );
 }
