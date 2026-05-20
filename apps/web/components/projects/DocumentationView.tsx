@@ -1637,6 +1637,12 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                                 <option value="cohere/cohere-command-a">Cohere Command A · RAG, multilingual agents</option>
                               </optgroup>
 
+                              <optgroup label="── Anthropic Claude (needs ANTHROPIC_API_KEY) ──">
+                                <option value="claude-haiku-4-5">claude-haiku-4-5 · fastest Claude, cheap drafts</option>
+                                <option value="claude-sonnet-4-5">claude-sonnet-4-5 · balanced, excellent writing</option>
+                                <option value="claude-opus-4-5">claude-opus-4-5 · most capable Claude</option>
+                              </optgroup>
+
                               <option value="custom">✏ Custom model ID…</option>
                             </select>
                             {selectedModel.startsWith('custom:') && (
@@ -1649,7 +1655,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               />
                             )}
                             <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                              Uses <a href="https://github.com/marketplace/models" target="_blank" rel="noreferrer" className="underline text-violet-500">GitHub Models</a> — Claude is not available there. Use custom ID for any exact model name.
+                              GitHub Models or <a href="https://openrouter.ai" target="_blank" rel="noreferrer" className="underline text-violet-500">OpenRouter</a> (free).
+                              Claude needs <code className="text-[10px]">ANTHROPIC_API_KEY</code> or <code className="text-[10px]">OPENROUTER_API_KEY</code> in .env.
                             </p>
                           </div>
                           {/* Agent */}

@@ -328,14 +328,106 @@ async function findRepoMatches(
   return contextSections.join('\n\n---\n\n');
 }
 
+async function streamJsonCompletionAnthropic(
+  apiKey: string,
+  model: string,
+  messages: ChatModelMessage[],
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  // Anthropic uses separate system/messages format
+  const systemMessages = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+  const userMessages = messages.filter((m) => m.role !== 'system');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 16000,
+      system: systemMessages || undefined,
+      messages: userMessages.map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => response.statusText);
+    throw new Error(`Anthropic API error: ${text}`);
+  }
+
+  if (!response.body) {
+    const fallback = await response.json() as { content?: Array<{ text?: string }> };
+    return fallback.content?.[0]?.text ?? '{}';
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let collected = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      let eventType = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event: ')) { eventType = line.slice(7).trim(); continue; }
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload || payload === '[DONE]') continue;
+        if (eventType === 'content_block_delta') {
+          const parsed = JSON.parse(payload) as { delta?: { type?: string; text?: string } };
+          const chunk = parsed.delta?.type === 'text_delta' ? (parsed.delta.text ?? '') : '';
+          if (!chunk) continue;
+          collected += chunk;
+          onChunk(chunk);
+        }
+      }
+    }
+  }
+
+  return collected;
+}
+
 async function streamJsonCompletion(
   token: string,
   model: string,
   messages: ChatModelMessage[],
   onChunk: (chunk: string) => void,
 ): Promise<string> {
-  // Only OpenAI models support response_format: json_object
-  const isOpenAIModel = model.startsWith('openai/') || (!model.includes('/') && !model.startsWith('claude-'));
+  // Route Claude models: prefer Anthropic key, fall back to OpenRouter key
+  if (model.startsWith('claude-')) {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    if (anthropicKey) {
+      return streamJsonCompletionAnthropic(anthropicKey, model, messages, onChunk);
+    }
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (openRouterKey) {
+      // OpenRouter uses OpenAI-compatible format; prefix model with anthropic/
+      const orModel = model.startsWith('anthropic/') ? model : `anthropic/${model}`;
+      return streamJsonCompletionOpenAICompat('https://openrouter.ai/api/v1/chat/completions', openRouterKey, orModel, messages, onChunk, false);
+    }
+    throw new Error('Claude model selected but neither ANTHROPIC_API_KEY nor OPENROUTER_API_KEY is configured in .env');
+  }
+
+  // OpenRouter prefix: user explicitly chose openrouter/ provider
+  if (model.startsWith('openrouter/')) {
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (!openRouterKey) throw new Error('OPENROUTER_API_KEY not configured in .env');
+    return streamJsonCompletionOpenAICompat('https://openrouter.ai/api/v1/chat/completions', openRouterKey, model.slice(11), messages, onChunk, false);
+  }
+
+  // Default: GitHub Models
+  const isOpenAIModel = model.startsWith('openai/') || !model.includes('/');
   const body: Record<string, unknown> = {
     model,
     messages,
@@ -346,12 +438,23 @@ async function streamJsonCompletion(
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch('https://models.github.ai/inference/chat/completions', {
+  return streamJsonCompletionOpenAICompat('https://models.github.ai/inference/chat/completions', token, model, messages, onChunk, isOpenAIModel);
+}
+
+async function streamJsonCompletionOpenAICompat(
+  endpoint: string,
+  token: string,
+  model: string,
+  messages: ChatModelMessage[],
+  onChunk: (chunk: string) => void,
+  useJsonFormat: boolean,
+): Promise<string> {
+  const body: Record<string, unknown> = { model, messages, temperature: 0.4, stream: true };
+  if (useJsonFormat) body.response_format = { type: 'json_object' };
+
+  const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
