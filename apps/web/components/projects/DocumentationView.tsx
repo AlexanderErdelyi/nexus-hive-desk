@@ -227,7 +227,13 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   }, [searchQuery.error]);
 
   useEffect(() => {
-    if (pageQuery.error) toast.error(getErrorMessage(pageQuery.error));
+    if (pageQuery.error) {
+      const msg = getErrorMessage(pageQuery.error);
+      // Don't toast for expected "page not found" situations
+      if (!msg.toLowerCase().includes('not found') && !msg.includes('6003')) {
+        toast.error(msg);
+      }
+    }
   }, [pageQuery.error]);
 
   const saveMutation = useMutation({
@@ -261,9 +267,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const searchResults = normalizeSearchResults(searchQuery.data?.data);
   const rootSuggestions = useMemo<WikiPageSummary[]>(() => ([
     { path: 'home', title: 'Home', description: 'Wiki.js home page', locale: activeLocale },
-    { path: `projects/${projectId}`, title: 'Project root', description: 'Suggested project root path', locale: activeLocale },
-    { path: `projects/${projectId}/runbooks`, title: 'Runbooks', description: 'Suggested runbook section', locale: activeLocale },
-  ]), [activeLocale, projectId]);
+  ]), [activeLocale]);
   const browseItems = recentPages.length > 0 ? recentPages : rootSuggestions;
   const listItems = debouncedSearch ? searchResults : browseItems;
 
@@ -640,8 +644,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                   {currentPage.description && (
                     <p className="text-sm text-gray-500 dark:text-gray-400">{currentPage.description}</p>
                   )}
-                  <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-950/40">
-                    <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-gray-800 dark:text-gray-200">{currentPage.content || 'No content available.'}</pre>
+                  <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-950/40">
+                    <div
+                      className="prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-a:text-indigo-500 prose-table:text-xs"
+                      dangerouslySetInnerHTML={{ __html: currentPage.content || '<p>No content available.</p>' }}
+                    />
                   </div>
                 </>
               )}

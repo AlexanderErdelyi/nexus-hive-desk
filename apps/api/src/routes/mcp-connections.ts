@@ -66,8 +66,12 @@ async function wikiJsGraphQL(
     const errText = await res.text();
     throw new Error(`Wiki.js GraphQL returned ${res.status}: ${errText}`);
   }
-  const body = await res.json() as { data?: unknown; errors?: unknown[] };
-  if (body.errors?.length) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors)}`);
+  const body = await res.json() as { data?: unknown; errors?: Array<{ extensions?: { code?: number } }> };
+  // Code 6003 = PageNotFound — treat as null, not an error
+  if (body.errors?.length) {
+    const isPageNotFound = body.errors.every(e => e?.extensions?.code === 6003);
+    if (!isPageNotFound) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors)}`);
+  }
   return body.data;
 }
 
