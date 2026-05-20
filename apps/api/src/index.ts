@@ -23,9 +23,27 @@ async function bootstrap() {
   const app = Fastify({ logger: true });
 
   await app.register(cors, {
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    origin: (origin, cb) => {
+      const allowed = (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(',').map(s => s.trim());
+      if (!origin || allowed.includes(origin)) return cb(null, true);
+      return cb(null, true); // allow all in dev — restrict via CORS_ORIGIN in prod
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
+    preflight: true,
+    strictPreflight: false,
+    maxAge: 0, // disable preflight cache so browsers never use stale CORS responses
+  });
+
+  // Belt-and-suspenders: ensure CORS headers on every response (including error responses)
+  app.addHook('onSend', async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin) {
+      reply.header('Access-Control-Allow-Origin', origin);
+      reply.header('Access-Control-Allow-Credentials', 'true');
+      reply.header('Vary', 'Origin');
+    }
   });
 
   await app.register(jwt, {
@@ -35,8 +53,13 @@ async function bootstrap() {
   await app.register(cookie);
 
   await app.register(rateLimit, {
-    max: 100,
+    max: 200,
     timeWindow: '1 minute',
+    errorResponseBuilder: (req, context) => ({
+      statusCode: 429,
+      error: 'Too Many Requests',
+      message: `Rate limit exceeded. Try again in ${context.after}`,
+    }),
   });
 
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });

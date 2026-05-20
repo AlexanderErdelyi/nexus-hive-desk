@@ -19,7 +19,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_URL = '';
 const TOKEN_KEY = 'nexus_auth_token';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
