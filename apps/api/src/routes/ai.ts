@@ -179,4 +179,90 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.status(500).send({ error: 'ai_error', message });
     }
   });
+
+  // ─── Generative AI: generate Agent / Skill / MCP config from description ─────
+  app.post<{
+    Body: { type: 'agent' | 'skill' | 'mcp'; description: string };
+  }>('/generate', async (req, reply) => {
+    const { type, description } = req.body;
+    if (!type || !description?.trim()) {
+      return reply.status(400).send({ error: 'validation', message: 'type and description are required' });
+    }
+
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    const baseURL = 'https://models.inference.ai.azure.com';
+    const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+
+    const systemPrompts: Record<string, string> = {
+      agent: `You are an AI agent designer. Given a plain-text description of what an AI agent should do, generate a complete agent configuration as JSON.
+Return ONLY valid JSON with these fields:
+{
+  "name": "short descriptive name",
+  "description": "one-line description of what the agent does",
+  "modelProvider": "github-models" | "openai" | "azure-openai" | "ollama",
+  "triggerType": "manual" | "scheduled" | "event-driven",
+  "systemPrompt": "detailed system prompt that instructs the agent how to behave",
+  "suggestedSkills": ["skill name 1", "skill name 2"]
+}
+Choose modelProvider based on context (default: github-models).
+Write a thorough, professional systemPrompt that would actually make this agent work well.`,
+
+      skill: `You are an AI skill designer. Given a plain-text description of a skill, generate a skill configuration as JSON.
+Return ONLY valid JSON with these fields:
+{
+  "name": "short skill name (PascalCase or Title Case)",
+  "description": "one-line description",
+  "type": "prompt" | "code" | "mcp-tool",
+  "promptTemplate": "the prompt template with {{variable}} placeholders (only for prompt type, otherwise empty string)"
+}
+For prompt skills: write a clear, professional prompt template with appropriate {{variable}} placeholders.
+For code/mcp-tool types, leave promptTemplate as an empty string.`,
+
+      mcp: `You are an MCP (Model Context Protocol) connection designer. Given a description of what service to connect to, generate an MCP connection config as JSON.
+Return ONLY valid JSON with these fields:
+{
+  "name": "friendly display name",
+  "type": "wiki_js" | "azure_devops_wiki" | "github" | "azure_devops" | "custom",
+  "baseUrl": "expected base URL pattern (use placeholder like https://your-domain.com if not specified)",
+  "authType": "pat" | "oauth" | "api_key",
+  "description": "one-line description of what this connection is for"
+}
+Infer type from the description. If unclear, use "custom".`,
+    };
+
+    try {
+      const response = await fetch(`${baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompts[type] },
+            { role: 'user', content: description.trim() },
+          ],
+          temperature: 0.7,
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
+      }
+
+      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+      const generated = JSON.parse(content);
+
+      return { data: generated };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(500).send({ error: 'ai_error', message });
+    }
+  });
 }

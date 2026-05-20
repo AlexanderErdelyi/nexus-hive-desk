@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, TestTube2, Zap, Shield } from 'lucide-react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, TestTube2, Zap, Shield, Sparkles, Loader2, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -61,6 +61,65 @@ const cardClass =
 const formCardClass =
   'mb-6 rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-900';
 
+// ── AI Generate Panel ──────────────────────────────────────────────────────────
+
+interface AIGeneratePanelProps {
+  type: 'agent' | 'skill' | 'mcp';
+  placeholder: string;
+  onGenerated: (data: Record<string, unknown>) => void;
+  onClose: () => void;
+}
+
+function AIGeneratePanel({ type, placeholder, onGenerated, onClose }: AIGeneratePanelProps) {
+  const [prompt, setPrompt] = useState('');
+  const [generating, setGenerating] = useState(false);
+
+  async function generate() {
+    if (!prompt.trim()) return;
+    setGenerating(true);
+    try {
+      const res = await api.post<{ data: Record<string, unknown> }>('/api/ai/generate', { type, description: prompt.trim() });
+      onGenerated(res.data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'AI generation failed');
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50 p-4 dark:border-indigo-800 dark:from-indigo-950/40 dark:to-purple-950/40">
+      <div className="mb-3 flex items-center gap-2">
+        <Sparkles size={16} className="text-indigo-500" />
+        <span className="text-sm font-semibold text-indigo-900 dark:text-indigo-300">Generate with AI</span>
+        <span className="ml-auto text-xs text-indigo-400 dark:text-indigo-500">Describe what you want → AI fills the form</span>
+      </div>
+      <textarea
+        className="mb-3 w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none dark:border-indigo-700 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+        rows={3}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder={placeholder}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); }}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={generate}
+          disabled={!prompt.trim() || generating}
+          className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          {generating ? 'Generating…' : 'Generate'}
+        </button>
+        <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-indigo-100 dark:hover:bg-indigo-900/30">
+          Cancel
+        </button>
+        <span className="ml-auto text-xs text-indigo-400 dark:text-indigo-500">Ctrl+Enter to generate</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export function AgentsList() {
@@ -102,6 +161,7 @@ export function AgentsList() {
 function AgentsTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showAIPanel, setShowAIPanel] = useState(false);
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -137,18 +197,56 @@ function AgentsTab() {
 
   const agents = data?.data ?? [];
 
+  function applyAIGenerated(data: Record<string, unknown>) {
+    setForm({
+      name: String(data.name ?? ''),
+      description: String(data.description ?? ''),
+      modelProvider: String(data.modelProvider ?? 'github-models'),
+      systemPrompt: String(data.systemPrompt ?? ''),
+      triggerType: String(data.triggerType ?? 'manual'),
+    });
+    setShowAIPanel(false);
+    setShowCreate(true);
+    toast.success('Form pre-filled by AI — review and save');
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Agents</h2>
-        <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
-          <Plus size={16} /> New Agent
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+            className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+          >
+            <Sparkles size={16} /> Generate with AI
+          </button>
+          <button onClick={() => { setShowCreate(true); setShowAIPanel(false); }} className={`flex items-center gap-2 ${primaryBtn}`}>
+            <Plus size={16} /> New Agent
+          </button>
+        </div>
       </div>
+
+      {showAIPanel && (
+        <AIGeneratePanel
+          type="agent"
+          placeholder="e.g. An agent that automatically translates XLIFF files from English to German, uses the project glossary, and commits the result to a new branch in Azure DevOps."
+          onGenerated={applyAIGenerated}
+          onClose={() => setShowAIPanel(false)}
+        />
+      )}
 
       {showCreate && (
         <div className={formCardClass}>
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create Agent</h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900 dark:text-white">Create Agent</h3>
+            <button
+              onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+              className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700"
+            >
+              <RefreshCw size={12} /> Re-generate
+            </button>
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className={labelClass}>Name *</label>
@@ -277,6 +375,7 @@ function AgentsTab() {
 function SkillsTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showAIPanel, setShowAIPanel] = useState(false);
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt' as string, promptTemplate: '' });
 
   const { data, isLoading } = useQuery({
@@ -317,6 +416,18 @@ function SkillsTab() {
   const builtInSkills = skills.filter((s) => s.builtIn);
   const customSkills = skills.filter((s) => !s.builtIn);
 
+  function applyAIGenerated(data: Record<string, unknown>) {
+    setForm({
+      name: String(data.name ?? ''),
+      description: String(data.description ?? ''),
+      type: String(data.type ?? 'prompt'),
+      promptTemplate: String(data.promptTemplate ?? ''),
+    });
+    setShowAIPanel(false);
+    setShowCreate(true);
+    toast.success('Form pre-filled by AI — review and save');
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -329,15 +440,38 @@ function SkillsTab() {
           >
             <Zap size={16} /> {seedMutation.isPending ? 'Seeding...' : 'Seed Built-in Skills'}
           </button>
-          <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
+          <button
+            onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+            className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+          >
+            <Sparkles size={16} /> Generate with AI
+          </button>
+          <button onClick={() => { setShowCreate(true); setShowAIPanel(false); }} className={`flex items-center gap-2 ${primaryBtn}`}>
             <Plus size={16} /> New Skill
           </button>
         </div>
       </div>
 
+      {showAIPanel && (
+        <AIGeneratePanel
+          type="skill"
+          placeholder="e.g. A skill that reviews a translation for correctness, tone, and glossary compliance, then returns a quality score and improvement suggestions."
+          onGenerated={applyAIGenerated}
+          onClose={() => setShowAIPanel(false)}
+        />
+      )}
+
       {showCreate && (
         <div className={formCardClass}>
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create Skill</h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900 dark:text-white">Create Skill</h3>
+            <button
+              onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+              className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700"
+            >
+              <RefreshCw size={12} /> Re-generate
+            </button>
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className={labelClass}>Name *</label>
@@ -483,6 +617,7 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
 function McpTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showAIPanel, setShowAIPanel] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat' });
 
   const { data, isLoading } = useQuery({
@@ -518,18 +653,55 @@ function McpTab() {
 
   const connections = data?.data ?? [];
 
+  function applyAIGenerated(data: Record<string, unknown>) {
+    setForm({
+      name: String(data.name ?? ''),
+      type: String(data.type ?? 'custom'),
+      baseUrl: String(data.baseUrl ?? ''),
+      authType: String(data.authType ?? 'pat'),
+    });
+    setShowAIPanel(false);
+    setShowCreate(true);
+    toast.success('Form pre-filled by AI — review and save');
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">MCP Connections</h2>
-        <button onClick={() => setShowCreate(true)} className={`flex items-center gap-2 ${primaryBtn}`}>
-          <Plus size={16} /> New Connection
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+            className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+          >
+            <Sparkles size={16} /> Generate with AI
+          </button>
+          <button onClick={() => { setShowCreate(true); setShowAIPanel(false); }} className={`flex items-center gap-2 ${primaryBtn}`}>
+            <Plus size={16} /> New Connection
+          </button>
+        </div>
       </div>
+
+      {showAIPanel && (
+        <AIGeneratePanel
+          type="mcp"
+          placeholder="e.g. Connect to our Wiki.js documentation portal at wiki.company.com to read and update project documentation pages."
+          onGenerated={applyAIGenerated}
+          onClose={() => setShowAIPanel(false)}
+        />
+      )}
 
       {showCreate && (
         <div className={formCardClass}>
-          <h3 className="mb-4 font-semibold text-gray-900 dark:text-white">Create MCP Connection</h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900 dark:text-white">Create MCP Connection</h3>
+            <button
+              onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+              className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700"
+            >
+              <RefreshCw size={12} /> Re-generate
+            </button>
+          </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className={labelClass}>Name *</label>
