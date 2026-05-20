@@ -45,9 +45,11 @@ const BUILT_IN_SKILLS = [
 ] as const;
 
 export async function skillRoutes(app: FastifyInstance) {
-  // ─── List skills ──────────────────────────────────────────────────────────
-  app.get('/', async () => {
+  // ─── List skills (optional ?type= filter) ────────────────────────────────
+  app.get<{ Querystring: { type?: string } }>('/', async (req) => {
+    const typeFilter = req.query.type?.trim();
     const skills = await prisma.skill.findMany({
+      where: typeFilter ? { type: typeFilter } : undefined,
       orderBy: [{ builtIn: 'desc' }, { name: 'asc' }],
       include: { _count: { select: { agents: true } } },
     });

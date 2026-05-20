@@ -308,6 +308,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [repoBrowsePath, setRepoBrowsePath] = useState('/');
   const [customInstructions, setCustomInstructions] = useState('');
   const [selectedStyleSkillId, setSelectedStyleSkillId] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [debugLogOpen, setDebugLogOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<Array<{ ts: number; op: string; source: string; ok: boolean; detail?: string }>>([]);
   const aiLogRef = useRef<HTMLDivElement>(null);
@@ -404,6 +407,19 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     staleTime: 60_000,
   });
 
+  const agentsQuery = useQuery({
+    queryKey: ['agents', projectId],
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; description?: string; model?: string; modelProvider: string; systemPrompt?: string }> }>(`/api/agents?projectId=${projectId}`),
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+
+  const promptSkillsQuery = useQuery({
+    queryKey: ['prompt-skills'],
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; description?: string; builtIn: boolean }> }>('/api/skills?type=prompt'),
+    staleTime: 60_000,
+  });
+
   const repoTreeQuery = useQuery({
     queryKey: ['repo-tree', projectId, selectedRepoId, repoBrowsePath],
     queryFn: () => api.get<{ data: Array<{ name: string; path: string; type: string }> }>(
@@ -439,6 +455,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const recordings = recordingsQuery.data?.data ?? [];
   const projectRepos = reposQuery.data?.data ?? [];
   const wikiStyles = wikiStylesQuery.data?.data ?? [];
+  const projectAgents = agentsQuery.data?.data ?? [];
+  const promptSkills = (promptSkillsQuery.data?.data ?? []).filter((s) => s.builtIn === false);
   const treeItems = repoTreeQuery.data?.data ?? [];
   const selectedRepoEntries = useMemo(() => new Set(parseListInput(repoQueryInput)), [repoQueryInput]);
   const defaultExpandedPaths = useMemo(() => treeNodes.slice(0, 6).map((node) => node.path), [treeNodes]);
@@ -697,6 +715,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           locale: draft.locale,
           format: editorFormat,
           styleSkillId: selectedStyleSkillId || undefined,
+          model: selectedAgentId ? undefined : (selectedModel || undefined),
+          agentId: selectedAgentId || undefined,
+          skillIds: selectedSkillIds.length > 0 ? selectedSkillIds : undefined,
           sources: {
             workItemId: loadedWorkItem?.id,
             workItemContent: loadedWorkItem ? formatWorkItemContent(loadedWorkItem) : undefined,
@@ -1554,6 +1575,79 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                           </p>
                         </div>
                       )}
+
+                      {/* ── AI Model + Agent + Skills ───────────────────────── */}
+                      <div className="rounded-xl border border-violet-100 bg-violet-50/50 p-3 dark:border-violet-900/30 dark:bg-violet-950/20">
+                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">AI Configuration</div>
+                        <div className="space-y-3">
+                          {/* Model */}
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">
+                              Model{selectedAgentId ? ' (overridden by agent)' : ''}
+                            </label>
+                            <select
+                              className={inputClass}
+                              value={selectedModel}
+                              onChange={(event) => setSelectedModel(event.target.value)}
+                              disabled={!!selectedAgentId}
+                            >
+                              <option value="">Default (gpt-4o-mini)</option>
+                              <option value="gpt-4o-mini">gpt-4o-mini — fast, cheap</option>
+                              <option value="gpt-4o">gpt-4o — smarter, balanced</option>
+                              <option value="gpt-4.1">gpt-4.1 — most capable</option>
+                              <option value="gpt-4.1-mini">gpt-4.1-mini — fast + capable</option>
+                              <option value="o4-mini">o4-mini — reasoning</option>
+                            </select>
+                          </div>
+                          {/* Agent */}
+                          {projectAgents.length > 0 && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">Agent</label>
+                              <select
+                                className={inputClass}
+                                value={selectedAgentId}
+                                onChange={(event) => setSelectedAgentId(event.target.value)}
+                              >
+                                <option value="">No agent</option>
+                                {projectAgents.map((agent) => (
+                                  <option key={agent.id} value={agent.id}>
+                                    {agent.name}{agent.model ? ` (${agent.model})` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              {selectedAgentId && (() => {
+                                const ag = projectAgents.find((a) => a.id === selectedAgentId);
+                                return ag?.description ? (
+                                  <p className="mt-1 text-xs text-gray-400 dark:text-gray-500 line-clamp-2">{ag.description}</p>
+                                ) : null;
+                              })()}
+                            </div>
+                          )}
+                          {/* Extra skills (only shown when no agent, or in addition) */}
+                          {promptSkills.length > 0 && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                Extra skills <span className="font-normal text-gray-400">(prompt injection)</span>
+                              </label>
+                              <div className="max-h-28 overflow-y-auto rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+                                {promptSkills.map((skill) => (
+                                  <label key={skill.id} className="flex cursor-pointer items-center gap-2 border-b border-gray-100 px-3 py-1.5 last:border-0 hover:bg-violet-50 dark:border-gray-800 dark:hover:bg-violet-900/20">
+                                    <input
+                                      type="checkbox"
+                                      className="accent-violet-600"
+                                      checked={selectedSkillIds.includes(skill.id)}
+                                      onChange={(event) => setSelectedSkillIds((prev) =>
+                                        event.target.checked ? [...prev, skill.id] : prev.filter((id) => id !== skill.id)
+                                      )}
+                                    />
+                                    <span className="text-xs text-gray-700 dark:text-gray-300">{skill.name}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="mt-4 rounded-2xl border border-violet-200 bg-white p-3 dark:border-violet-900/40 dark:bg-gray-950/40">

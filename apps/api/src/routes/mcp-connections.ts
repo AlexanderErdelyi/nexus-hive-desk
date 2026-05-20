@@ -958,6 +958,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         customPrompt?: string;
       };
       styleSkillId?: string;
+      model?: string;
+      agentId?: string;
+      skillIds?: string[];
     };
   }>('/:id/generate-wiki-page', async (req, reply) => {
     reply.hijack();
@@ -987,13 +990,51 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const format = req.body.format === 'html' ? 'html' : 'markdown';
       const sources = req.body.sources ?? {};
       const styleSkillId = req.body.styleSkillId?.trim() || null;
+      const requestedModel = req.body.model?.trim() || null;
+      const agentId = req.body.agentId?.trim() || null;
+      const skillIds: string[] = Array.isArray(req.body.skillIds) ? req.body.skillIds : [];
 
       if (!projectId) throw new Error('projectId is required');
       if (!suggestedPath) throw new Error('path is required');
 
       const token = process.env.GITHUB_TOKEN;
       if (!token) throw new Error('AI provider token not configured');
-      const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+
+      // ── Resolve agent + model ────────────────────────────────────────────────
+      let agentSystemPrompt: string | null = null;
+      let agentSkillPrompts: string[] = [];
+      let resolvedModel = requestedModel ?? (process.env.AI_MODEL ?? 'gpt-4o-mini');
+
+      if (agentId) {
+        const agent = await prisma.agent.findUnique({
+          where: { id: agentId },
+          include: { skills: { include: { skill: true } } },
+        });
+        if (agent) {
+          if (agent.model) resolvedModel = agent.model;
+          if (agent.systemPrompt?.trim()) agentSystemPrompt = agent.systemPrompt.trim();
+          agentSkillPrompts = agent.skills
+            .filter((as) => as.skill.type === 'prompt' && as.skill.promptTemplate)
+            .map((as) => as.skill.promptTemplate as string);
+          sendLog(`Using agent: ${agent.name}${agent.model ? ` (model: ${agent.model})` : ''}`);
+        }
+      }
+
+      // Load any explicitly selected extra skills
+      if (skillIds.length > 0) {
+        const extraSkills = await prisma.skill.findMany({
+          where: { id: { in: skillIds }, type: 'prompt' },
+          select: { name: true, promptTemplate: true },
+        });
+        for (const sk of extraSkills) {
+          if (sk.promptTemplate) {
+            agentSkillPrompts.push(sk.promptTemplate);
+            sendLog(`Injecting skill: ${sk.name}`);
+          }
+        }
+      }
+
+      const model = resolvedModel;
 
       const project = await prisma.project.findUnique({ where: { id: projectId } });
       if (!project) throw new Error('Project not found');
@@ -1259,7 +1300,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
 
       const systemPrompt = format === 'html'
         ? [
+            agentSystemPrompt,
             htmlStylePrompt ?? HARDCODED_HTML_STYLE,
+            ...agentSkillPrompts,
             langInstruction,
             screenshotInstruction,
             'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
@@ -1269,7 +1312,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
             contextParts.join('\n\n'),
           ].filter(Boolean).join('\n\n')
         : [
+            agentSystemPrompt,
             'You are a technical documentation writer for a Wiki.js knowledge base.',
+            ...agentSkillPrompts,
             langInstruction,
             screenshotInstruction,
             'Use the provided sources to generate a polished wiki page in Markdown.',
