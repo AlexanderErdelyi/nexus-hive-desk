@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const API_BASE = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001');
 const TOKEN_KEY = 'nexus_auth_token';
 
 function getAuthHeaders(): Record<string, string> {
@@ -9,7 +9,7 @@ function getAuthHeaders(): Record<string, string> {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const hasBody = options?.body != null;
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     headers: {
       ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...getAuthHeaders(),
@@ -36,7 +36,7 @@ export const api = {
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   upload: async <T>(path: string, formData: FormData) => {
-    const res = await fetch(`${API_URL}${path}`, { method: 'POST', body: formData, headers: getAuthHeaders() });
+    const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: formData, headers: getAuthHeaders() });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error((err as { message?: string }).message ?? 'Upload failed');
