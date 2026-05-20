@@ -402,7 +402,7 @@ export async function projectRoutes(app: FastifyInstance) {
         const adoProject = repo.adoProjectName || repo.repoName.split('/').slice(-2, -1)[0];
         const repoName = repo.repoName.split('/').pop() || repo.repoName;
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
-        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodeURIComponent(path)}&recursionLevel=oneLevel&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
+        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?scopePath=${encodeURIComponent(path)}&recursionLevel=OneLevel&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
         const res = await fetch(url, {
           headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
         });
