@@ -14,6 +14,7 @@ import { projectRoutes } from './routes/projects';
 import { projectMemberRoutes } from './routes/project-members';
 import { remoteRoutes } from './routes/remote';
 import { translationRoutes } from './routes/translations';
+import { agentRoutes } from './routes/agents';
 import { skillRoutes } from './routes/skills';
 import { userTokenRoutes } from './routes/user-tokens';
 
@@ -49,6 +50,7 @@ async function bootstrap() {
   await app.register(aiRoutes, { prefix: '/api/ai' });
   await app.register(remoteRoutes, { prefix: '/api/remote' });
   await app.register(skillRoutes, { prefix: '/api/skills' });
+  await app.register(agentRoutes, { prefix: '/api/agents' });
   await app.register(userTokenRoutes, { prefix: '/api/user/tokens' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
