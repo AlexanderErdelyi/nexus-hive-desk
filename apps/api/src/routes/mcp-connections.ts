@@ -86,7 +86,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         type,
         customerId,
         projectId,
-        baseUrl,
+        baseUrl: baseUrl?.trim(),
         authType,
         encryptedCredential,
         credentialIv,
@@ -121,7 +121,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       });
     }
 
-    const data: Record<string, unknown> = { ...rest };
+    const data: Record<string, unknown> = { ...rest, ...(rest.baseUrl !== undefined && { baseUrl: rest.baseUrl.trim() }) };
     if (credential !== undefined) {
       const enc = encryptToken(credential);
       data.encryptedCredential = enc.encrypted;
