@@ -182,9 +182,9 @@ export async function aiRoutes(app: FastifyInstance) {
 
   // ─── Generative AI: generate Agent / Skill / MCP config from description ─────
   app.post<{
-    Body: { type: 'agent' | 'skill' | 'mcp'; description: string };
+    Body: { type: 'agent' | 'skill' | 'mcp' | 'work-item'; description: string; workItemType?: string };
   }>('/generate', async (req, reply) => {
-    const { type, description } = req.body;
+    const { type, description, workItemType } = req.body;
     if (!type || !description?.trim()) {
       return reply.status(400).send({ error: 'validation', message: 'type and description are required' });
     }
@@ -230,6 +230,18 @@ Return ONLY valid JSON with these fields:
   "description": "one-line description of what this connection is for"
 }
 Infer type from the description. If unclear, use "custom".`,
+
+      'work-item': `You are a professional agile work item writer specializing in Azure DevOps. Given a plain-text description of what the user wants to build or fix, generate a complete work item as JSON.
+Return ONLY valid JSON with these fields:
+{
+  "title": "concise, action-oriented title (max 100 chars)",
+  "description": "detailed HTML description (use <h3>, <p>, <ul> tags) explaining the work, context and goals",
+  "acceptanceCriteria": "HTML acceptance criteria using a bulleted list (<ul><li>Given...When...Then...</li></ul> format for user stories)",
+  "type": "${workItemType ?? 'User Story'}",
+  "priority": 2,
+  "tags": "comma-separated relevant tags or empty string"
+}
+Write professional, clear, testable content. Use proper BDD-style acceptance criteria for User Stories. For Bugs, focus on repro steps and expected vs actual behavior.`,
     };
 
     try {

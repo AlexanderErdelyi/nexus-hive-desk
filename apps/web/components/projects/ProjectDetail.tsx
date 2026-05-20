@@ -15,6 +15,7 @@ import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
 import { ProjectADOAccess } from './ProjectADOAccess';
+import { WorkItemsView } from './WorkItemsView';
 import { formatDate } from '@/lib/utils';
 
 type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
@@ -294,11 +295,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         key: 'work-items' as ProjectView,
         icon: <ClipboardList size={28} className="text-sky-500" />,
         title: 'Work Items',
-        description: 'Browse, create and manage Azure DevOps work items directly from the project.',
-        badge: hasRemoteConfig ? 'Ready' : 'Needs ADO setup',
-        badgeColor: hasRemoteConfig ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
-        available: false,
-        comingSoon: true,
+        description: 'Browse, create and manage Azure DevOps work items. Use AI agents and skills to generate user stories, bugs and tasks.',
+        badge: project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
+        badgeColor: project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: true,
       },
       {
         key: 'documentation' as ProjectView,
@@ -622,26 +622,29 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     );
   }
 
-  // ─── Work Items view (coming soon) ──────────────────────────────────────────
+  // ─── Work Items view ────────────────────────────────────────────────────────
   if (view === 'work-items') {
+    const hasADO = !!(project.connectionId && project.adoProjectName);
     return (
       <div>
         {header}
-        <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-900">
-          <ClipboardList size={40} className="mx-auto mb-4 text-sky-400 dark:text-sky-600" />
-          <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">Work Items — Coming Soon</h3>
-          <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
-            Browse and create Azure DevOps work items directly from NexusHiveDesk. Track bugs, user stories, and tasks without leaving your workflow.
-          </p>
-          {!hasRemoteConfig && (
+        {!hasADO ? (
+          <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-900">
+            <ClipboardList size={40} className="mx-auto mb-4 text-sky-400 dark:text-sky-600" />
+            <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">ADO Connection Required</h3>
+            <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
+              Configure an Azure DevOps connection and project in Setup to browse and create work items.
+            </p>
             <button
               onClick={() => setView('setup')}
               className="mt-6 inline-flex items-center gap-2 rounded-lg bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:bg-sky-900/30 dark:text-sky-300"
             >
-              <Settings2 size={15} /> Configure ADO connection first
+              <Settings2 size={15} /> Go to Setup
             </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          <WorkItemsView projectId={projectId} />
+        )}
       </div>
     );
   }
