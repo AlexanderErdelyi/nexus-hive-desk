@@ -373,7 +373,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     queryKey: ['wiki-status', activeMcpId],
     enabled: Boolean(activeMcpId),
     staleTime: 30_000,
-    queryFn: () => api.get<{ data: { directAvailable: boolean; mcpConfigured: boolean; mcpAvailable: boolean; mcpError?: string; activeSource: 'mcp' | 'direct' } }>(`/api/mcp-connections/${activeMcpId}/wiki-status`),
+    queryFn: () => api.get<{ data: { directAvailable: boolean; directError?: string; mcpConfigured: boolean; mcpAvailable: boolean; mcpError?: string; activeSource: 'mcp' | 'direct' } }>(`/api/mcp-connections/${activeMcpId}/wiki-status`),
   });
 
   const currentPage = useMemo(() => normalizePage(pageQuery.data?.data), [pageQuery.data?.data]);
@@ -396,8 +396,12 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   }, [searchQuery.error]);
 
   useEffect(() => {
-    if (treeQuery.error) toast.error(getErrorMessage(treeQuery.error));
-  }, [treeQuery.error]);
+    // Suppress tree error toast when we already know direct GraphQL is unavailable —
+    // the inline "tree unavailable" state in the sidebar handles it.
+    if (treeQuery.error && wikiStatusQuery.data?.data?.directAvailable !== false) {
+      toast.error(getErrorMessage(treeQuery.error));
+    }
+  }, [treeQuery.error, wikiStatusQuery.data?.data?.directAvailable]);
 
   useEffect(() => {
     if (recordingsQuery.error) toast.error(getErrorMessage(recordingsQuery.error));
@@ -926,6 +930,14 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                   {Array.from({ length: 7 }).map((_, index) => (
                     <div key={index} className="h-12 animate-pulse rounded-xl bg-gray-200/70 dark:bg-gray-800" />
                   ))}
+                </div>
+              ) : treeQuery.error || (wikiStatusQuery.data?.data?.directAvailable === false) ? (
+                <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/60 px-3 py-5 text-center dark:border-amber-800 dark:bg-amber-900/20">
+                  <AlertTriangle size={20} className="mx-auto mb-2 text-amber-500" />
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Page tree unavailable</p>
+                  <p className="mt-1 text-xs text-amber-600/80 dark:text-amber-400/80">
+                    {wikiStatusQuery.data?.data?.directError ?? 'Direct GraphQL is not reachable. Fix the Wiki.js URL in the connection settings.'}
+                  </p>
                 </div>
               ) : treeNodes.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">

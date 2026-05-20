@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical } from 'lucide-react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -41,6 +41,7 @@ interface McpConnection {
   type: string;
   baseUrl: string;
   authType: string;
+  capabilities?: string;
   createdAt: string;
 }
 
@@ -712,6 +713,7 @@ function McpTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: '',
     type: 'custom',
@@ -729,34 +731,53 @@ function McpTab() {
     queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections'),
   });
 
+  const emptyForm = {
+    name: '',
+    type: 'custom',
+    baseUrl: '',
+    authType: 'pat',
+    credential: '',
+    recordingsFolder: '',
+    wikiUrl: '',
+    scriptPath: '',
+    pythonPath: '',
+  };
+
+  function buildPayload(input: typeof form) {
+    const { recordingsFolder, wikiUrl, scriptPath, pythonPath, ...rest } = input;
+    const caps: Record<string, string> = {};
+    if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
+    if (input.type === 'wiki_js') {
+      if (wikiUrl.trim()) caps.wikiUrl = wikiUrl.trim();
+      if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
+      if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
+    }
+    const capabilities = Object.keys(caps).length > 0 ? JSON.stringify(caps) : undefined;
+    return { ...rest, ...(capabilities ? { capabilities } : {}) };
+  }
+
   const createMutation = useMutation({
-    mutationFn: (input: typeof form) => {
-      const { recordingsFolder, wikiUrl, scriptPath, pythonPath, ...rest } = input;
-      const caps: Record<string, string> = {};
-      if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
-      if (input.type === 'wiki_js') {
-        if (wikiUrl.trim()) caps.wikiUrl = wikiUrl.trim();
-        if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
-        if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
-      }
-      const capabilities = Object.keys(caps).length > 0 ? JSON.stringify(caps) : undefined;
-      return api.post('/api/mcp-connections', { ...rest, ...(capabilities ? { capabilities } : {}) });
-    },
+    mutationFn: (input: typeof form) => api.post('/api/mcp-connections', buildPayload(input)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-connections'] });
       setShowCreate(false);
-      setForm({
-        name: '',
-        type: 'custom',
-        baseUrl: '',
-        authType: 'pat',
-        credential: '',
-        recordingsFolder: '',
-        wikiUrl: '',
-        scriptPath: '',
-        pythonPath: '',
-      });
+      setEditingId(null);
+      setForm(emptyForm);
       toast.success('MCP connection created');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: typeof form }) =>
+      api.patch(`/api/mcp-connections/${id}`, buildPayload(input)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mcp-connections'] });
+      qc.invalidateQueries({ queryKey: ['wiki-status'] });
+      setShowCreate(false);
+      setEditingId(null);
+      setForm(emptyForm);
+      toast.success('MCP connection updated');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -771,12 +792,34 @@ function McpTab() {
   });
 
   const testMutation = useMutation({
-    mutationFn: (id: string) => api.post(`/api/mcp-connections/${id}/test`, {}),
-    onSuccess: () => toast.success('Connection test passed'),
+    mutationFn: (id: string) => api.post<{ data: { status: string; message: string } }>(`/api/mcp-connections/${id}/test`, {}),
+    onSuccess: (result) => {
+      const { status, message } = result.data;
+      if (status === 'ok') toast.success(`Test passed: ${message}`);
+      else toast.error(`Test failed: ${message}`);
+    },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
   const connections = data?.data ?? [];
+
+  function openEdit(c: McpConnection) {
+    const caps = (() => { try { return JSON.parse(c.capabilities ?? '{}'); } catch { return {}; } })();
+    setForm({
+      name: c.name,
+      type: c.type,
+      baseUrl: c.baseUrl ?? '',
+      authType: c.authType ?? 'pat',
+      credential: '', // never pre-fill credentials
+      recordingsFolder: String(caps.recordingsFolder ?? ''),
+      wikiUrl: String(caps.wikiUrl ?? ''),
+      scriptPath: String(caps.scriptPath ?? ''),
+      pythonPath: String(caps.pythonPath ?? ''),
+    });
+    setEditingId(c.id);
+    setShowCreate(true);
+    setShowAIPanel(false);
+  }
 
   function applyAIGenerated(data: Record<string, unknown>) {
     setForm({
@@ -790,6 +833,7 @@ function McpTab() {
       scriptPath: String(data.scriptPath ?? ''),
       pythonPath: String(data.pythonPath ?? ''),
     });
+    setEditingId(null);
     setShowAIPanel(false);
     setShowCreate(true);
     toast.success('Form pre-filled by AI — review and save');
@@ -824,13 +868,17 @@ function McpTab() {
       {showCreate && (
         <div className={formCardClass}>
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-900 dark:text-white">Create MCP Connection</h3>
-            <button
-              onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
-              className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700"
-            >
-              <RefreshCw size={12} /> Re-generate
-            </button>
+            <h3 className="font-semibold text-gray-900 dark:text-white">
+              {editingId ? 'Edit MCP Connection' : 'Create MCP Connection'}
+            </h3>
+            {!editingId && (
+              <button
+                onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
+                className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700"
+              >
+                <RefreshCw size={12} /> Re-generate
+              </button>
+            )}
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
@@ -954,17 +1002,26 @@ function McpTab() {
           </div>
           <div className="mt-4 flex gap-3">
             <button
-              onClick={() => createMutation.mutate(form)}
+              onClick={() => {
+                if (editingId) updateMutation.mutate({ id: editingId, input: form });
+                else createMutation.mutate(form);
+              }}
               disabled={
                 !form.name
                 || !form.baseUrl
                 || createMutation.isPending
+                || updateMutation.isPending
               }
               className={primaryBtn}
             >
-              {createMutation.isPending ? 'Creating...' : 'Create'}
+              {(createMutation.isPending || updateMutation.isPending)
+                ? (editingId ? 'Saving...' : 'Creating...')
+                : (editingId ? 'Save Changes' : 'Create')}
             </button>
-            <button onClick={() => setShowCreate(false)} className={secondaryBtn}>
+            <button
+              onClick={() => { setShowCreate(false); setEditingId(null); setForm(emptyForm); }}
+              className={secondaryBtn}
+            >
               Cancel
             </button>
           </div>
@@ -988,6 +1045,13 @@ function McpTab() {
                   <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{c.baseUrl}</p>
                 </div>
                 <div className="ml-2 flex flex-shrink-0 gap-1">
+                  <button
+                    onClick={() => openEdit(c)}
+                    className="text-gray-400 hover:text-indigo-500 dark:text-gray-600 dark:hover:text-indigo-400"
+                    title="Edit connection"
+                  >
+                    <Pencil size={15} />
+                  </button>
                   <button
                     onClick={() => testMutation.mutate(c.id)}
                     disabled={testMutation.isPending}
