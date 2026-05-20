@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, TestTube2, Zap, Shield, Sparkles, Loader2, RefreshCw } from 'lucide-react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -14,8 +14,11 @@ interface Agent {
   name: string;
   description?: string;
   modelProvider: string;
+  model?: string;
   systemPrompt?: string;
   triggerType: string;
+  tools?: string;       // JSON array string
+  argumentHint?: string;
   createdAt: string;
   skills?: Array<{ id: string; skill: Skill }>;
   mcpConnections?: Array<{ id: string; mcpConnection: McpConnection }>;
@@ -42,6 +45,32 @@ interface McpConnection {
 }
 
 type Tab = 'agents' | 'skills' | 'mcp';
+
+// ── Export helper ──────────────────────────────────────────────────────────────
+
+function exportAgentAsInstructions(agent: Agent) {
+  let tools: string[] = [];
+  try { tools = agent.tools ? JSON.parse(agent.tools) as string[] : []; } catch { tools = []; }
+
+  const frontmatter = [
+    '---',
+    `description: ${JSON.stringify(agent.description ?? '')}`,
+    `name: ${JSON.stringify(agent.name)}`,
+    tools.length > 0 ? `tools: [${tools.join(', ')}]` : 'tools: []',
+    `model: ${JSON.stringify(agent.model ?? agent.modelProvider)}`,
+    agent.argumentHint ? `argument-hint: ${JSON.stringify(agent.argumentHint)}` : null,
+    '---',
+  ].filter(Boolean).join('\n');
+
+  const content = `${frontmatter}\n\n${agent.systemPrompt ?? ''}`;
+  const blob = new Blob([content], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${agent.name.replace(/\s+/g, '-').toLowerCase()}.instructions.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -166,8 +195,11 @@ function AgentsTab() {
     name: '',
     description: '',
     modelProvider: 'github-models',
+    model: '',
     systemPrompt: '',
     triggerType: 'manual',
+    tools: '',
+    argumentHint: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -176,11 +208,14 @@ function AgentsTab() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (input: typeof form) => api.post('/api/agents', input),
+    mutationFn: (input: typeof form) => api.post('/api/agents', {
+      ...input,
+      tools: input.tools ? input.tools : undefined,
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['agents'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', modelProvider: 'github-models', systemPrompt: '', triggerType: 'manual' });
+      setForm({ name: '', description: '', modelProvider: 'github-models', model: '', systemPrompt: '', triggerType: 'manual', tools: '', argumentHint: '' });
       toast.success('Agent created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -198,12 +233,20 @@ function AgentsTab() {
   const agents = data?.data ?? [];
 
   function applyAIGenerated(data: Record<string, unknown>) {
+    // tools may come back as array or string
+    let toolsStr = '';
+    if (Array.isArray(data.tools)) toolsStr = JSON.stringify(data.tools);
+    else if (typeof data.tools === 'string') toolsStr = data.tools;
+
     setForm({
       name: String(data.name ?? ''),
       description: String(data.description ?? ''),
       modelProvider: String(data.modelProvider ?? 'github-models'),
+      model: String(data.model ?? ''),
       systemPrompt: String(data.systemPrompt ?? ''),
       triggerType: String(data.triggerType ?? 'manual'),
+      tools: toolsStr,
+      argumentHint: String(data.argumentHint ?? ''),
     });
     setShowAIPanel(false);
     setShowCreate(true);
@@ -254,7 +297,7 @@ function AgentsTab() {
                 className={inputClass}
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="Translation Agent"
+                placeholder="TranslationOrchestrator"
               />
             </div>
             <div>
@@ -270,13 +313,13 @@ function AgentsTab() {
                 <option value="ollama">Ollama</option>
               </select>
             </div>
-            <div className="sm:col-span-2">
-              <label className={labelClass}>Description</label>
+            <div>
+              <label className={labelClass}>Model <span className="text-gray-400 font-normal text-xs">(specific, e.g. gpt-4o)</span></label>
               <input
                 className={inputClass}
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                placeholder="Handles automated translations"
+                value={form.model}
+                onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                placeholder="gpt-4o"
               />
             </div>
             <div>
@@ -292,12 +335,39 @@ function AgentsTab() {
               </select>
             </div>
             <div className="sm:col-span-2">
+              <label className={labelClass}>Description <span className="text-gray-400 font-normal text-xs">"Use when: ..." with trigger phrases</span></label>
+              <textarea
+                className={`${inputClass} min-h-[60px]`}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder='Use when: start translation, run XLIFF pipeline, translate file to German. Coordinates the translation workflow from XLIFF extraction to commit.'
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Argument Hint <span className="text-gray-400 font-normal text-xs">shown in picker</span></label>
+              <input
+                className={inputClass}
+                value={form.argumentHint}
+                onChange={(e) => setForm((f) => ({ ...f, argumentHint: e.target.value }))}
+                placeholder="XLIFF file path or translation unit ID"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Tools <span className="text-gray-400 font-normal text-xs">JSON array, e.g. ["read","search","azure-devops"]</span></label>
+              <input
+                className={inputClass}
+                value={form.tools}
+                onChange={(e) => setForm((f) => ({ ...f, tools: e.target.value }))}
+                placeholder='["read", "search", "azure-devops", "execute"]'
+              />
+            </div>
+            <div className="sm:col-span-2">
               <label className={labelClass}>System Prompt</label>
               <textarea
-                className={`${inputClass} min-h-[80px]`}
+                className={`${inputClass} min-h-[160px] font-mono text-xs`}
                 value={form.systemPrompt}
                 onChange={(e) => setForm((f) => ({ ...f, systemPrompt: e.target.value }))}
-                placeholder="You are a helpful translation agent..."
+                placeholder="You are a helpful agent. Your role is to..."
               />
             </div>
           </div>
@@ -336,26 +406,50 @@ function AgentsTab() {
                     {a.name}
                   </a>
                   {a.description && (
-                    <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{a.description}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-gray-500 dark:text-gray-400">{a.description}</p>
                   )}
                 </div>
-                <button
-                  onClick={() => {
-                    if (confirm('Delete this agent?')) deleteMutation.mutate(a.id);
-                  }}
-                  className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
-                >
-                  <Trash2 size={15} />
-                </button>
+                <div className="ml-2 flex shrink-0 gap-1">
+                  <button
+                    onClick={() => exportAgentAsInstructions(a)}
+                    title="Export as .instructions.md"
+                    className="text-gray-400 hover:text-indigo-500 dark:text-gray-600 dark:hover:text-indigo-400"
+                  >
+                    <Download size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm('Delete this agent?')) deleteMutation.mutate(a.id);
+                    }}
+                    className="text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
-                  <Shield size={10} /> {a.modelProvider}
+                  <Shield size={10} /> {a.model ?? a.modelProvider}
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                   <Zap size={10} /> {a.triggerType}
                 </span>
               </div>
+              {/* Tools chips */}
+              {a.tools && (() => {
+                let t: string[] = [];
+                try { t = JSON.parse(a.tools) as string[]; } catch { t = []; }
+                return t.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {t.slice(0, 5).map((tool) => (
+                      <span key={tool} className="inline-flex items-center gap-0.5 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                        <Tag size={8} /> {tool}
+                      </span>
+                    ))}
+                    {t.length > 5 && <span className="text-xs text-gray-400">+{t.length - 5}</span>}
+                  </div>
+                ) : null;
+              })()}
               <div className="mt-3 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
                 <span className="flex items-center gap-1"><Wrench size={12} /> {a.skills?.length ?? 0} skill(s)</span>
                 <span className="flex items-center gap-1"><Plug size={12} /> {a.mcpConnections?.length ?? 0} MCP</span>
@@ -786,7 +880,7 @@ function McpTab() {
                     className="text-gray-400 hover:text-green-500 dark:text-gray-600 dark:hover:text-green-400"
                     title="Test connection"
                   >
-                    <TestTube2 size={15} />
+                    <FlaskConical size={15} />
                   </button>
                   <button
                     onClick={() => {

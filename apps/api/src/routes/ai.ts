@@ -196,29 +196,38 @@ export async function aiRoutes(app: FastifyInstance) {
     const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
 
     const systemPrompts: Record<string, string> = {
-      agent: `You are an AI agent designer. Given a plain-text description of what an AI agent should do, generate a complete agent configuration as JSON.
-Return ONLY valid JSON with these fields:
-{
-  "name": "short descriptive name",
-  "description": "one-line description of what the agent does",
-  "modelProvider": "github-models" | "openai" | "azure-openai" | "ollama",
-  "triggerType": "manual" | "scheduled" | "event-driven",
-  "systemPrompt": "detailed system prompt that instructs the agent how to behave",
-  "suggestedSkills": ["skill name 1", "skill name 2"]
-}
-Choose modelProvider based on context (default: github-models).
-Write a thorough, professional systemPrompt that would actually make this agent work well.`,
+      agent: `You are an AI agent designer for the GitHub Copilot / NexusHiveDesk platform. Given a plain-text description of what an agent should do, generate a complete agent configuration in JSON format matching the VS Code Copilot agent spec.
 
-      skill: `You are an AI skill designer. Given a plain-text description of a skill, generate a skill configuration as JSON.
 Return ONLY valid JSON with these fields:
 {
-  "name": "short skill name (PascalCase or Title Case)",
-  "description": "one-line description",
-  "type": "prompt" | "code" | "mcp-tool",
-  "promptTemplate": "the prompt template with {{variable}} placeholders (only for prompt type, otherwise empty string)"
+  "name": "PascalCase or Title Case name, concise (e.g. 'TranslationOrchestrator', 'WorkItemWriter')",
+  "description": "Multi-sentence 'when to use' description with concrete trigger phrases separated by commas. Start with 'Use when:' then list 6-12 trigger phrases that a user might say, followed by '. ' and a one-sentence summary of what the agent does and what it reads/delegates to.",
+  "modelProvider": "github-models",
+  "model": "gpt-4o",
+  "triggerType": "manual",
+  "argumentHint": "Short hint about what argument/input this agent expects, e.g. 'Feature WI ID or description' or 'XLIFF file path or translation unit ID'",
+  "tools": ["list", "of", "tool", "categories", "this", "agent", "needs"],
+  "systemPrompt": "Detailed, professional system prompt. Must include: role definition, responsibilities, constraints (what it MUST and MUST NEVER do), step-by-step approach, and output format. Use markdown headers (##) and bullet points. At least 300 words."
 }
-For prompt skills: write a clear, professional prompt template with appropriate {{variable}} placeholders.
-For code/mcp-tool types, leave promptTemplate as an empty string.`,
+
+For tools, choose from: ["read", "search", "edit", "execute", "azure-devops", "azure-mcp", "github", "mcp", "todo"]
+For model: use "gpt-4o" for complex orchestration, "gpt-4o-mini" for simple tasks, "claude-sonnet-4-6" for writing/analysis.
+For description: follow this exact pattern from the example:
+  "Use when: <trigger phrase 1>, <trigger phrase 2>, ..., <trigger phrase N>. <One sentence about what the agent coordinates/does and what spec/skill it reads first>."
+
+Write a thorough, professional systemPrompt with clear constraints, step-by-step approach, and output format — similar to production-quality agent definitions.`,
+
+      skill: `You are an AI skill designer for the GitHub Copilot / NexusHiveDesk platform. Given a plain-text description of a skill, generate a skill configuration as JSON matching the VS Code Copilot skill spec.
+
+Return ONLY valid JSON with these fields:
+{
+  "name": "PascalCase or Title Case name (e.g. 'TranslateXliff', 'ReviewTranslation', 'CreateUserStory')",
+  "description": "Multi-sentence description. Start with 'Use when:' then list 4-8 trigger phrases, followed by '. ' and what the skill does step by step.",
+  "type": "prompt",
+  "promptTemplate": "The full prompt template. Use {{variable_name}} placeholders for dynamic values. Must be detailed and production-quality — include role, task, input format, output format, and any constraints. At least 150 words for non-trivial skills."
+}
+For type: use 'prompt' for LLM-based skills, 'code' for scripted logic, 'mcp-tool' for MCP protocol tools.
+For promptTemplate: write a thorough template that actually makes the skill work — include clear instructions, output format, and examples where helpful. Use {{variable}} syntax for all dynamic inputs.`,
 
       mcp: `You are an MCP (Model Context Protocol) connection designer. Given a description of what service to connect to, generate an MCP connection config as JSON.
 Return ONLY valid JSON with these fields:

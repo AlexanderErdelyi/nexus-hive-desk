@@ -190,12 +190,15 @@ model GlossaryEntry {
 model Agent {
   id              String              @id @default(cuid())
   name            String
-  description     String?
+  description     String?             // rich "when to use" description with trigger phrases
   customerId      String?
   projectId       String?
   modelProvider   String              @default("github-models") // 'github-models' | 'openai' | 'azure-openai' | 'ollama'
+  model           String?             // specific model identifier e.g. "gpt-4o", "claude-sonnet-4-6"
   systemPrompt    String?
   triggerType     String              @default("manual") // 'manual' | 'scheduled' | 'event-driven'
+  tools           String?             // JSON array of tool/capability names
+  argumentHint    String?             // hint for what arguments to pass to this agent
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   skills          AgentSkill[]

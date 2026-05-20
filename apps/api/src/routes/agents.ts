@@ -64,17 +64,25 @@ export async function agentRoutes(app: FastifyInstance) {
       customerId?: string;
       projectId?: string;
       modelProvider?: string;
+      model?: string;
       systemPrompt?: string;
       triggerType?: string;
+      tools?: string | string[];
+      argumentHint?: string;
       skillIds?: string[];
       mcpConnectionIds?: string[];
     };
   }>('/', async (req, reply) => {
-    const { name, description, customerId, projectId, modelProvider, systemPrompt, triggerType, skillIds, mcpConnectionIds } = req.body;
+    const { name, description, customerId, projectId, modelProvider, model, systemPrompt, triggerType, tools, argumentHint, skillIds, mcpConnectionIds } = req.body;
 
     if (!name) {
       return reply.status(400).send({ error: 'validation', message: 'name is required' });
     }
+
+    // Normalize tools to JSON string
+    const toolsJson = tools
+      ? (Array.isArray(tools) ? JSON.stringify(tools) : tools)
+      : undefined;
 
     const agent = await prisma.agent.create({
       data: {
@@ -83,8 +91,11 @@ export async function agentRoutes(app: FastifyInstance) {
         customerId,
         projectId,
         modelProvider,
+        model,
         systemPrompt,
         triggerType,
+        tools: toolsJson,
+        argumentHint,
         skills: skillIds?.length
           ? { create: skillIds.map((skillId) => ({ skillId })) }
           : undefined,
@@ -111,13 +122,24 @@ export async function agentRoutes(app: FastifyInstance) {
       customerId?: string;
       projectId?: string;
       modelProvider?: string;
+      model?: string;
       systemPrompt?: string;
       triggerType?: string;
+      tools?: string | string[];
+      argumentHint?: string;
       skillIds?: string[];
       mcpConnectionIds?: string[];
     };
   }>('/:id', async (req, reply) => {
-    const { skillIds, mcpConnectionIds, ...data } = req.body;
+    const { skillIds, mcpConnectionIds, tools, ...rest } = req.body;
+
+    // Normalize tools to JSON string
+    const data = {
+      ...rest,
+      ...(tools !== undefined
+        ? { tools: Array.isArray(tools) ? JSON.stringify(tools) : tools }
+        : {}),
+    };
 
     const agent = await prisma.$transaction(async (tx) => {
       if (skillIds) {
