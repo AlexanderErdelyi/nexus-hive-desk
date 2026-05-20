@@ -130,7 +130,6 @@ async function wikiJsGraphQL(
   }
   const body = res.data as { data?: unknown; errors?: Array<{ message?: string; extensions?: { code?: number | string; exception?: { stack?: string } } }> };
   // PageNotFound (6003) — treat as null, not an error.
-  // Wiki.js returns extensions.code = "INTERNAL_SERVER_ERROR" with the real 6003 buried in the stack.
   if (body.errors?.length) {
     const isPageNotFound = body.errors.every((e) => {
       const msg = (e?.message ?? '').toLowerCase();
@@ -138,6 +137,20 @@ async function wikiJsGraphQL(
       return msg.includes('page does not exist') || msg.includes('not found') || stack.includes('pagenotfound') || stack.includes('6003');
     });
     if (!isPageNotFound) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors)}`);
+  }
+  // Check application-level responseResult failures (e.g. pages.create/update returning succeeded:false)
+  const data = body.data as Record<string, unknown> | null | undefined;
+  if (data && typeof data === 'object') {
+    for (const ns of Object.values(data)) {
+      if (ns && typeof ns === 'object') {
+        for (const op of Object.values(ns as Record<string, unknown>)) {
+          const rr = (op as Record<string, unknown>)?.responseResult as Record<string, unknown> | undefined;
+          if (rr && rr.succeeded === false) {
+            throw new Error(`Wiki.js error ${rr.errorCode ?? ''}: ${rr.message ?? 'unknown'}`);
+          }
+        }
+      }
+    }
   }
   return body.data;
 }
@@ -825,7 +838,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const locale = req.body.locale?.trim() || 'de';
     const content = req.body.content ?? '';
     const description = req.body.description?.trim() ?? '';
-    const editor = (req.body.editor === 'html' ? 'wysiwyg' : 'markdown') as 'wysiwyg' | 'markdown';
+    // Always use 'markdown' — Wiki.js has html:true in markdown-it so raw HTML blocks render unchanged.
+    // 'wysiwyg' and 'html' cause pages_editorkey_foreign FK violations on most Wiki.js 2.x instances.
+    const editor = 'markdown' as const;
     const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
@@ -947,13 +962,10 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
               'You are a technical documentation designer editing an existing Wiki.js HTML page.',
               langInstruction,
               'The user will request changes. Apply ONLY the requested changes, preserve everything else.',
-              'CRITICAL — Wiki.js HTML sanitizer rules you MUST follow when editing:',
-              '  1. NEVER use display:flex or display:grid ANYWHERE — Wiki.js strips both entirely.',
-              '  2. NEVER use grid-template-columns, auto-fit, minmax, or any flexbox/grid properties.',
-              '  3. Use <table> for all multi-column layouts. Use display:inline-block for pill tabs.',
-              '  4. Breadcrumb: inline text flow with &rsaquo; separators — no flex wrapper.',
-              '  5. Use HTML entities: &rarr; &rsaquo; &uuml; &ouml; &auml; &amp; etc.',
-              '  6. Do NOT add background-color or padding to the outermost wrapper div.',
+              'CRITICAL — Element rules: NEVER use <h1>-<h6>, <p>, <ul>, <ol>, <li>, <figure>, <figcaption>, <section>, <em>, <i>, <b>.',
+              'Use only <div>, <span>, <a>, <strong>, <code>, <table>, <tr>, <td>, <th>, <thead>, <tbody>.',
+              'CRITICAL — CSS rules: NEVER use display:flex or display:grid ANYWHERE. Use <table> for columns, display:inline-block for pills.',
+              'Use HTML entities: &rarr; &rsaquo; &uuml; &ouml; &auml; &Uuml; &amp; &mdash; etc.',
               'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
               'The "content" value must be the complete updated HTML string (inline CSS only, no external resources).',
               `Current path: ${suggestedPath}`,
@@ -1149,25 +1161,29 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
             'You are a technical documentation designer for a Wiki.js knowledge base.',
             langInstruction,
             'Generate a visually rich HTML page using only inline CSS (no external stylesheets, no <script>, no <link> tags).',
-            'CRITICAL — Wiki.js HTML sanitizer compatibility rules (any violation will silently break the layout):',
-            '  1. NEVER use display:flex or display:grid ANYWHERE — not even for nav rows. Wiki.js strips both.',
-            '  2. NEVER use grid-template-columns, auto-fit, minmax, flexbox gap, or any CSS Grid/Flex property.',
-            '  3. For ALL multi-column layouts (cards, nav tabs, modules, breadcrumb): use <table cellpadding="0" cellspacing="8" border="0">.',
-            '  4. For inline pill tabs: wrap each <a> or <div> in a <td> inside a <table>, or use display:inline-block on each item with no flex container.',
-            '  5. For breadcrumb: plain inline text flow — <span style="font-size:12px;color:#8A8985"> with <a> tags and &rsaquo; spans as separators. No wrapping div with flex.',
-            '  6. Use HTML entities: &rarr; &rsaquo; &uuml; &ouml; &auml; &amp; &mdash; etc.',
-            '  7. Do NOT set background-color or padding on the outermost wrapper div.',
-            'Style guidelines (proven to work in Wiki.js — match this exactly):',
-            '- Color palette: #1C1C1A text, #8A8985 secondary/muted, #5C5B57 body text, #E0DFDB borders, #F5F4F1 subtle bg, white cards',
-            '- Accent color: #2D7A4F (green) for hero backgrounds, icons, active tabs, links',
-            '- Breadcrumb: <div style="padding:12px 0 0;"><span style="font-size:12px;font-weight:500;color:#8A8985;"><a href="..." style="color:#8A8985;text-decoration:none;">...</a><span style="margin:0 6px;">&rsaquo;</span>...</span></div>',
-            '- Tab pills: use display:inline-block on each <a> (no flex wrapper). Active: background:#2D7A4F;color:#FFFFFF. Inactive: background:#FFFFFF;border:1px solid #E0DFDB;color:#5C5B57.',
-            '- Hero banner: <div style="background:#2D7A4F;border-radius:12px;padding:32px;margin:12px 0 24px;"> with white title (32px,600) and muted subtitle (#FFFFFFB3)',
+            'CRITICAL — Element rules (violations break the page in Wiki.js):',
+            '  1. NEVER use <h1>, <h2>, <h3>, <h4>, <h5>, <h6> — use <div style="font-size:...;font-weight:600;"> instead.',
+            '  2. NEVER use <p> — use <div style="font-size:13px;color:#5C5B57;line-height:1.5;"> for body text.',
+            '  3. NEVER use <ul>, <ol>, <li> — use <div> rows with a bullet character if needed.',
+            '  4. NEVER use <figure>, <figcaption>, <section>, <article>, <header>, <footer>, <nav>, <main> — use <div> or <span> only.',
+            '  5. NEVER use <em>, <i>, <b> — use <span style="font-style:italic"> or <span style="font-weight:600"> instead.',
+            '  6. <strong> and <a> and <code> are OK to use.',
+            'CRITICAL — CSS rules (any violation silently breaks layouts):',
+            '  7. NEVER use display:flex or display:grid ANYWHERE — not even for single-row nav.',
+            '  8. NEVER use grid-template-columns, auto-fit, minmax, or any CSS Grid/Flex property.',
+            '  9. For ALL multi-column layouts: use <table cellpadding="0" cellspacing="8" border="0">.',
+            '  10. For inline pill tabs: use display:inline-block on each <a> or <div> — no flex container.',
+            '  11. Use HTML entities for special chars: &rarr; &rsaquo; &uuml; &ouml; &auml; &Uuml; &amp; &mdash; etc.',
+            '  12. Do NOT set background-color or padding on the outermost wrapper div.',
+            '  13. Outer wrapper: <div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;color:#1C1C1A;line-height:1.5;padding:0;">',
+            'Style guidelines (proven to work — match exactly):',
+            '- Breadcrumb: <div style="padding:12px 0 0;"><span style="font-size:12px;font-weight:500;color:#8A8985;"><a style="color:#8A8985;text-decoration:none;">...</a><span style="margin:0 6px;">&rsaquo;</span>...</span></div>',
+            '- Tab pills: <div style="margin:12px 0 0;"> containing <a style="display:inline-block;background:#2D7A4F;border-radius:20px;padding:8px 20px;font-size:13px;font-weight:500;color:#FFFFFF;margin-right:8px;"> for active and <a style="display:inline-block;background:#FFFFFF;border:1px solid #E0DFDB;border-radius:20px;..."> for inactive',
+            '- Hero banner: <div style="background:#2D7A4F;border-radius:12px;padding:32px;margin:12px 0 24px;"> with <div style="font-size:32px;font-weight:600;color:#FFFFFF;"> for title and <div style="font-size:15px;color:#FFFFFFB3;"> for subtitle',
+            '- Section heading: <div style="font-size:18px;font-weight:600;color:#1C1C1A;margin-top:32px;margin-bottom:16px;">',
             '- Feature cards: <table cellpadding="0" cellspacing="8" border="0"><tr><td style="vertical-align:top;background:transparent;"> with card div inside',
-            '- Card structure: outer div with border:1px solid #E0DFDB, border-radius:12px, overflow:hidden. Header: background:#EAF5EE, padding:16px 20px. Body: padding:14px 20px 18px.',
-            '- Section headings: font-size:18px, font-weight:600, color:#1C1C1A, margin-top:32px, margin-bottom:16px',
-            '- For screenshots: <figure style="margin:20px 0"><img style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12)"><figcaption style="text-align:center;color:#8A8985;font-size:14px;margin-top:8px"></figcaption></figure>',
-            '- No external fonts — use: font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+            '- Card structure: <div style="background:#FFFFFF;border:1px solid #E0DFDB;border-radius:12px;overflow:hidden;"><div style="background:#EAF5EE;padding:16px 20px;border-bottom:1px solid #E0DFDB;"> header + <div style="padding:14px 20px 18px;"> body',
+            '- Screenshot: <div style="margin:20px 0;"><img src="..." style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);"><div style="text-align:center;color:#8A8985;font-size:14px;margin-top:8px;">caption</div></div>',
             screenshotInstruction,
             'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
             'The "content" value must be the complete HTML string (escaped for JSON).',
