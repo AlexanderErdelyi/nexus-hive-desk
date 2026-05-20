@@ -93,6 +93,7 @@ interface GeneratedWikiPage {
   content?: string;
   path?: string;
   message?: string;
+  format?: 'markdown' | 'html';
 }
 
 function getErrorMessage(error: unknown) {
@@ -292,6 +293,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [aiLogs, setAiLogs] = useState<string[]>([]);
   const [aiStreamText, setAiStreamText] = useState('');
   const [editorFormat, setEditorFormat] = useState<'markdown' | 'html'>('markdown');
+  const [htmlViewMode, setHtmlViewMode] = useState<'edit' | 'preview'>('edit');
   const [workItemInput, setWorkItemInput] = useState('');
   const [loadedWorkItem, setLoadedWorkItem] = useState<WorkItemSource | null>(null);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
@@ -1047,7 +1049,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                       <div className="flex rounded-lg border border-violet-200 dark:border-violet-900/50 overflow-hidden text-xs font-medium">
                         <button
                           type="button"
-                          onClick={() => setEditorFormat('markdown')}
+                          onClick={() => { setEditorFormat('markdown'); setHtmlViewMode('edit'); }}
                           className={`px-3 py-1.5 transition-colors ${editorFormat === 'markdown' ? 'bg-violet-600 text-white' : 'text-violet-700 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-900/30'}`}
                         >
                           Markdown
@@ -1194,11 +1196,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               <div>
                 <div className="mb-1 flex items-center gap-2">
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Content</label>
-                  {/* Inline format toggle below AI panel */}
+                  {/* Inline format toggle */}
                   <div className="flex rounded-md border border-gray-200 dark:border-gray-700 overflow-hidden text-xs font-medium">
                     <button
                       type="button"
-                      onClick={() => setEditorFormat('markdown')}
+                      onClick={() => { setEditorFormat('markdown'); setHtmlViewMode('edit'); }}
                       className={`px-2.5 py-0.5 transition-colors ${editorFormat === 'markdown' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
                     >
                       Markdown
@@ -1212,15 +1214,44 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                     </button>
                   </div>
                   {editorFormat === 'html' && (
-                    <span className="text-xs text-gray-400 dark:text-gray-500">Wiki.js HTML editor — inline CSS only</span>
+                    <>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">Wiki.js HTML editor — inline CSS only</span>
+                      {/* Edit / Preview toggle for HTML */}
+                      <div className="ml-auto flex rounded-md border border-gray-200 dark:border-gray-700 overflow-hidden text-xs font-medium">
+                        <button
+                          type="button"
+                          onClick={() => setHtmlViewMode('edit')}
+                          className={`px-2.5 py-0.5 transition-colors ${htmlViewMode === 'edit' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHtmlViewMode('preview')}
+                          className={`px-2.5 py-0.5 transition-colors ${htmlViewMode === 'preview' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+                        >
+                          Preview
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
-                <textarea
-                  className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 font-mono text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  value={draft.content}
-                  onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
-                  placeholder={editorFormat === 'html' ? '<div style="...">\n  <!-- Your HTML content here -->\n</div>' : '# Overview'}
-                />
+                {editorFormat === 'html' && htmlViewMode === 'preview' ? (
+                  <iframe
+                    key={draft.content}
+                    srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:16px;background:#fff;}</style></head><body>${draft.content}</body></html>`}
+                    sandbox="allow-same-origin"
+                    className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-white dark:border-gray-700"
+                    title="HTML Preview"
+                  />
+                ) : (
+                  <textarea
+                    className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 font-mono text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    value={draft.content}
+                    onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
+                    placeholder={editorFormat === 'html' ? '<div style="...">\n  <!-- Your HTML content here -->\n</div>' : '# Overview'}
+                  />
+                )}
               </div>
 
               <div className="flex flex-wrap gap-3">

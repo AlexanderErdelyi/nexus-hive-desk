@@ -825,7 +825,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const locale = req.body.locale?.trim() || 'de';
     const content = req.body.content ?? '';
     const description = req.body.description?.trim() ?? '';
-    const editor = (req.body.editor === 'html' ? 'html' : 'markdown') as 'html' | 'markdown';
+    const editor = (req.body.editor === 'html' ? 'wysiwyg' : 'markdown') as 'wysiwyg' | 'markdown';
     const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
