@@ -50,6 +50,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [committingFile, setCommittingFile] = useState<string | null>(null);
   const [commitMsg, setCommitMsg] = useState('');
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
+  const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
