@@ -231,9 +231,8 @@ export async function projectRoutes(app: FastifyInstance) {
     const conn = await prisma.customerConnection.findUnique({ where: { id: file.remoteConnectionId } });
     if (!conn) return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
 
-    // Decrypt PAT
-    const { TokenEncryption } = await import('../lib/token-encryption.js');
-    const pat = TokenEncryption.decrypt(conn.encryptedPat);
+    // CustomerConnection stores PAT as plain text
+    const pat = conn.pat;
 
     // Fetch remote content
     let remoteXml: string;

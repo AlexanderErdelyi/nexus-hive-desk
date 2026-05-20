@@ -20,7 +20,7 @@ import { mcpConnectionRoutes } from './routes/mcp-connections';
 import { userTokenRoutes } from './routes/user-tokens';
 
 async function bootstrap() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 }); // 10 MB body limit
 
   await app.register(cors, {
     origin: (origin, cb) => {
