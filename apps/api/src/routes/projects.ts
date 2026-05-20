@@ -41,6 +41,7 @@ export async function projectRoutes(app: FastifyInstance) {
             remoteRepo: true,
           },
         },
+        repositories: { orderBy: { createdAt: 'asc' } },
         _count: { select: { glossaryEntries: true } },
       },
     });
@@ -340,5 +341,63 @@ export async function projectRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     await prisma.project.delete({ where: { id: req.params.id } });
     return reply.status(204).send();
+  });
+
+  // ─── Project Repositories ────────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>('/:id/repositories', async (req, reply) => {
+    const repos = await prisma.projectRepository.findMany({
+      where: { projectId: req.params.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    return { data: repos };
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: { label?: string; connectionId: string; adoProjectName?: string; repoName: string; defaultBranch?: string };
+  }>('/:id/repositories', async (req, reply) => {
+    const { label, connectionId, adoProjectName, repoName, defaultBranch } = req.body;
+    if (!connectionId || !repoName) {
+      return reply.status(400).send({ error: 'validation', message: 'connectionId and repoName are required' });
+    }
+    const repo = await prisma.projectRepository.create({
+      data: { projectId: req.params.id, label, connectionId, adoProjectName, repoName, defaultBranch },
+    });
+    return reply.status(201).send({ data: repo });
+  });
+
+  app.patch<{
+    Params: { id: string; repoId: string };
+    Body: { label?: string; connectionId?: string; adoProjectName?: string | null; repoName?: string; defaultBranch?: string | null };
+  }>('/:id/repositories/:repoId', async (req, reply) => {
+    const repo = await prisma.projectRepository.update({
+      where: { id: req.params.repoId },
+      data: req.body,
+    });
+    return { data: repo };
+  });
+
+  app.delete<{ Params: { id: string; repoId: string } }>('/:id/repositories/:repoId', async (req, reply) => {
+    await prisma.projectRepository.delete({ where: { id: req.params.repoId } });
+    return reply.status(204).send();
+  });
+
+  // ─── ADO Access Config ───────────────────────────────────────────────────────
+
+  app.patch<{
+    Params: { id: string };
+    Body: { connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string };
+  }>('/:id/ado-access', async (req, reply) => {
+    const { connectionId, adoProjectName, adoAccessScope } = req.body;
+    const project = await prisma.project.update({
+      where: { id: req.params.id },
+      data: {
+        ...(connectionId !== undefined && { connectionId }),
+        ...(adoProjectName !== undefined && { adoProjectName }),
+        ...(adoAccessScope !== undefined && { adoAccessScope }),
+      },
+    });
+    return { data: project };
   });
 }

@@ -13,7 +13,8 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
-import { ProjectRemoteSettings } from './ProjectRemoteSettings';
+import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
+import { ProjectADOAccess } from './ProjectADOAccess';
 import { formatDate } from '@/lib/utils';
 
 type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
@@ -31,6 +32,7 @@ interface Project {
   customer?: Customer | null;
   connectionId?: string | null;
   adoProjectName?: string | null;
+  adoAccessScope?: string;
   adoRepoName?: string | null;
   defaultBranch?: string | null;
   sourceLanguage: string;
@@ -46,6 +48,7 @@ interface Project {
     remoteBranch?: string;
     remoteRepo?: string;
   }>;
+  repositories: ProjectRepo[];
   _count: { glossaryEntries: number };
 }
 
@@ -65,6 +68,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
+  const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
   const [view, setView] = useState<ProjectView>('hub');
 
   const { data, isLoading } = useQuery({
@@ -568,16 +572,34 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   // ─── Setup view ─────────────────────────────────────────────────────────────
   if (view === 'setup') {
+    const adoCurrent = {
+      connectionId: adoAccessConfig.connectionId !== undefined ? adoAccessConfig.connectionId : project.connectionId,
+      adoProjectName: adoAccessConfig.adoProjectName !== undefined ? adoAccessConfig.adoProjectName : project.adoProjectName,
+      adoAccessScope: adoAccessConfig.adoAccessScope ?? project.adoAccessScope ?? 'org',
+    };
     return (
       <div>
         {header}
         <div className="grid gap-6 lg:grid-cols-2">
-          <ProjectRemoteSettings
+          {/* Repositories — full width */}
+          <div className="lg:col-span-2">
+            <ProjectRepositories
+              projectId={projectId}
+              customerId={project.customerId}
+              repos={project.repositories ?? []}
+              onChanged={() => qc.invalidateQueries({ queryKey: ['project', projectId] })}
+            />
+          </div>
+
+          {/* ADO Access */}
+          <ProjectADOAccess
             projectId={projectId}
             customerId={project.customerId}
-            current={effectiveRemoteConfig}
-            onSaved={(cfg) => setRemoteConfig(cfg)}
+            current={adoCurrent}
+            onSaved={(cfg) => setAdoAccessConfig(cfg)}
           />
+
+          {/* Glossary */}
           <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
             <h3 className="mb-3 font-semibold text-gray-900 dark:text-white">Glossary</h3>
             <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
@@ -590,6 +612,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               Manage Glossary <ArrowRight size={14} />
             </a>
           </div>
+
+          {/* Members — full width */}
           <div className="lg:col-span-2">
             <ProjectMembers projectId={projectId} />
           </div>

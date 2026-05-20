@@ -80,20 +80,43 @@ model CustomerConnection {
 }
 
 model Project {
-  id              String          @id @default(cuid())
+  id              String               @id @default(cuid())
   name            String
   description     String?
   customerId      String?
-  sourceLanguage  String          @default("en")
-  targetLanguage  String          @default("de")
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  customer        Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // DevOps access config (for Work Items, CI, etc.)
+  connectionId    String?              // pinned CustomerConnection for ADO/GitHub access
+  adoProjectName  String?              // pinned ADO project (within the connection's org)
+  adoAccessScope  String               @default("org") // 'org' | 'project'
+  // Legacy single-repo fields (kept for backward compat)
+  adoRepoName     String?
+  defaultBranch   String?
+  sourceLanguage  String               @default("en")
+  targetLanguage  String               @default("de")
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  customer        Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
   xliffFiles      XliffFile[]
   glossaryEntries GlossaryEntry[]
   members         ProjectMember[]
+  repositories    ProjectRepository[]
 
   @@index([customerId])
+}
+
+model ProjectRepository {
+  id             String   @id @default(cuid())
+  projectId      String
+  label          String?  // friendly name e.g. "Main Repo", "Plugin Repo"
+  connectionId   String   // CustomerConnection id
+  adoProjectName String?  // ADO project name (for Azure DevOps)
+  repoName       String   // repository name
+  defaultBranch  String?  // default branch e.g. "main"
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
 }
 
 model ProjectMember {
