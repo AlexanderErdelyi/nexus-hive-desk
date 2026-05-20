@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Download, GitCommit, Loader2, Sparkles, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, CloudDownload, Download, GitCommit, Loader2, Sparkles, Trash2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
@@ -9,6 +9,7 @@ import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { ProjectMembers } from './ProjectMembers';
+import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { formatDate } from '@/lib/utils';
 
 interface Customer {
@@ -48,7 +49,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [uploading, setUploading] = useState(false);
   const [committingFile, setCommittingFile] = useState<string | null>(null);
   const [commitMsg, setCommitMsg] = useState('');
-  const [showCommitDialog, setShowCommitDialog] = useState<string | null>(null);
+  const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -216,6 +217,14 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </>
               )}
             </div>
+            {project.customerId && (
+              <button
+                onClick={() => setShowRemoteBrowser(true)}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
+              >
+                <CloudDownload size={15} /> Load from Remote
+              </button>
+            )}
           </div>
 
           <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
@@ -290,7 +299,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                           </button>
                         )}
                         <a
-                          href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/api/projects/${project.id}/xliff/${file.id}/download`}
+                          href={`/api/projects/${project.id}/xliff/${file.id}/download`}
                           className="flex items-center gap-1 rounded-lg bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
                           download
                         >
@@ -356,6 +365,21 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <div className="mt-6">
         <ProjectMembers projectId={projectId} />
       </div>
+
+      {/* Remote file browser modal */}
+      {showRemoteBrowser && (
+        <RemoteFileBrowser
+          projectId={projectId}
+          customerId={project.customerId}
+          onClose={() => setShowRemoteBrowser(false)}
+          onImported={(fileId, filename, total) => {
+            setShowRemoteBrowser(false);
+            qc.invalidateQueries({ queryKey: ['project', projectId] });
+            toast.success(`${filename} imported — ${total} strings`);
+            router.push(`/projects/${projectId}/translations?fileId=${fileId}`);
+          }}
+        />
+      )}
     </div>
   );
 }
