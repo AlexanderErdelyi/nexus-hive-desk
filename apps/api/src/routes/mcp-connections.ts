@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { encryptToken, decryptToken } from '../lib/crypto';
+import https from 'https';
+import axios from 'axios';
+
+// Allow self-signed / internal CA certificates for on-premise services (Wiki.js, etc.)
+const tlsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom', 'teams_recorder'] as const;
 
@@ -107,19 +112,23 @@ async function wikiJsGraphQL(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<unknown> {
-  const res = await fetch(`${wikiUrl}/graphql`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
+  const res = await axios.post(
+    `${wikiUrl}/graphql`,
+    { query, variables },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      httpsAgent: tlsAgent,
+      validateStatus: null, // handle status manually
     },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
+  );
+  if (res.status < 200 || res.status >= 300) {
+    const errText = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
     throw new Error(`Wiki.js GraphQL returned ${res.status}: ${errText}`);
   }
-  const body = await res.json() as { data?: unknown; errors?: Array<{ message?: string; extensions?: { code?: number | string; exception?: { stack?: string } } }> };
+  const body = res.data as { data?: unknown; errors?: Array<{ message?: string; extensions?: { code?: number | string; exception?: { stack?: string } } }> };
   // PageNotFound (6003) — treat as null, not an error.
   // Wiki.js returns extensions.code = "INTERNAL_SERVER_ERROR" with the real 6003 buried in the stack.
   if (body.errors?.length) {
@@ -587,14 +596,17 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
           return { data: { status: 'error', message: 'No Wiki.js URL configured' } };
         }
         // Test direct GraphQL
-        const res = await fetch(`${wikiUrl}/graphql`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: '{ __typename }' }),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          return { data: { status: 'error', message: `Wiki.js API returned ${res.status}: ${errText}` } };
+        try {
+          const testRes = await axios.post(
+            `${wikiUrl}/graphql`,
+            { query: '{ __typename }' },
+            { headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' }, httpsAgent: tlsAgent, validateStatus: null },
+          );
+          if (testRes.status < 200 || testRes.status >= 300) {
+            return { data: { status: 'error', message: `Wiki.js API returned ${testRes.status}: ${JSON.stringify(testRes.data)}` } };
+          }
+        } catch (fetchErr) {
+          return { data: { status: 'error', message: `Wiki.js unreachable: ${fetchErr instanceof Error ? fetchErr.message : 'unknown'}` } };
         }
         const directMsg = 'Direct GraphQL: connected';
         if (!scriptPath) {
@@ -639,13 +651,13 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     } else {
       try {
         if (wikiUrl && credential) {
-          const res = await fetch(`${wikiUrl}/graphql`, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: '{ __typename }' }),
-          });
-          directAvailable = res.ok;
-          if (!res.ok) directError = `HTTP ${res.status}`;
+          const checkRes = await axios.post(
+            `${wikiUrl}/graphql`,
+            { query: '{ __typename }' },
+            { headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' }, httpsAgent: tlsAgent, validateStatus: null },
+          );
+          directAvailable = checkRes.status >= 200 && checkRes.status < 300;
+          if (!directAvailable) directError = `HTTP ${checkRes.status}`;
         } else {
           directError = !wikiUrl ? 'Wiki.js URL not configured' : 'API key not configured';
         }
@@ -998,18 +1010,17 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
                   const imageBytes = await readFile(shot.filePath);
                   const filename = `recording-${sources.recordingId?.trim().slice(0, 8)}-${shot.id}.png`;
 
-                  // Upload via Wiki.js REST upload endpoint (same as Python MCP)
-                  // Sends two 'mediaUpload' parts: JSON metadata + image binary
-                  const formData = new FormData();
-                  formData.append('mediaUpload', new Blob([JSON.stringify({ folderId: 2 })], { type: 'application/json' }));
-                  formData.append('mediaUpload', new Blob([imageBytes], { type: 'image/png' }), filename);
+                  // Upload via Wiki.js REST upload endpoint using axios (supports TLS bypass for internal CAs)
+                  const uploadForm = new FormData();
+                  uploadForm.append('mediaUpload', new Blob([JSON.stringify({ folderId: 2 })], { type: 'application/json' }));
+                  uploadForm.append('mediaUpload', new Blob([imageBytes], { type: 'image/png' }), filename);
 
-                  const uploadRes = await fetch(`${wikiUrl}/u`, {
-                    method: 'POST',
+                  const uploadRes = await axios.post(`${wikiUrl}/u`, uploadForm, {
                     headers: { Authorization: `Bearer ${credential}` },
-                    body: formData,
+                    httpsAgent: tlsAgent,
+                    validateStatus: null,
                   });
-                  if (uploadRes.ok) {
+                  if (uploadRes.status >= 200 && uploadRes.status < 300) {
                     const assetUrl = `${wikiUrl}/${filename}`;
                     uploadedScreenshots.push({ url: assetUrl, description: shot.description });
                     sendLog(`Uploaded: ${filename}`);
