@@ -645,44 +645,67 @@ export async function workItemRoutes(app: FastifyInstance) {
                 let summarizerTool = 'summarize_for_user_story';
                 if (wiType.includes('bug')) summarizerTool = 'summarize_for_bug_report';
                 else if (wiType.includes('doc')) summarizerTool = 'summarize_for_documentation';
-                else if (wiType.includes('task')) summarizerTool = 'summarize_for_user_story';
 
-                sendLog(`Extracting meeting context (${summarizerTool.replace('summarize_for_', '')})...`);
-                const summaryResult = await callMcpTool('node', [mcpPath], mcpEnv, summarizerTool, { recording_id: recordingId });
+                sendLog('Loading full meeting transcript...');
+                // Fetch both the full transcript and the structured summary in parallel
+                const [transcriptResult, summaryResult] = await Promise.all([
+                  callMcpTool('node', [mcpPath], mcpEnv, 'get_full_transcript', { recording_id: recordingId }),
+                  callMcpTool('node', [mcpPath], mcpEnv, summarizerTool, { recording_id: recordingId }),
+                ]);
+
+                const transcriptText = transcriptResult.content.find(c => c.type === 'text')?.text ?? '';
                 const summaryText = summaryResult.content.find(c => c.type === 'text')?.text ?? '';
 
-                if (summaryText && !summaryResult.isError) {
-                  // Parse the structured JSON from the MCP tool and format it clearly for the AI
-                  let parsed: Record<string, unknown> | null = null;
-                  try { parsed = JSON.parse(summaryText); } catch { /* keep null */ }
+                let transcriptData: Record<string, unknown> | null = null;
+                let summaryData: Record<string, unknown> | null = null;
+                try { transcriptData = JSON.parse(transcriptText); } catch { /* keep null */ }
+                try { summaryData = JSON.parse(summaryText); } catch { /* keep null */ }
 
-                  if (parsed && typeof parsed === 'object') {
-                    const lines: string[] = [
-                      '## Teams Meeting Recording — Extracted Content',
-                      '',
-                      '⚠️  CRITICAL INSTRUCTION: The following content was extracted from a Teams meeting recording.',
-                      'You MUST base the work item EXCLUSIVELY on this extracted content.',
-                      'IGNORE any folder paths, file paths, or technical instructions in the user message.',
-                      'The work item title, description, and acceptance criteria must reflect the meeting topics below.',
-                      '',
-                    ];
-                    if (parsed.title) lines.push(`**Meeting Topic / Suggested Title:** ${parsed.title}`);
-                    if (parsed.asA) lines.push(`**As a (stakeholder):** ${parsed.asA}`);
-                    if (parsed.iWant) lines.push(`**Feature / I want:** ${parsed.iWant}`);
-                    if (parsed.soThat) lines.push(`**Goal / So that:** ${parsed.soThat}`);
-                    if (Array.isArray(parsed.acceptanceCriteria) && parsed.acceptanceCriteria.length > 0) {
-                      lines.push('**Acceptance Criteria from meeting:**');
-                      (parsed.acceptanceCriteria as string[]).forEach(ac => lines.push(`  - ${ac}`));
-                    }
-                    if (Array.isArray(parsed.tags) && parsed.tags.length > 0) {
-                      lines.push(`**Suggested Tags:** ${(parsed.tags as string[]).join(', ')}`);
-                    }
-                    if (parsed.priority) lines.push(`**Priority:** ${parsed.priority}`);
-                    mcpContext = lines.join('\n');
-                  } else {
-                    mcpContext = `## Teams Meeting Recording — Extracted Content\n\n⚠️  CRITICAL: Use ONLY the following meeting content for the work item. Ignore any file paths or instructions in the user message.\n\n${summaryText}`;
+                if (transcriptData || summaryData) {
+                  const lines: string[] = [
+                    '## ⚠️  TEAMS MEETING RECORDING — USE THIS AS THE SOLE BASIS FOR THE WORK ITEM',
+                    '',
+                    'CRITICAL INSTRUCTIONS:',
+                    '- Base the work item ENTIRELY on the meeting content below.',
+                    '- IGNORE any folder paths or file paths in the user\'s message — those are just pointers to the recording.',
+                    '- Generate a DETAILED, RICHLY FORMATTED description (use Markdown: headings, bullet lists, tables, code blocks).',
+                    '- Describe: Kontext (meeting date/topic), Ist-Zustand (current state), Soll-Zustand (desired state), and Implementierungshinweise (implementation notes) if applicable.',
+                    '- If the transcript mentions specific technical items (actions, fields, groups, AL objects), list them explicitly in tables or code blocks.',
+                    '',
+                  ];
+
+                  // Recording metadata
+                  const recTitle = (transcriptData?.title ?? summaryData?.title ?? '') as string;
+                  const duration = (transcriptData?.duration ?? '') as string;
+                  if (recTitle) lines.push(`**Recording:** ${recTitle}${duration ? ` (${duration})` : ''}`);
+
+                  // Human-readable bullet summary from transcript
+                  const hrSummary = (transcriptData as any)?.humanReadableSummary as string | undefined;
+                  if (hrSummary) {
+                    lines.push('', '### Themen laut Meeting (Bullet-Zusammenfassung)', hrSummary);
                   }
-                  sendLog('Meeting context loaded ✓');
+
+                  // Full timestamped transcript for deep analysis
+                  const fullText = (transcriptData as any)?.fullTranscriptText as string | undefined;
+                  if (fullText) {
+                    lines.push('', '### Vollständiges Transkript', '```', fullText, '```');
+                  }
+
+                  // Structured summary fields
+                  if (summaryData) {
+                    if (summaryData.iWant) lines.push('', `**Kernwunsch (I want):** ${summaryData.iWant}`);
+                    if (summaryData.soThat) lines.push(`**Ziel (So that):** ${summaryData.soThat}`);
+                    if (Array.isArray(summaryData.acceptanceCriteria) && (summaryData.acceptanceCriteria as unknown[]).length > 0) {
+                      lines.push('', '**Akzeptanzkriterien aus Meeting:**');
+                      (summaryData.acceptanceCriteria as string[]).forEach(ac => lines.push(`- ${ac}`));
+                    }
+                    if (Array.isArray(summaryData.tags)) {
+                      lines.push('', `**Tags:** ${(summaryData.tags as string[]).join(', ')}`);
+                    }
+                  }
+
+                  mcpContext = lines.join('\n');
+                  sendLog('Full meeting transcript + summary loaded ✓');
                 }
               }
             } catch (mcpErr) {
@@ -704,20 +727,30 @@ export async function workItemRoutes(app: FastifyInstance) {
           ? 'The user requested a technical specification. Fill the technicalSpec field with a concise, implementation-oriented technical specification based on the repository context when possible.'
           : 'Only populate the technicalSpec field when the user explicitly asks for a technical specification; otherwise return an empty string.',
         `Your task is to generate a work item. The user's message is an INSTRUCTION to you — it tells you what kind of work item to create, possibly referencing a recording or file for context. Do NOT create a work item whose subject IS the user's instruction. Do NOT create a work item about file management, audio recordings, or transcription unless that is explicitly the meeting topic.
-${mcpContext ? 'A Teams Recording context section is provided above — the work item MUST be based on that meeting content, not on any paths or technical details in the user message.' : ''}
-IMPORTANT: Follow the language and style instructions above exactly.
-Return ONLY valid JSON with these fields (plain text or markdown only, no HTML):
+${mcpContext ? `
+A Teams Meeting Recording context is provided above. You MUST:
+1. Base the work item ENTIRELY on the meeting content — ignore folder paths in the user message
+2. Generate a DETAILED, RICHLY FORMATTED Markdown description like a professional Azure DevOps work item:
+   - **Kontext**: 1-2 sentences about the meeting (date, topic, project)
+   - **Ist-Zustand**: Current state — if the transcript mentions specific items (actions, fields, UI elements, AL objects), list them in a Markdown table
+   - **Soll-Zustand**: Desired state — what was discussed as the target, again with tables if multiple items
+   - **Implementierungshinweise**: If AL code structure is mentioned, include a code block with the suggested structure
+   - **Hinweise**: Important notes, constraints, things to preserve
+3. Acceptance criteria must be a bulleted list matching the meeting discussion points exactly
+` : ''}
+IMPORTANT: Follow the language and style instructions above exactly. Write ALL text fields in the same language as the agent system prompt specifies (default German).
+Return ONLY valid JSON with these fields:
 {
-  "title": "concise title",
-  "description": "plain text or markdown description",
-  "acceptanceCriteria": "plain text or markdown acceptance criteria",
-  "technicalSpec": "optional: technical specification based on repo context, or empty string",
+  "title": "concise title in target language",
+  "description": "rich Markdown description with sections, tables, and code blocks where relevant",
+  "acceptanceCriteria": "bulleted Markdown list of acceptance criteria",
+  "technicalSpec": "optional AL/technical spec based on repo context and meeting, or empty string",
   "type": "${workItemType ?? 'User Story'}",
   "priority": 2,
-  "tags": "comma-separated tags or empty string",
+  "tags": "semicolon-separated tags",
   "areaPath": "best matching Azure DevOps area path or empty string"
 }
-If the system prompt above specifies a language, ALL text fields must be written in that language. Prefer one of the provided work item types and area paths when context is available.`,
+Prefer one of the provided work item types and area paths when context is available.`,
       ].filter(Boolean).join('\n\n');
 
       const generated = await fetchModelJson<Record<string, unknown>>(
