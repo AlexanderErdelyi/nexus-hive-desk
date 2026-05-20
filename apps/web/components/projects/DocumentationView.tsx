@@ -298,6 +298,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [editorFormat, setEditorFormat] = useState<'markdown' | 'html'>('markdown');
   const [htmlViewMode, setHtmlViewMode] = useState<'edit' | 'preview'>('edit');
   const [workItemInput, setWorkItemInput] = useState('');
+  const [workItemSearchOpen, setWorkItemSearchOpen] = useState(false);
+  const [debouncedWorkItemSearch, setDebouncedWorkItemSearch] = useState('');
   const [loadedWorkItem, setLoadedWorkItem] = useState<WorkItemSource | null>(null);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [repoQueryInput, setRepoQueryInput] = useState('');
@@ -315,6 +317,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     const timeout = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 400);
     return () => window.clearTimeout(timeout);
   }, [searchTerm]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedWorkItemSearch(workItemInput.trim()), 350);
+    return () => window.clearTimeout(timeout);
+  }, [workItemInput]);
 
   useEffect(() => {
     if (!aiLogRef.current) return;
@@ -396,6 +403,14 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       `/api/projects/${projectId}/repositories/${selectedRepoId}/tree?path=${encodeURIComponent(repoBrowsePath)}`
     ),
     enabled: !!selectedRepoId && repoBrowserOpen,
+  });
+
+  const workItemSearchQuery = useQuery({
+    queryKey: ['work-items-search', projectId, debouncedWorkItemSearch],
+    queryFn: () => api.get<{ data: Array<{ id: number; title: unknown; type: unknown; state: unknown }> }>(
+      `/api/projects/${projectId}/work-items?search=${encodeURIComponent(debouncedWorkItemSearch)}&top=10`
+    ),
+    enabled: !!projectId && debouncedWorkItemSearch.length >= 2,
   });
 
   const pageQuery = useQuery({
@@ -1072,8 +1087,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
 
       <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)] xl:items-start">
         <aside className="sticky top-4 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-          <div className={paneClass}>
-            <div className="mb-4 flex items-center justify-between gap-2">
+          <div className="shrink-0 rounded-2xl border border-gray-200 bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-800/40">
+            <div className="mb-3 flex items-center justify-between gap-2">
               <div className="relative flex-1">
                 <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -1095,7 +1110,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               </button>
             </div>
 
-            <div className="mb-4 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+            <div className="mb-2 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
               <span>{selectedConnection?.name ?? 'Wiki.js connection'}</span>
               <select
                 className="bg-transparent text-xs focus:outline-none"
@@ -1307,24 +1322,61 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                     <div className="grid gap-4 lg:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Work Item</label>
-                        <div className="flex gap-2">
-                          <input
-                            className={inputClass}
-                            value={workItemInput}
-                            onChange={(event) => setWorkItemInput(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' && workItemInput.trim()) handleLoadWorkItem();
-                            }}
-                            placeholder="Work item ID (e.g. 12345)"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleLoadWorkItem}
-                            disabled={loadWorkItemMutation.isPending || !workItemInput.trim()}
-                            className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                          >
-                            {loadWorkItemMutation.isPending ? '...' : 'Load'}
-                          </button>
+                        <div className="relative">
+                          <div className="flex gap-2">
+                            <input
+                              className={inputClass}
+                              value={workItemInput}
+                              onChange={(event) => {
+                                setWorkItemInput(event.target.value);
+                                setWorkItemSearchOpen(true);
+                                if (!event.target.value.trim()) setLoadedWorkItem(null);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' && workItemInput.trim()) handleLoadWorkItem();
+                                if (event.key === 'Escape') setWorkItemSearchOpen(false);
+                              }}
+                              onFocus={() => workItemInput.trim() && setWorkItemSearchOpen(true)}
+                              placeholder="Search by ID or title…"
+                            />
+                            {loadedWorkItem && (
+                              <button
+                                type="button"
+                                onClick={() => { setLoadedWorkItem(null); setWorkItemInput(''); }}
+                                className="shrink-0 rounded-xl border border-gray-200 px-2 py-1 text-xs text-gray-400 hover:text-red-500 dark:border-gray-700"
+                              >✕</button>
+                            )}
+                          </div>
+                          {workItemSearchOpen && debouncedWorkItemSearch.length >= 2 && (
+                            <div className="absolute z-20 mt-1 w-full rounded-xl border border-violet-200 bg-white shadow-lg dark:border-violet-900/50 dark:bg-gray-900">
+                              {workItemSearchQuery.isFetching ? (
+                                <div className="flex items-center gap-2 px-3 py-3 text-xs text-gray-500">
+                                  <Loader2 size={12} className="animate-spin" /> Searching…
+                                </div>
+                              ) : (workItemSearchQuery.data?.data ?? []).length === 0 ? (
+                                <div className="px-3 py-3 text-xs text-gray-400">No work items found</div>
+                              ) : (
+                                <div className="max-h-48 overflow-y-auto">
+                                  {(workItemSearchQuery.data?.data ?? []).map((wi) => (
+                                    <button
+                                      key={wi.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setWorkItemInput(String(wi.id));
+                                        setWorkItemSearchOpen(false);
+                                        setLoadedWorkItem({ id: wi.id, title: String(wi.title ?? ''), type: String(wi.type ?? ''), state: String(wi.state ?? '') });
+                                      }}
+                                      className="flex w-full items-start gap-2 border-b border-gray-100 px-3 py-2 text-left last:border-0 hover:bg-violet-50 dark:border-gray-800 dark:hover:bg-violet-900/20"
+                                    >
+                                      <span className="mt-0.5 shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">{String(wi.type ?? '')}</span>
+                                      <span className="flex-1 text-xs text-gray-800 dark:text-gray-200">#{wi.id} — {String(wi.title ?? '')}</span>
+                                      <span className="shrink-0 text-[10px] text-gray-400">{String(wi.state ?? '')}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                         {loadedWorkItem && (
                           <div className="mt-2 rounded-xl border border-violet-200 bg-white px-3 py-2 dark:border-violet-900/40 dark:bg-gray-900/60">
@@ -1338,7 +1390,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                           </div>
                         )}
                         {!loadedWorkItem && !workItemInput.trim() && (
-                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Type an ID and press Enter or click Load</p>
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Type an ID or title keyword to search</p>
                         )}
                       </div>
 
@@ -1413,6 +1465,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                             <div className="max-h-48 overflow-y-auto p-2">
                               {repoTreeQuery.isLoading ? (
                                 <p className="py-4 text-center text-xs text-gray-500">Loading…</p>
+                              ) : repoTreeQuery.isError ? (
+                                <p className="py-4 text-center text-xs text-red-500">
+                                  {(repoTreeQuery.error as Error)?.message ?? 'Failed to load tree. Check repo connection & branch.'}
+                                </p>
                               ) : treeItems.length === 0 ? (
                                 <p className="py-4 text-center text-xs text-gray-500">No items found</p>
                               ) : (

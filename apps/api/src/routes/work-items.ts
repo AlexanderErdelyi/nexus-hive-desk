@@ -114,7 +114,7 @@ export async function workItemRoutes(app: FastifyInstance) {
   // ─── List work items ───────────────────────────────────────────────────────
   app.get<{
     Params: { id: string };
-    Querystring: { type?: string; state?: string; top?: string; assignedTo?: string };
+    Querystring: { type?: string; state?: string; top?: string; assignedTo?: string; search?: string };
   }>('/:id/work-items', async (req, reply) => {
     const project = await prisma.project.findUnique({ where: { id: req.params.id } });
     if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
@@ -130,7 +130,7 @@ export async function workItemRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'not_found', message: 'Azure DevOps connection not found' });
     }
 
-    const { type, state, top = '50', assignedTo } = req.query;
+    const { type, state, top = '50', assignedTo, search } = req.query;
     const topN = Math.min(Math.max(parseInt(top, 10) || 50, 1), 200);
 
     // Build WIQL where clause
@@ -138,7 +138,14 @@ export async function workItemRoutes(app: FastifyInstance) {
     if (type) conditions.push(`[System.WorkItemType] = '${type}'`);
     if (state) conditions.push(`[System.State] = '${state}'`);
     if (assignedTo) conditions.push(`[System.AssignedTo] = '${assignedTo}'`);
-
+    if (search) {
+      const safe = search.replace(/'/g, "''");
+      if (/^\d+$/.test(search)) {
+        conditions.push(`[System.Id] = ${parseInt(search, 10)}`);
+      } else {
+        conditions.push(`[System.Title] CONTAINS '${safe}'`);
+      }
+    }
     const wiql = `SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State], [System.AssignedTo], [System.CreatedDate], [System.ChangedDate] FROM WorkItems WHERE ${conditions.join(' AND ')} ORDER BY [System.ChangedDate] DESC`;
 
     try {

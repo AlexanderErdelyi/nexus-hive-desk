@@ -406,8 +406,11 @@ export async function projectRoutes(app: FastifyInstance) {
         const res = await fetch(url, {
           headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json() as { value?: Array<{ path: string; isFolder?: boolean; gitObjectType?: string }> };
+        if (!res.ok) {
+            const body = await res.text().catch(() => res.statusText);
+            throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+          }
+          const data = await res.json() as { value?: Array<{ path: string; isFolder?: boolean; gitObjectType?: string }> };
         const items = (data.value ?? []).map((item) => ({
           name: item.path.split('/').pop() || item.path,
           path: item.path,
@@ -427,7 +430,10 @@ export async function projectRoutes(app: FastifyInstance) {
           'X-GitHub-Api-Version': '2022-11-28',
         },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => res.statusText);
+        throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+      }
       const data = await res.json() as Array<{ name: string; path: string; type: string }>;
       const items = Array.isArray(data)
         ? data.map((item) => ({ name: item.name, path: item.path, type: item.type === 'dir' ? 'tree' : 'blob' }))
