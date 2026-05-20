@@ -992,6 +992,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Browse, create, edit, and generate Wiki.js pages directly from NexusHiveDesk.
           </p>
+        </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <select
             className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
