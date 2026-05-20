@@ -348,15 +348,17 @@ export async function workItemRoutes(app: FastifyInstance) {
 
     const systemContent = `${agent.systemPrompt ?? 'You are a helpful work item writer.'}${skillPrompts}
 
-Your task is to generate a work item. Return ONLY valid JSON with these fields:
+Your task is to generate a work item. IMPORTANT: Follow the language and style instructions above exactly.
+Return ONLY valid JSON with these fields (no HTML tags — use plain text or markdown only):
 {
   "title": "concise title",
-  "description": "HTML or markdown description of the work item",
-  "acceptanceCriteria": "HTML or markdown acceptance criteria (for User Stories/Features)",
+  "description": "plain text or markdown description of the work item",
+  "acceptanceCriteria": "plain text or markdown acceptance criteria (BDD format for User Stories)",
   "type": "${workItemType ?? 'User Story'}",
   "priority": 2,
   "tags": "comma-separated tags or empty string"
-}`;
+}
+If the system prompt above specifies a language (e.g. German, French), ALL text fields must be written in that language.`;
 
     try {
       const response = await fetch(`${baseURL}/chat/completions`, {

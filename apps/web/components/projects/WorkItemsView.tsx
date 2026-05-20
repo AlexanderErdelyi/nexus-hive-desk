@@ -422,17 +422,8 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   });
 
   const { data: agentsData } = useQuery({
-    queryKey: ['agents-for-wi', projectId, customerId],
-    queryFn: async () => {
-      const [projRes, custRes] = await Promise.all([
-        api.get<{ data: Agent[] }>(`/api/agents?projectId=${projectId}`),
-        customerId
-          ? api.get<{ data: Agent[] }>(`/api/agents?customerId=${customerId}`)
-          : Promise.resolve({ data: [] as Agent[] }),
-      ]);
-      const all = [...(projRes.data ?? []), ...(custRes.data ?? [])];
-      return { data: [...new Map(all.map((a) => [a.id, a])).values()] };
-    },
+    queryKey: ['agents-for-wi'],
+    queryFn: () => api.get<{ data: Agent[] }>('/api/agents'),
     staleTime: 60 * 1000,
   });
 

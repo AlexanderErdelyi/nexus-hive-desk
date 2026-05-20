@@ -235,13 +235,13 @@ Infer type from the description. If unclear, use "custom".`,
 Return ONLY valid JSON with these fields:
 {
   "title": "concise, action-oriented title (max 100 chars)",
-  "description": "detailed HTML description (use <h3>, <p>, <ul> tags) explaining the work, context and goals",
-  "acceptanceCriteria": "HTML acceptance criteria using a bulleted list (<ul><li>Given...When...Then...</li></ul> format for user stories)",
+  "description": "detailed plain-text or markdown description (no HTML tags) explaining the work, context and goals",
+  "acceptanceCriteria": "plain-text or markdown acceptance criteria (BDD Given/When/Then format for user stories, repro steps for bugs)",
   "type": "${workItemType ?? 'User Story'}",
   "priority": 2,
   "tags": "comma-separated relevant tags or empty string"
 }
-Write professional, clear, testable content. Use proper BDD-style acceptance criteria for User Stories. For Bugs, focus on repro steps and expected vs actual behavior.`,
+Write professional, clear, testable content. Respond in the same language as the user's input. Do NOT use HTML tags — use plain text or markdown only.`,
     };
 
     try {
