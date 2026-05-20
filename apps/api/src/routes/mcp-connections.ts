@@ -38,17 +38,25 @@ function getWikiJsConfig(connection: {
   capabilities?: string | null;
 }) {
   const caps = parseCapabilities(connection.capabilities);
-  // wikiUrl may be in capabilities.wikiUrl, or fall back to baseUrl (legacy / direct URL storage)
-  const wikiUrl = (
-    (typeof caps.wikiUrl === 'string' && caps.wikiUrl.trim()) ||
-    connection.baseUrl?.trim() ||
-    ''
-  ).replace(/\/$/, '') || undefined;
+  const capUrl = typeof caps.wikiUrl === 'string' ? caps.wikiUrl.trim() : '';
+  const baseUrl = connection.baseUrl?.trim() ?? '';
+
+  // Prefer caps.wikiUrl only when it is a valid HTTP URL; otherwise fall back to baseUrl
+  const rawUrl = (
+    (/^https?:\/\//i.test(capUrl) ? capUrl : '') ||
+    (/^https?:\/\//i.test(baseUrl) ? baseUrl : '') ||
+    capUrl ||
+    baseUrl
+  ).replace(/\/$/, '');
+
+  // Only accept URLs that start with http:// or https://
+  const wikiUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : undefined;
+  const invalidUrl = rawUrl && !wikiUrl ? rawUrl : undefined; // store the bad value for error messages
 
   const scriptPath = typeof caps.scriptPath === 'string' && caps.scriptPath.trim() ? caps.scriptPath.trim() : undefined;
   const pythonPath = typeof caps.pythonPath === 'string' && caps.pythonPath.trim() ? caps.pythonPath.trim() : 'python';
 
-  return { wikiUrl, scriptPath, pythonPath };
+  return { wikiUrl, scriptPath, pythonPath, invalidUrl };
 }
 
 type WikiJsSource = 'mcp' | 'direct';
@@ -582,7 +590,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         const res = await fetch(`${wikiUrl}/graphql`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: '{ site { title } }' }),
+          body: JSON.stringify({ query: '{ __typename }' }),
         });
         if (!res.ok) {
           const errText = await res.text();
@@ -621,25 +629,29 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
     }
 
-    const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
+    const { wikiUrl, scriptPath, pythonPath, invalidUrl } = getWikiJsConfig(connection);
 
     // Test direct GraphQL
     let directAvailable = false;
     let directError: string | undefined;
-    try {
-      if (wikiUrl && credential) {
-        const res = await fetch(`${wikiUrl}/graphql`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: '{ site { title } }' }),
-        });
-        directAvailable = res.ok;
-        if (!res.ok) directError = `HTTP ${res.status}`;
-      } else {
-        directError = !wikiUrl ? 'Wiki.js URL not configured' : 'API key not configured';
+    if (invalidUrl) {
+      directError = `Invalid Wiki.js URL: "${invalidUrl}" — must start with https://`;
+    } else {
+      try {
+        if (wikiUrl && credential) {
+          const res = await fetch(`${wikiUrl}/graphql`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: '{ __typename }' }),
+          });
+          directAvailable = res.ok;
+          if (!res.ok) directError = `HTTP ${res.status}`;
+        } else {
+          directError = !wikiUrl ? 'Wiki.js URL not configured' : 'API key not configured';
+        }
+      } catch (err) {
+        directError = err instanceof Error ? err.message : 'Direct GraphQL failed';
       }
-    } catch (err) {
-      directError = err instanceof Error ? err.message : 'Direct GraphQL failed';
     }
 
     // Test MCP (only if scriptPath configured)
@@ -677,8 +689,9 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
     if (!credential) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
 
-    const { wikiUrl } = getWikiJsConfig(connection);
-    if (!wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured (set baseUrl to the wiki URL)' });
+    const { wikiUrl, invalidUrl } = getWikiJsConfig(connection);
+    if (invalidUrl) return reply.status(400).send({ error: 'invalid_url', message: `Wiki.js URL "${invalidUrl}" is invalid — it must start with https://. Update the connection's Base URL field.` });
+    if (!wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured (set baseUrl to the wiki URL, e.g. https://wiki.example.com)' });
 
     const locale = req.query.locale?.trim() || 'de';
     const cached = readWikiTreeCache(connection.id, locale);
@@ -719,11 +732,13 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
     if (!credential) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
 
-    const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
-    if (!wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured (set baseUrl to the wiki URL)' });
+    const { wikiUrl, scriptPath, pythonPath, invalidUrl } = getWikiJsConfig(connection);
+    // If no MCP configured, we need a valid URL for direct GraphQL
+    const mcpCfg: WikiJsMcpConfig | null = scriptPath && credential ? { pythonPath, scriptPath, wikiUrl: wikiUrl ?? '', apiKey: credential } : null;
+    if (!mcpCfg && invalidUrl) return reply.status(400).send({ error: 'invalid_url', message: `Wiki.js URL "${invalidUrl}" is invalid — must start with https://` });
+    if (!mcpCfg && !wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured (set baseUrl to the wiki URL, e.g. https://wiki.example.com)' });
 
     const locale = req.query.locale?.trim() || 'de';
-    const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
       if (req.query.path?.trim()) {

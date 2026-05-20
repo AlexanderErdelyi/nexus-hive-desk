@@ -752,8 +752,10 @@ function McpTab() {
       if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
       if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
     }
-    const capabilities = Object.keys(caps).length > 0 ? JSON.stringify(caps) : undefined;
-    return { ...rest, ...(capabilities ? { capabilities } : {}) };
+    // For typed connections always send capabilities (even empty {}) so old stale values get overwritten
+    const shouldSendCaps = input.type === 'wiki_js' || input.type === 'teams_recorder';
+    const capabilities = (Object.keys(caps).length > 0 || shouldSendCaps) ? JSON.stringify(caps) : undefined;
+    return { ...rest, ...(capabilities !== undefined ? { capabilities } : {}) };
   }
 
   const createMutation = useMutation({
