@@ -872,6 +872,11 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       title?: string;
       locale?: string;
       format?: 'markdown' | 'html';
+      // Refinement mode: skip source loading, refine existing content
+      refine?: boolean;
+      existingContent?: string;
+      message?: string;
+      chatHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
       sources?: {
         workItemId?: number;
         workItemContent?: string;
@@ -926,6 +931,60 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
       }
       const { wikiUrl } = getWikiJsConfig(connection);
+
+      // ── Refine mode: update existing content based on a user message ─────────
+      if (req.body.refine) {
+        const existingContent = req.body.existingContent ?? '';
+        const userMessage = req.body.message?.trim() ?? '';
+        const chatHistory = req.body.chatHistory ?? [];
+        if (!userMessage) throw new Error('message is required for refine mode');
+
+        sendLog('Refining page content...');
+        const langInstruction = locale === 'de' ? 'Write in German.' : 'Write in English.';
+
+        const refineSystemPrompt = format === 'html'
+          ? [
+              'You are a technical documentation designer editing an existing Wiki.js HTML page.',
+              langInstruction,
+              'The user will request changes. Apply ONLY the requested changes, preserve everything else.',
+              'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
+              'The "content" value must be the complete updated HTML string (inline CSS only, no external resources).',
+              `Current path: ${suggestedPath}`,
+              `Current content:\n${existingContent}`,
+            ].join('\n\n')
+          : [
+              'You are a technical documentation writer editing an existing Wiki.js Markdown page.',
+              langInstruction,
+              'The user will request changes. Apply ONLY the requested changes, preserve everything else.',
+              'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
+              `Current path: ${suggestedPath}`,
+              `Current content:\n${existingContent}`,
+            ].join('\n\n');
+
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+          { role: 'system', content: refineSystemPrompt },
+          // Inject prior chat turns for context
+          ...chatHistory.map((turn) => ({ role: turn.role as 'user' | 'assistant', content: turn.content })),
+          { role: 'user', content: userMessage },
+        ];
+
+        const streamedJson = await streamJsonCompletion(
+          token, model, messages,
+          (chunk) => sendEvent('chunk', { content: chunk }),
+        );
+
+        const generated = extractJsonObject(streamedJson);
+        sendEvent('result', {
+          title: String(generated.title ?? suggestedTitle ?? ''),
+          content: String(generated.content ?? existingContent),
+          path: String(generated.path ?? suggestedPath),
+          format,
+        });
+        sendEvent('done', { ok: true });
+        endStream();
+        return;
+      }
+      // ─────────────────────────────────────────────────────────────────────────
 
       const contextParts: string[] = [
         `## Wiki Page Target`,
