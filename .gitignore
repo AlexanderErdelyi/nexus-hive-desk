@@ -8,3 +8,5 @@ dist/
 .env.local
 .env*.local
 prisma/dev.db
+
+apps/api/.recordings-cache/

@@ -68,6 +68,7 @@ interface GeneratedWorkItem {
   priority?: number | string;
   tags?: string;
   areaPath?: string;
+  screenshotPaths?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -228,6 +229,7 @@ function WorkItemForm({
   const [technicalSpec, setTechnicalSpec] = useState('');
   const [technicalSpecOpen, setTechnicalSpecOpen] = useState(false);
   const [recordings, setRecordings] = useState<Array<{ id: string; title?: string; processedAt?: string; duration?: number }>>([]);
+  const [screenshotPaths, setScreenshotPaths] = useState<string[]>([]);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [recordingsFolder, setRecordingsFolder] = useState('');
@@ -321,6 +323,7 @@ function WorkItemForm({
     mutationFn: () => api.post(`/api/projects/${projectId}/work-items`, {
       ...form,
       description: mergeDescriptionWithTechnicalSpec(form.description, technicalSpec),
+      screenshotPaths,
     }),
     onSuccess: () => {
       toast.success('Work item created in Azure DevOps ✔');
@@ -367,6 +370,7 @@ function WorkItemForm({
 
     setTechnicalSpec(nextTechnicalSpec);
     setTechnicalSpecOpen(Boolean(nextTechnicalSpec));
+    setScreenshotPaths(data.screenshotPaths ?? []);
     setAiGenerated(true);
     addChatMessage('agent', nextTitle
       ? `Draft ready: **${nextTitle}**. Review the generated fields below and adjust anything you need.`
@@ -488,7 +492,7 @@ function WorkItemForm({
             <X size={16} />
           </button>
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,5fr)]">
             <div className="flex min-h-0 flex-col border-b border-gray-200 bg-gradient-to-br from-violet-950 via-indigo-950 to-slate-950 text-white lg:border-b-0 lg:border-r lg:border-r-violet-900/70">
               <div className="border-b border-white/10 px-6 py-6">
                 <div className="flex items-start gap-3">
@@ -561,9 +565,9 @@ function WorkItemForm({
 
               <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
                 {(recordingsLoading || recordings.length > 0 || recordingsMcpId) && (
-                  <div className="mb-4 rounded-xl border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/50">
+                  <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/50">
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">📹 Teams Recordings</span>
+                      <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">📹 Teams Recordings</span>
                       {recordingsLoading && <Loader2 size={12} className="animate-spin text-gray-400" />}
                     </div>
                     {/* Folder input */}
@@ -607,7 +611,7 @@ function WorkItemForm({
                     )}
                   </div>
                 )}
-                <div className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-violet-200/70">Chat history</div>
+                <div className="mb-3 text-sm font-semibold text-violet-200/70">Chat history</div>
                 <div ref={chatRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                   {chatMessages.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 px-4 py-6 text-sm text-violet-100/70">
@@ -617,7 +621,7 @@ function WorkItemForm({
                     if (message.role === 'log') {
                       const pending = aiLoading && index === lastLogIndex;
                       return (
-                        <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-center gap-2 text-xs font-mono text-slate-300">
+                        <div key={`${message.timestamp.toISOString()}-${index}`} className="flex items-center gap-2 text-sm font-mono text-slate-300">
                           {pending ? (
                             <Loader2 size={12} className="shrink-0 animate-spin text-violet-300" />
                           ) : (
@@ -643,8 +647,8 @@ function WorkItemForm({
                         <div className="mt-1 rounded-xl bg-white/10 p-2 text-violet-200">
                           <Bot size={14} />
                         </div>
-                        <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-100 shadow-lg shadow-black/20">
-                          <div dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }} />
+                        <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-white/10 bg-slate-900/90 px-4 py-3 text-sm leading-relaxed text-slate-100 shadow-lg shadow-black/20">
+                          <div className="prose prose-sm prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }} />
                         </div>
                       </div>
                     );
@@ -658,8 +662,8 @@ function WorkItemForm({
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void handleGenerate();
                     }}
-                    rows={5}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+                    rows={4}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-base text-white placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
                     placeholder={`What do you want to create? Describe the ${form.type || 'work item'} in plain language… (Ctrl+Enter)`}
                   />
                   <div className="mt-3 flex items-center justify-between gap-3">

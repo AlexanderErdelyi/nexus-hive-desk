@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 
@@ -15,6 +17,13 @@ function azurePatchHeaders(pat: string): Record<string, string> {
   };
 }
 
+function azureAttachmentHeaders(pat: string): Record<string, string> {
+  return {
+    Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}`,
+    'Content-Type': 'application/octet-stream',
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -27,6 +36,8 @@ async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promi
 
 
 type ChatModelMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+type ScreenshotUpload = { index: number; url: string | null };
 
 type AdoClassificationNode = {
   name: string;
@@ -89,6 +100,14 @@ function getActiveIterationPaths(root?: AdoClassificationNode | null): string[] 
 
   if (root) visit(root, 0);
   return [...paths];
+}
+
+function replaceScreenshotPlaceholders(value: string | undefined, uploads: ScreenshotUpload[]): string | undefined {
+  if (!value) return value;
+
+  return uploads.reduce((content, upload) => (
+    upload.url ? content.replaceAll(`SCREENSHOT_PLACEHOLDER_${upload.index}`, upload.url) : content
+  ), value);
 }
 
 export async function workItemRoutes(app: FastifyInstance) {
@@ -245,6 +264,7 @@ export async function workItemRoutes(app: FastifyInstance) {
       tags?: string;
       areaPath?: string;
       iterationPath?: string;
+      screenshotPaths?: string[];
     };
   }>('/:id/work-items', async (req, reply) => {
     const project = await prisma.project.findUnique({ where: { id: req.params.id } });
@@ -257,24 +277,48 @@ export async function workItemRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
     }
 
-    const { type, title, description, acceptanceCriteria, priority, tags, areaPath, iterationPath } = req.body;
+    const { type, title, description, acceptanceCriteria, priority, tags, areaPath, iterationPath, screenshotPaths } = req.body;
     if (!type || !title?.trim()) {
       return reply.status(400).send({ error: 'validation', message: 'type and title are required' });
     }
 
-    // Build JSON Patch document
-    const patchDoc: Array<{ op: string; path: string; value: unknown }> = [
-      { op: 'add', path: '/fields/System.Title', value: title },
-    ];
-    if (description) patchDoc.push({ op: 'add', path: '/fields/System.Description', value: description });
-    if (acceptanceCriteria) patchDoc.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acceptanceCriteria });
-    if (priority) patchDoc.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: priority });
-    if (tags) patchDoc.push({ op: 'add', path: '/fields/System.Tags', value: tags });
-    if (areaPath) patchDoc.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
-    if (iterationPath) patchDoc.push({ op: 'add', path: '/fields/System.IterationPath', value: iterationPath });
-
     try {
       const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+      const screenshotUploads = await Promise.all((Array.isArray(screenshotPaths) ? screenshotPaths : []).map(async (screenshotPath, index) => {
+        if (typeof screenshotPath !== 'string' || !screenshotPath || !existsSync(screenshotPath)) {
+          return { index, url: null };
+        }
+
+        try {
+          const attachment = await fetchJsonWithInit<{ url?: string }>(
+            `${baseUrl}/${encodeURIComponent(project.adoProjectName!)}/_apis/wit/attachments?fileName=${encodeURIComponent(basename(screenshotPath))}&api-version=7.1`,
+            {
+              method: 'POST',
+              headers: azureAttachmentHeaders(conn.pat),
+              body: readFileSync(screenshotPath),
+            }
+          );
+
+          return { index, url: attachment.url ?? null };
+        } catch {
+          return { index, url: null };
+        }
+      }));
+
+      const descriptionWithScreenshots = replaceScreenshotPlaceholders(description, screenshotUploads);
+      const acceptanceCriteriaWithScreenshots = replaceScreenshotPlaceholders(acceptanceCriteria, screenshotUploads);
+
+      // Build JSON Patch document
+      const patchDoc: Array<{ op: string; path: string; value: unknown }> = [
+        { op: 'add', path: '/fields/System.Title', value: title },
+      ];
+      if (descriptionWithScreenshots) patchDoc.push({ op: 'add', path: '/fields/System.Description', value: descriptionWithScreenshots });
+      if (acceptanceCriteriaWithScreenshots) patchDoc.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acceptanceCriteriaWithScreenshots });
+      if (priority) patchDoc.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: priority });
+      if (tags) patchDoc.push({ op: 'add', path: '/fields/System.Tags', value: tags });
+      if (areaPath) patchDoc.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
+      if (iterationPath) patchDoc.push({ op: 'add', path: '/fields/System.IterationPath', value: iterationPath });
+
       const workItemType = encodeURIComponent(`$${type}`);
       const url = `${baseUrl}/${encodeURIComponent(project.adoProjectName)}/_apis/wit/workitems/${workItemType}?api-version=7.1`;
 
@@ -586,6 +630,7 @@ export async function workItemRoutes(app: FastifyInstance) {
 
       // ─── MCP Context (e.g. Teams recordings) ────────────────────────────────
       let mcpContext = '';
+      let screenshotPaths: string[] = [];
       if (agentId) {
         const agentWithMcp = await prisma.agent.findUnique({
           where: { id: agentId },
@@ -647,19 +692,23 @@ export async function workItemRoutes(app: FastifyInstance) {
                 else if (wiType.includes('doc')) summarizerTool = 'summarize_for_documentation';
 
                 sendLog('Loading full meeting transcript...');
-                // Fetch both the full transcript and the structured summary in parallel
-                const [transcriptResult, summaryResult] = await Promise.all([
+                // Fetch the transcript, structured summary, and screenshot analysis in parallel
+                const [transcriptResult, summaryResult, recordingAnalysisResult] = await Promise.all([
                   callMcpTool('node', [mcpPath], mcpEnv, 'get_full_transcript', { recording_id: recordingId }),
                   callMcpTool('node', [mcpPath], mcpEnv, summarizerTool, { recording_id: recordingId }),
+                  callMcpTool('node', [mcpPath], mcpEnv, 'get_recording_analysis', { recording_id: recordingId }),
                 ]);
 
                 const transcriptText = transcriptResult.content.find(c => c.type === 'text')?.text ?? '';
                 const summaryText = summaryResult.content.find(c => c.type === 'text')?.text ?? '';
+                const recordingAnalysisText = recordingAnalysisResult.content.find(c => c.type === 'text')?.text ?? '';
 
                 let transcriptData: Record<string, unknown> | null = null;
                 let summaryData: Record<string, unknown> | null = null;
+                let recordingAnalysisData: Record<string, unknown> | null = null;
                 try { transcriptData = JSON.parse(transcriptText); } catch { /* keep null */ }
                 try { summaryData = JSON.parse(summaryText); } catch { /* keep null */ }
+                try { recordingAnalysisData = JSON.parse(recordingAnalysisText); } catch { /* keep null */ }
 
                 if (transcriptData || summaryData) {
                   const lines: string[] = [
@@ -704,8 +753,27 @@ export async function workItemRoutes(app: FastifyInstance) {
                     }
                   }
 
+                  const screenshots = Array.isArray(recordingAnalysisData?.screenshots)
+                    ? (recordingAnalysisData.screenshots as Array<Record<string, unknown>>)
+                    : [];
+                  const existingScreenshotPaths: string[] = [];
+                  for (const screenshot of screenshots) {
+                    const screenshotPath = typeof screenshot.filePath === 'string' ? screenshot.filePath : '';
+                    if (!screenshotPath || !existsSync(screenshotPath)) continue;
+                    const placeholderIndex = existingScreenshotPaths.length;
+                    existingScreenshotPaths.push(screenshotPath);
+                    const rawTimestamp = typeof screenshot.timestamp === 'number'
+                      ? screenshot.timestamp
+                      : Number(screenshot.timestamp);
+                    const timestampLabel = Number.isFinite(rawTimestamp) ? `${rawTimestamp}s` : 'unknown';
+
+                    if (placeholderIndex === 0) lines.push('', '### Screenshots');
+                    lines.push(`- Screenshot at timestamp ${timestampLabel}: SCREENSHOT_PLACEHOLDER_${placeholderIndex} (filePath: ${screenshotPath.replace(/\\/g, '/')})`);
+                  }
+
+                  screenshotPaths = existingScreenshotPaths;
                   mcpContext = lines.join('\n');
-                  sendLog('Full meeting transcript + summary loaded ✓');
+                  sendLog(`Full meeting transcript + summary loaded ✓${existingScreenshotPaths.length > 0 ? ` (${existingScreenshotPaths.length} screenshot${existingScreenshotPaths.length === 1 ? '' : 's'})` : ''}`);
                 }
               }
             } catch (mcpErr) {
@@ -737,6 +805,7 @@ A Teams Meeting Recording context is provided above. You MUST:
    - **Implementierungshinweise**: If AL code structure is mentioned, include a code block with the suggested structure
    - **Hinweise**: Important notes, constraints, things to preserve
 3. Acceptance criteria must be a bulleted list matching the meeting discussion points exactly
+4. If screenshots are listed above, include them in the description using the placeholder exactly as written: \`![Screenshot – Ist-Zustand (10s)](SCREENSHOT_PLACEHOLDER_0)\`. The placeholders will be replaced with real URLs after upload.
 ` : ''}
 IMPORTANT: Follow the language and style instructions above exactly. Write ALL text fields in the same language as the agent system prompt specifies (default German).
 Return ONLY valid JSON with these fields:
@@ -762,7 +831,7 @@ Prefer one of the provided work item types and area paths when context is availa
         ]
       );
 
-      sendEvent('result', generated);
+      sendEvent('result', { ...generated, screenshotPaths });
       sendEvent('done', { ok: true });
       endStream();
     } catch (error) {
