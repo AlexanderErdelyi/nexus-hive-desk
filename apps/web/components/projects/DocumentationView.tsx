@@ -3,17 +3,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   FilePlus2,
   Loader2,
   PencilLine,
+  Plus,
   RefreshCw,
   Search,
   Settings2,
+  Sparkles,
   Wifi,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
@@ -51,9 +55,42 @@ interface WikiPageDraft {
   path: string;
   title: string;
   content: string;
-  locale: string;
+  locale: 'de' | 'en';
   description: string;
   tags: string;
+}
+
+interface TreeNode {
+  path: string;
+  fragment: string;
+  title: string;
+  description?: string;
+  children: TreeNode[];
+  hasChildren: boolean;
+  page?: WikiPageSummary;
+  isPage: boolean;
+}
+
+interface RecordingItem {
+  id: string;
+  title?: string;
+  processedAt?: string;
+}
+
+interface WorkItemSource {
+  id: number;
+  title: string;
+  type: string;
+  state: string;
+  description?: string | null;
+  acceptanceCriteria?: string | null;
+}
+
+interface GeneratedWikiPage {
+  title?: string;
+  content?: string;
+  path?: string;
+  message?: string;
 }
 
 function getErrorMessage(error: unknown) {
@@ -74,15 +111,18 @@ function getString(value: Record<string, unknown>, keys: string[], fallback = ''
 
 function normalizeSearchResults(data: unknown): WikiPageSummary[] {
   if (Array.isArray(data)) {
-    return data.filter(isRecord).map((item) => ({
-      id: getString(item, ['id']),
-      path: getString(item, ['path', 'slug']),
-      title: getString(item, ['title', 'name'], getString(item, ['path', 'slug'])),
-      description: getString(item, ['description']),
-      url: getString(item, ['url']),
-      locale: getString(item, ['locale']),
-      updatedAt: getString(item, ['updatedAt']),
-    })).filter((item) => item.path);
+    return data
+      .filter(isRecord)
+      .map((item) => ({
+        id: getString(item, ['id']),
+        path: getString(item, ['path', 'slug']),
+        title: getString(item, ['title', 'name'], getString(item, ['path', 'slug'])),
+        description: getString(item, ['description']),
+        url: getString(item, ['url']),
+        locale: getString(item, ['locale']),
+        updatedAt: getString(item, ['updatedAt']),
+      }))
+      .filter((item) => item.path);
   }
 
   if (isRecord(data)) {
@@ -110,7 +150,9 @@ function normalizePage(data: unknown): WikiPage | null {
 
   const tagsValue = record.tags;
   const tags = Array.isArray(tagsValue)
-    ? tagsValue.map((tag) => String(tag).trim()).filter(Boolean)
+    ? tagsValue
+      .map((tag) => (isRecord(tag) ? getString(tag, ['tag']) : String(tag)).trim())
+      .filter(Boolean)
     : typeof tagsValue === 'string'
       ? tagsValue.split(',').map((tag) => tag.trim()).filter(Boolean)
       : [];
@@ -121,7 +163,7 @@ function normalizePage(data: unknown): WikiPage | null {
     title: getString(record, ['title', 'name'], getString(record, ['path', 'slug'])),
     description: getString(record, ['description']),
     url: getString(record, ['url']),
-    locale: getString(record, ['locale'], 'de'),
+    locale: (getString(record, ['locale'], 'de') === 'en' ? 'en' : 'de'),
     updatedAt: getString(record, ['updatedAt']),
     content: getString(record, ['content', 'markdown', 'body']),
     found: typeof record.found === 'boolean' ? record.found : true,
@@ -134,9 +176,95 @@ function buildWikiPagesUrl(mcpId: string, params: Record<string, string>) {
   return `/api/mcp-connections/${mcpId}/wiki-pages?${search.toString()}`;
 }
 
-function rememberPage(list: WikiPageSummary[], page: WikiPageSummary) {
-  const next = [page, ...list.filter((entry) => entry.path !== page.path)];
-  return next.slice(0, 8);
+function buildWikiTreeUrl(mcpId: string, locale: 'de' | 'en') {
+  return `/api/mcp-connections/${mcpId}/wiki-tree?locale=${locale}`;
+}
+
+function toDraft(page: WikiPage, fallbackLocale: 'de' | 'en'): WikiPageDraft {
+  const locale = page.locale === 'en' ? 'en' : fallbackLocale;
+  return {
+    path: page.path,
+    title: page.title,
+    content: page.content,
+    locale,
+    description: page.description ?? '',
+    tags: page.tags.join(', '),
+  };
+}
+
+function parseListInput(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatWorkItemContent(workItem: WorkItemSource) {
+  return [
+    `Work item #${workItem.id}`,
+    `Title: ${workItem.title}`,
+    `Type: ${workItem.type}`,
+    `State: ${workItem.state}`,
+    workItem.description ? `Description:\n${workItem.description}` : '',
+    workItem.acceptanceCriteria ? `Acceptance Criteria:\n${workItem.acceptanceCriteria}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildTree(pages: WikiPageSummary[]): TreeNode[] {
+  const nodeMap = new Map<string, TreeNode>();
+  const roots: TreeNode[] = [];
+
+  const getOrCreateNode = (path: string, fragment: string) => {
+    const existing = nodeMap.get(path);
+    if (existing) return existing;
+    const node: TreeNode = {
+      path,
+      fragment,
+      title: fragment,
+      children: [],
+      hasChildren: false,
+      isPage: false,
+    };
+    nodeMap.set(path, node);
+    return node;
+  };
+
+  for (const page of [...pages].sort((a, b) => a.path.localeCompare(b.path))) {
+    const segments = page.path.split('/').filter(Boolean);
+    let parent: TreeNode | null = null;
+
+    segments.forEach((segment, index) => {
+      const path = segments.slice(0, index + 1).join('/');
+      const node = getOrCreateNode(path, segment);
+
+      if (!parent) {
+        if (!roots.includes(node)) roots.push(node);
+      } else if (!parent.children.includes(node)) {
+        parent.children.push(node);
+        parent.hasChildren = true;
+      }
+
+      if (index === segments.length - 1) {
+        node.title = page.title || segment;
+        node.description = page.description;
+        node.page = page;
+        node.isPage = true;
+      }
+
+      parent = node;
+    });
+  }
+
+  const sortNodes = (nodes: TreeNode[]) => {
+    nodes.sort((a, b) => a.path.localeCompare(b.path));
+    nodes.forEach((node) => {
+      node.hasChildren = node.children.length > 0;
+      if (node.children.length > 0) sortNodes(node.children);
+    });
+  };
+
+  sortNodes(roots);
+  return roots;
 }
 
 export function DocumentationView({ projectId, customerId }: DocumentationViewProps) {
@@ -148,7 +276,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [activeLocale, setActiveLocale] = useState<'de' | 'en'>('de');
   const [isEditing, setIsEditing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [recentPages, setRecentPages] = useState<WikiPageSummary[]>([]);
+  const [expandedPaths, setExpandedPaths] = useState<string[] | null>(null);
   const [draft, setDraft] = useState<WikiPageDraft>({
     path: `projects/${projectId}`,
     title: '',
@@ -157,15 +285,35 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     description: '',
     tags: '',
   });
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiLogs, setAiLogs] = useState<string[]>([]);
+  const [aiStreamText, setAiStreamText] = useState('');
+  const [workItemInput, setWorkItemInput] = useState('');
+  const [loadedWorkItem, setLoadedWorkItem] = useState<WorkItemSource | null>(null);
+  const [selectedRecordingId, setSelectedRecordingId] = useState('');
+  const [repoQueryInput, setRepoQueryInput] = useState('');
+  const [customInstructions, setCustomInstructions] = useState('');
+  const aiLogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 400);
     return () => window.clearTimeout(timeout);
   }, [searchTerm]);
 
+  useEffect(() => {
+    if (!aiLogRef.current) return;
+    aiLogRef.current.scrollTop = aiLogRef.current.scrollHeight;
+  }, [aiLogs, aiStreamText]);
+
   const connectionsQuery = useQuery({
     queryKey: ['mcp-connections', 'wiki-js'],
     queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections?type=wiki_js'),
+  });
+
+  const teamsConnectionsQuery = useQuery({
+    queryKey: ['mcp-connections', 'teams-recorder'],
+    queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections?type=teams_recorder'),
   });
 
   const wikiConnections = useMemo(() => {
@@ -178,66 +326,83 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     return scoped.length > 0 ? scoped : connections;
   }, [connectionsQuery.data, customerId, projectId]);
 
-  useEffect(() => {
-    if (!selectedMcpId && wikiConnections[0]?.id) {
-      setSelectedMcpId(wikiConnections[0].id);
-    }
-    if (selectedMcpId && !wikiConnections.some((connection) => connection.id === selectedMcpId)) {
-      setSelectedMcpId(wikiConnections[0]?.id ?? '');
-    }
-  }, [selectedMcpId, wikiConnections]);
+  const teamsConnections = useMemo(() => {
+    const connections = teamsConnectionsQuery.data?.data ?? [];
+    const scoped = connections.filter((connection) => {
+      if (connection.projectId && connection.projectId !== projectId) return false;
+      if (connection.customerId && connection.customerId !== customerId) return false;
+      return true;
+    });
+    return scoped.length > 0 ? scoped : connections;
+  }, [teamsConnectionsQuery.data, customerId, projectId]);
 
-  const selectedConnection = wikiConnections.find((connection) => connection.id === selectedMcpId);
+  const activeMcpId = wikiConnections.some((connection) => connection.id === selectedMcpId)
+    ? selectedMcpId
+    : (wikiConnections[0]?.id ?? '');
+  const activeTeamsMcpId = teamsConnections[0]?.id ?? '';
+
+  const selectedConnection = wikiConnections.find((connection) => connection.id === activeMcpId);
 
   const searchQuery = useQuery({
-    queryKey: ['wiki-pages-search', selectedMcpId, debouncedSearch, activeLocale],
-    enabled: Boolean(selectedMcpId && debouncedSearch),
-    queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(selectedMcpId, { query: debouncedSearch, locale: activeLocale })),
+    queryKey: ['wiki-pages-search', activeMcpId, debouncedSearch, activeLocale],
+    enabled: Boolean(activeMcpId && debouncedSearch),
+    queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(activeMcpId, { query: debouncedSearch, locale: activeLocale })),
+  });
+
+  const treeQuery = useQuery({
+    queryKey: ['wiki-tree', activeMcpId, activeLocale],
+    enabled: Boolean(activeMcpId),
+    queryFn: () => api.get<{ data: WikiPageSummary[] }>(buildWikiTreeUrl(activeMcpId, activeLocale)),
+  });
+
+  const recordingsQuery = useQuery({
+    queryKey: ['mcp-recordings', activeTeamsMcpId],
+    enabled: Boolean(activeTeamsMcpId),
+    queryFn: () => api.get<{ data: RecordingItem[] }>(`/api/mcp-connections/${activeTeamsMcpId}/recordings`),
   });
 
   const pageQuery = useQuery({
-    queryKey: ['wiki-page', selectedMcpId, selectedPath, activeLocale],
-    enabled: Boolean(selectedMcpId && selectedPath),
-    queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(selectedMcpId, { path: selectedPath, locale: activeLocale })),
+    queryKey: ['wiki-page', activeMcpId, selectedPath, activeLocale],
+    enabled: Boolean(activeMcpId && selectedPath),
+    queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(activeMcpId, { path: selectedPath, locale: activeLocale })),
   });
 
   const currentPage = useMemo(() => normalizePage(pageQuery.data?.data), [pageQuery.data?.data]);
-
-  useEffect(() => {
-    if (!currentPage || isEditing || isCreating) return;
-    setDraft({
-      path: currentPage.path,
-      title: currentPage.title,
-      content: currentPage.content,
-      locale: currentPage.locale || activeLocale,
-      description: currentPage.description ?? '',
-      tags: currentPage.tags.join(', '),
-    });
-    if (currentPage.locale === 'de' || currentPage.locale === 'en') {
-      setActiveLocale(currentPage.locale);
-    }
-  }, [activeLocale, currentPage, isCreating, isEditing]);
+  const searchResults = useMemo(() => normalizeSearchResults(searchQuery.data?.data), [searchQuery.data?.data]);
+  const treeNodes = useMemo(() => buildTree(treeQuery.data?.data ?? []), [treeQuery.data?.data]);
+  const recordings = recordingsQuery.data?.data ?? [];
+  const defaultExpandedPaths = useMemo(() => treeNodes.slice(0, 6).map((node) => node.path), [treeNodes]);
+  const expandedSet = useMemo(() => new Set(expandedPaths ?? defaultExpandedPaths), [defaultExpandedPaths, expandedPaths]);
 
   useEffect(() => {
     if (connectionsQuery.error) toast.error(getErrorMessage(connectionsQuery.error));
   }, [connectionsQuery.error]);
 
   useEffect(() => {
+    if (teamsConnectionsQuery.error) toast.error(getErrorMessage(teamsConnectionsQuery.error));
+  }, [teamsConnectionsQuery.error]);
+
+  useEffect(() => {
     if (searchQuery.error) toast.error(getErrorMessage(searchQuery.error));
   }, [searchQuery.error]);
 
   useEffect(() => {
+    if (treeQuery.error) toast.error(getErrorMessage(treeQuery.error));
+  }, [treeQuery.error]);
+
+  useEffect(() => {
+    if (recordingsQuery.error) toast.error(getErrorMessage(recordingsQuery.error));
+  }, [recordingsQuery.error]);
+
+  useEffect(() => {
     if (pageQuery.error) {
       const msg = getErrorMessage(pageQuery.error);
-      // Don't toast for expected "page not found" situations
-      if (!msg.toLowerCase().includes('not found') && !msg.includes('6003')) {
-        toast.error(msg);
-      }
+      if (!msg.toLowerCase().includes('not found') && !msg.includes('6003')) toast.error(msg);
     }
   }, [pageQuery.error]);
 
   const saveMutation = useMutation({
-    mutationFn: (input: WikiPageDraft) => api.post<{ data: unknown }>(`/api/mcp-connections/${selectedMcpId}/wiki-pages`, {
+    mutationFn: (input: WikiPageDraft) => api.post<{ data: unknown }>(`/api/mcp-connections/${activeMcpId}/wiki-pages`, {
       path: input.path.trim(),
       title: input.title.trim(),
       content: input.content,
@@ -246,50 +411,322 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       tags: input.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
     }),
     onSuccess: async (_result, input) => {
-      const rememberedPage = {
-        path: input.path.trim(),
-        title: input.title.trim(),
-        locale: input.locale,
-      };
-      setRecentPages((previous) => rememberPage(previous, rememberedPage));
       setSelectedPath(input.path.trim());
-      setSearchTerm('');
-      setDebouncedSearch('');
+      setActiveLocale(input.locale);
       setIsCreating(false);
       setIsEditing(false);
-      await queryClient.invalidateQueries({ queryKey: ['wiki-pages-search', selectedMcpId] });
-      await queryClient.invalidateQueries({ queryKey: ['wiki-page', selectedMcpId, input.path.trim(), input.locale] });
+      setAiPanelOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['wiki-pages-search', activeMcpId] });
+      await queryClient.invalidateQueries({ queryKey: ['wiki-page', activeMcpId, input.path.trim(), input.locale] });
+      await queryClient.invalidateQueries({ queryKey: ['wiki-tree', activeMcpId] });
       toast.success('Page saved to Wiki.js');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
-  const searchResults = normalizeSearchResults(searchQuery.data?.data);
-  const rootSuggestions = useMemo<WikiPageSummary[]>(() => ([
-    { path: 'home', title: 'Home', description: 'Wiki.js home page', locale: activeLocale },
-  ]), [activeLocale]);
-  const browseItems = recentPages.length > 0 ? recentPages : rootSuggestions;
-  const listItems = debouncedSearch ? searchResults : browseItems;
+  const loadWorkItemMutation = useMutation({
+    mutationFn: (workItemId: number) => api.get<{ data: WorkItemSource }>(`/api/projects/${projectId}/work-items/${workItemId}`),
+    onSuccess: (result) => {
+      setLoadedWorkItem(result.data);
+      toast.success('Work item loaded');
+    },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  function updateExpanded(path: string, expanded?: boolean) {
+    setExpandedPaths((current) => {
+      const next = new Set(current ?? defaultExpandedPaths);
+      const shouldExpand = expanded ?? !next.has(path);
+      if (shouldExpand) next.add(path);
+      else next.delete(path);
+      return [...next];
+    });
+  }
+
+  function expandAncestors(path: string) {
+    const parts = path.split('/').filter(Boolean);
+    setExpandedPaths((current) => {
+      const next = new Set(current ?? defaultExpandedPaths);
+      parts.reduce((acc, part) => {
+        const nextPath = acc ? `${acc}/${part}` : part;
+        next.add(nextPath);
+        return nextPath;
+      }, '');
+      return [...next];
+    });
+  }
 
   function openPage(page: WikiPageSummary) {
+    if (!page.path) return;
     setSelectedPath(page.path);
     setActiveLocale(page.locale === 'en' ? 'en' : 'de');
     setIsCreating(false);
     setIsEditing(false);
-    setRecentPages((previous) => rememberPage(previous, page));
+    setAiPanelOpen(false);
+    expandAncestors(page.path);
   }
 
-  function startNewPage() {
+  function startNewPage(pathPrefix?: string, asChild = true) {
+    const normalizedPrefix = pathPrefix?.trim().replace(/\/+$/, '');
     setIsCreating(true);
     setIsEditing(true);
+    setAiPanelOpen(false);
     setSelectedPath('');
     setDraft({
-      path: `projects/${projectId}`,
+      path: normalizedPrefix ? (asChild ? `${normalizedPrefix}/` : normalizedPrefix) : `projects/${projectId}`,
       title: '',
       content: '',
       locale: activeLocale,
       description: '',
       tags: '',
+    });
+    if (normalizedPrefix) expandAncestors(normalizedPrefix);
+  }
+
+  function startEditPage(page?: WikiPageSummary) {
+    const source = page ?? currentPage ?? undefined;
+    if (!source) return;
+    const sourceLocale = source.locale === 'en' ? 'en' : 'de';
+
+    setSelectedPath(source.path);
+    setActiveLocale(sourceLocale);
+    setIsCreating(false);
+    setIsEditing(true);
+    setAiPanelOpen(false);
+    expandAncestors(source.path);
+
+    if (currentPage && currentPage.path === source.path) {
+      setDraft(toDraft(currentPage, sourceLocale));
+      return;
+    }
+
+    setDraft({
+      path: source.path,
+      title: source.title,
+      content: '',
+      locale: sourceLocale,
+      description: source.description ?? '',
+      tags: '',
+    });
+
+    if (!activeMcpId) return;
+    void api.get<{ data: unknown }>(buildWikiPagesUrl(activeMcpId, { path: source.path, locale: sourceLocale }))
+      .then((result) => {
+        const loadedPage = normalizePage(result.data);
+        if (loadedPage?.path === source.path) setDraft(toDraft(loadedPage, sourceLocale));
+      })
+      .catch(() => undefined);
+  }
+
+  function toggleAiPanel() {
+    if (!isCreating && !isEditing) {
+      if (currentPage && currentPage.found !== false) {
+        startEditPage(currentPage);
+      } else {
+        startNewPage(selectedPath || undefined, false);
+      }
+      setAiPanelOpen(true);
+      return;
+    }
+
+    setAiPanelOpen((current) => !current);
+  }
+
+  async function handleGenerate() {
+    if (!activeMcpId) {
+      toast.error('Select a Wiki.js connection first');
+      return;
+    }
+    if (!draft.path.trim()) {
+      toast.error('Enter a page path first');
+      return;
+    }
+
+    setAiLoading(true);
+    setAiLogs(['Preparing AI generation...']);
+    setAiStreamText('');
+
+    try {
+      const token = localStorage.getItem('nexus_auth_token');
+      const response = await fetch(`/api/mcp-connections/${activeMcpId}/generate-wiki-page`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          projectId,
+          path: draft.path.trim(),
+          title: draft.title.trim() || undefined,
+          locale: draft.locale,
+          sources: {
+            workItemId: loadedWorkItem?.id,
+            workItemContent: loadedWorkItem ? formatWorkItemContent(loadedWorkItem) : undefined,
+            recordingId: selectedRecordingId || undefined,
+            mcpTeamsId: selectedRecordingId ? activeTeamsMcpId || undefined : undefined,
+            repoFiles: parseListInput(repoQueryInput),
+            customPrompt: customInstructions.trim() || undefined,
+          },
+        }),
+      });
+
+      if (!response.ok || !response.body) {
+        const text = await response.text().catch(() => response.statusText);
+        throw new Error(text || 'Streaming request failed');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          let eventType = 'message';
+          let data = '';
+
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+
+          if (!data) continue;
+          const parsed = JSON.parse(data) as GeneratedWikiPage;
+
+          if (eventType === 'log' && parsed.message) {
+            setAiLogs((current) => [...current, parsed.message as string]);
+          }
+          if (eventType === 'chunk') {
+            setAiStreamText((current) => current + String(parsed.content ?? ''));
+          }
+          if (eventType === 'result') {
+            setDraft((current) => ({
+              ...current,
+              path: parsed.path ? String(parsed.path) : current.path,
+              title: current.title.trim() ? current.title : String(parsed.title ?? current.title),
+              content: String(parsed.content ?? current.content),
+            }));
+            setAiPanelOpen(false);
+            toast.success('Wiki draft generated — review it before saving ✨');
+          }
+          if (eventType === 'error') throw new Error(String(parsed.message ?? 'Streaming generation failed'));
+          if (eventType === 'done') return;
+        }
+      }
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  function handleLoadWorkItem() {
+    const workItemId = Number(workItemInput.trim());
+    if (!Number.isFinite(workItemId) || workItemId <= 0) {
+      toast.error('Enter a numeric work item ID');
+      return;
+    }
+    loadWorkItemMutation.mutate(workItemId);
+  }
+
+  const inputClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white';
+  const paneClass = 'min-h-0 flex-1 rounded-2xl border border-gray-200 bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-800/40';
+
+  function renderTreeNodes(nodes: TreeNode[], depth = 0) {
+    return nodes.map((node) => {
+      const showCollapsedChildren = depth >= 3 && node.children.length > 0;
+      const moreKey = `${node.path}::__more`;
+      const isSelected = selectedPath === node.path;
+
+      return (
+        <div key={node.path} className="space-y-1">
+          <div
+            className={`group flex items-center gap-1 rounded-xl border px-2 py-1.5 transition-colors ${
+              isSelected
+                ? 'border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/20'
+                : 'border-transparent hover:border-gray-200 hover:bg-white dark:hover:border-gray-700 dark:hover:bg-gray-800'
+            }`}
+            style={{ paddingLeft: `${depth * 16 + 8}px` }}
+          >
+            {node.hasChildren ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  updateExpanded(node.path);
+                }}
+                className="rounded-md p-0.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+              >
+                {expandedSet.has(node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            ) : (
+              <span className="w-[18px]" />
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (node.page) openPage(node.page);
+                else if (node.hasChildren) updateExpanded(node.path);
+              }}
+              className="min-w-0 flex-1 text-left"
+            >
+              <div className="truncate text-sm font-medium text-gray-900 dark:text-white">{node.title}</div>
+              <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">{node.fragment}</div>
+            </button>
+
+            <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  startNewPage(node.path);
+                }}
+                className="rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-indigo-300"
+                title="Create child page here"
+              >
+                <Plus size={14} />
+              </button>
+              {node.page && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    startEditPage(node.page);
+                  }}
+                  className="rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-indigo-300"
+                  title="Edit page"
+                >
+                  <PencilLine size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {node.hasChildren && expandedSet.has(node.path) && !showCollapsedChildren && (
+            <div className="space-y-1">{renderTreeNodes(node.children, depth + 1)}</div>
+          )}
+
+          {node.hasChildren && expandedSet.has(node.path) && showCollapsedChildren && (
+            <div className="space-y-1">
+              <button
+                type="button"
+                onClick={() => updateExpanded(moreKey)}
+                className="ml-8 rounded-lg px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
+              >
+                {expandedSet.has(moreKey) ? 'Hide deeper pages' : '... show deeper pages'}
+              </button>
+              {expandedSet.has(moreKey) && <div className="space-y-1">{renderTreeNodes(node.children, depth + 1)}</div>}
+            </div>
+          )}
+        </div>
+      );
     });
   }
 
@@ -315,6 +752,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     );
   }
 
+  const showEditor = isCreating || isEditing;
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900 lg:flex-row lg:items-center lg:justify-between">
@@ -326,18 +765,19 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
             </span>
           </div>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Browse, create and edit Wiki.js pages directly from NexusHiveDesk.
+            Browse, create, edit, and generate Wiki.js pages directly from NexusHiveDesk.
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <select
             className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-            value={selectedMcpId}
+            value={activeMcpId}
             onChange={(event) => {
               setSelectedMcpId(event.target.value);
               setSelectedPath('');
               setIsCreating(false);
               setIsEditing(false);
+              setAiPanelOpen(false);
             }}
           >
             {wikiConnections.map((connection) => (
@@ -345,7 +785,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
             ))}
           </select>
           <button
-            onClick={startNewPage}
+            type="button"
+            onClick={() => startNewPage()}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
           >
             <FilePlus2 size={15} /> New Page
@@ -353,96 +794,149 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div className="relative flex-1">
-              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Search wiki pages..."
-              />
+      <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <aside className="flex min-h-[760px] flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+          <div className={paneClass}>
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div className="relative flex-1">
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  className="w-full rounded-xl border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:placeholder-gray-500"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="Search wiki pages..."
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setDebouncedSearch('');
+                }}
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                Clear
+              </button>
             </div>
-            <button
-              onClick={() => {
-                setSearchTerm('');
-                setDebouncedSearch('');
-              }}
-              className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-            >
-              Browse
-            </button>
+
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+              <span>{selectedConnection?.name ?? 'Wiki.js connection'}</span>
+              <select
+                className="bg-transparent text-xs focus:outline-none"
+                value={activeLocale}
+                onChange={(event) => setActiveLocale(event.target.value as 'de' | 'en')}
+              >
+                <option value="de">DE</option>
+                <option value="en">EN</option>
+              </select>
+            </div>
+
+            <div className="max-h-[290px] space-y-2 overflow-y-auto pr-1">
+              {searchQuery.isFetching && debouncedSearch ? (
+                <div className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  <Loader2 size={14} className="animate-spin" /> Searching Wiki.js…
+                </div>
+              ) : debouncedSearch ? (
+                searchResults.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                    No pages found for this search.
+                  </div>
+                ) : (
+                  searchResults.map((page) => (
+                    <button
+                      key={`${page.path}-${page.locale ?? 'de'}`}
+                      type="button"
+                      onClick={() => openPage(page)}
+                      className={`w-full rounded-xl border px-3 py-3 text-left transition-colors ${
+                        selectedPath === page.path
+                          ? 'border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/20'
+                          : 'border-gray-200 hover:border-indigo-200 hover:bg-white dark:border-gray-700 dark:hover:border-indigo-800 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      <div className="truncate text-sm font-medium text-gray-900 dark:text-white">{page.title}</div>
+                      <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{page.path}</div>
+                      {page.description && (
+                        <div className="mt-2 line-clamp-2 text-xs text-gray-500 dark:text-gray-400">{page.description}</div>
+                      )}
+                    </button>
+                  ))
+                )
+              ) : (
+                <div className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  Type to search pages. The full page tree stays available below.
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="mb-4 flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/70 dark:text-gray-400">
-            <span>{selectedConnection?.name ?? 'Wiki.js connection'}</span>
-            <select
-              className="bg-transparent text-xs focus:outline-none"
-              value={activeLocale}
-              onChange={(event) => setActiveLocale(event.target.value as 'de' | 'en')}
-            >
-              <option value="de">DE</option>
-              <option value="en">EN</option>
-            </select>
-          </div>
+          <div className={`${paneClass} flex flex-col`}>
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Page tree</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Create child pages or jump straight into editing.</p>
+              </div>
+              <span className="rounded-full bg-white px-2 py-1 text-[11px] text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+                {(treeQuery.data?.data ?? []).length}
+              </span>
+            </div>
 
-          <div className="space-y-2">
-            {searchQuery.isFetching && debouncedSearch ? (
-              <div className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                <Loader2 size={14} className="animate-spin" /> Searching Wiki.js…
-              </div>
-            ) : listItems.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                No pages found for this search.
-              </div>
-            ) : (
-              listItems.map((page) => (
-                <button
-                  key={`${page.path}-${page.locale ?? 'de'}`}
-                  onClick={() => openPage(page)}
-                  className={`w-full rounded-xl border px-3 py-3 text-left transition-colors ${
-                    selectedPath === page.path
-                      ? 'border-indigo-300 bg-indigo-50 dark:border-indigo-700 dark:bg-indigo-900/20'
-                      : 'border-gray-200 hover:border-indigo-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:border-indigo-800 dark:hover:bg-gray-800'
-                  }`}
-                >
-                  <div className="truncate text-sm font-medium text-gray-900 dark:text-white">{page.title}</div>
-                  <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{page.path}</div>
-                  {page.description && (
-                    <div className="mt-2 line-clamp-2 text-xs text-gray-500 dark:text-gray-400">{page.description}</div>
-                  )}
-                </button>
-              ))
-            )}
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              {treeQuery.isLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 7 }).map((_, index) => (
+                    <div key={index} className="h-12 animate-pulse rounded-xl bg-gray-200/70 dark:bg-gray-800" />
+                  ))}
+                </div>
+              ) : treeNodes.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  No pages found.
+                </div>
+              ) : (
+                <div className="space-y-1">{renderTreeNodes(treeNodes)}</div>
+              )}
+            </div>
           </div>
         </aside>
 
-        <section className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-          {isCreating ? (
+        <section className="min-h-[760px] rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+          {showEditor ? (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 border-b border-gray-100 pb-4 dark:border-gray-800 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Create new page</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Write markdown and save it directly to Wiki.js.</p>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {isCreating ? 'Create new page' : 'Edit page'}
+                  </h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Write markdown and save it directly to Wiki.js.
+                  </p>
                 </div>
-                <button
-                  onClick={() => {
-                    setIsCreating(false);
-                    setIsEditing(false);
-                  }}
-                  className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                >
-                  Cancel
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={toggleAiPanel}
+                    className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-900/50 dark:bg-violet-900/20 dark:text-violet-300"
+                  >
+                    <Sparkles size={15} /> {aiPanelOpen ? 'Hide AI panel' : 'Generate with AI'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCreating(false);
+                      setIsEditing(false);
+                      setAiPanelOpen(false);
+                    }}
+                    className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Path</label>
                   <input
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    className={inputClass}
                     value={draft.path}
                     onChange={(event) => setDraft((current) => ({ ...current, path: event.target.value }))}
                     placeholder={`projects/${projectId}/overview`}
@@ -451,7 +945,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Title</label>
                   <input
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    className={inputClass}
                     value={draft.title}
                     onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
                     placeholder="Architecture overview"
@@ -460,9 +954,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Locale</label>
                   <select
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    className={inputClass}
                     value={draft.locale}
-                    onChange={(event) => setDraft((current) => ({ ...current, locale: event.target.value }))}
+                    onChange={(event) => setDraft((current) => ({ ...current, locale: event.target.value as 'de' | 'en' }))}
                   >
                     <option value="de">de</option>
                     <option value="en">en</option>
@@ -471,18 +965,149 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Tags</label>
                   <input
-                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    className={inputClass}
                     value={draft.tags}
                     onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
-                    placeholder="architecture, project"
+                    placeholder="architecture, onboarding"
                   />
                 </div>
               </div>
 
+              {aiPanelOpen && (
+                <div className="rounded-2xl border border-violet-200 bg-violet-50/70 p-4 dark:border-violet-900/50 dark:bg-violet-900/10">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-semibold text-violet-800 dark:text-violet-200">
+                        <Sparkles size={15} /> AI page generation
+                      </div>
+                      <p className="mt-1 text-xs text-violet-700/80 dark:text-violet-300/80">
+                        Pull in work items, recordings, and repo context, then generate a draft directly into the editor.
+                      </p>
+                    </div>
+                    {aiLoading && <Loader2 size={16} className="mt-0.5 animate-spin text-violet-600 dark:text-violet-300" />}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Work Item</label>
+                      <div className="flex gap-2">
+                        <input
+                          className={inputClass}
+                          value={workItemInput}
+                          onChange={(event) => setWorkItemInput(event.target.value)}
+                          placeholder="ADO work item ID"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleLoadWorkItem}
+                          disabled={loadWorkItemMutation.isPending || !workItemInput.trim()}
+                          className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {loadWorkItemMutation.isPending ? '...' : 'Load'}
+                        </button>
+                      </div>
+                      {loadedWorkItem && (
+                        <div className="mt-2 rounded-xl border border-violet-200 bg-white px-3 py-2 dark:border-violet-900/40 dark:bg-gray-900/60">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                              {loadedWorkItem.type}
+                            </span>
+                            <span className="text-[11px] text-gray-500 dark:text-gray-400">#{loadedWorkItem.id}</span>
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-gray-900 dark:text-white">{loadedWorkItem.title}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {activeTeamsMcpId && (
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Teams Recording</label>
+                        <select
+                          className={inputClass}
+                          value={selectedRecordingId}
+                          onChange={(event) => setSelectedRecordingId(event.target.value)}
+                        >
+                          <option value="">Select a recording</option>
+                          {recordings.map((recording) => (
+                            <option key={recording.id} value={recording.id}>
+                              {recording.title ?? recording.id}
+                            </option>
+                          ))}
+                        </select>
+                        {recordingsQuery.isFetching && (
+                          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading recordings…</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-4">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Repo files or keywords</label>
+                      <textarea
+                        rows={2}
+                        className={inputClass}
+                        value={repoQueryInput}
+                        onChange={(event) => setRepoQueryInput(event.target.value)}
+                        placeholder="src/wiki.ts, README, onboarding"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Custom instructions</label>
+                      <textarea
+                        rows={3}
+                        className={inputClass}
+                        value={customInstructions}
+                        onChange={(event) => setCustomInstructions(event.target.value)}
+                        placeholder="What should this page cover? Any special focus?"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-violet-200 bg-white p-3 dark:border-violet-900/40 dark:bg-gray-950/40">
+                    <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                      <span>Generation log</span>
+                      {aiStreamText && <span>{aiStreamText.length} streamed chars</span>}
+                    </div>
+                    <div ref={aiLogRef} className="max-h-40 space-y-2 overflow-y-auto pr-1 text-xs text-gray-600 dark:text-gray-300">
+                      {aiLogs.length === 0 ? (
+                        <p className="text-gray-500 dark:text-gray-400">Logs will appear here while AI builds the draft.</p>
+                      ) : (
+                        aiLogs.map((log, index) => (
+                          <div key={`${log}-${index}`} className="flex items-start gap-2">
+                            {aiLoading && index === aiLogs.length - 1 ? (
+                              <Loader2 size={12} className="mt-0.5 shrink-0 animate-spin text-violet-500" />
+                            ) : (
+                              <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
+                            )}
+                            <span>{log}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-xs text-violet-700/80 dark:text-violet-300/80">
+                      The generated title/path/content will stay fully editable before you save.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerate()}
+                      disabled={aiLoading}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                    >
+                      {aiLoading ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
+                      {aiLoading ? 'Generating…' : 'Generate'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
                 <input
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  className={inputClass}
                   value={draft.description}
                   onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
                   placeholder="Short summary shown in search results"
@@ -492,21 +1117,31 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Content</label>
                 <textarea
-                  className="min-h-[320px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                   value={draft.content}
                   onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
                   placeholder="# Overview"
                 />
               </div>
 
-              <button
-                onClick={() => saveMutation.mutate(draft)}
-                disabled={!draft.path.trim() || !draft.title.trim() || saveMutation.isPending}
-                className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-                Save to Wiki
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => saveMutation.mutate(draft)}
+                  disabled={!draft.path.trim() || !draft.title.trim() || saveMutation.isPending}
+                  className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                  Save to Wiki
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiPanelOpen((current) => !current)}
+                  className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  {aiPanelOpen ? 'Hide AI panel' : 'Show AI panel'}
+                </button>
+              </div>
             </div>
           ) : pageQuery.isLoading ? (
             <div className="flex min-h-[420px] items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400">
@@ -520,146 +1155,72 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                 <p className="mt-2 max-w-md text-sm text-gray-500 dark:text-gray-400">
                   The selected path does not exist in Wiki.js for locale {activeLocale}. You can create it as a new page.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => startNewPage(selectedPath, false)}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                >
+                  <FilePlus2 size={15} /> Create this page
+                </button>
               </div>
             ) : (
-            <div className="space-y-5">
-              <div className="flex flex-col gap-3 border-b border-gray-100 pb-4 dark:border-gray-800 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <h3 className="text-xl font-semibold text-gray-900 dark:text-white">{currentPage.title}</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">{currentPage.path}</span>
-                    <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">Locale: {currentPage.locale || activeLocale}</span>
-                    {currentPage.updatedAt && (
-                      <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">Updated: {currentPage.updatedAt}</span>
+              <div className="space-y-5">
+                <div className="flex flex-col gap-3 border-b border-gray-100 pb-4 dark:border-gray-800 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white">{currentPage.title}</h3>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">{currentPage.path}</span>
+                      <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">Locale: {currentPage.locale || activeLocale}</span>
+                      {currentPage.updatedAt && (
+                        <span className="rounded-full bg-gray-100 px-2.5 py-1 dark:bg-gray-800">Updated: {currentPage.updatedAt}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={toggleAiPanel}
+                      className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-900/50 dark:bg-violet-900/20 dark:text-violet-300"
+                    >
+                      <Sparkles size={15} /> Generate with AI
+                    </button>
+                    {currentPage.url && (
+                      <a
+                        href={currentPage.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                      >
+                        <ExternalLink size={14} /> Open Wiki
+                      </a>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => startEditPage(currentPage)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                    >
+                      <PencilLine size={15} /> Edit
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {currentPage.url && (
-                    <a
-                      href={currentPage.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                    >
-                      <ExternalLink size={14} /> Open Wiki
-                    </a>
-                  )}
-                  <button
-                    onClick={() => {
-                      setDraft({
-                        path: currentPage.path,
-                        title: currentPage.title,
-                        content: currentPage.content,
-                        locale: currentPage.locale || activeLocale,
-                        description: currentPage.description ?? '',
-                        tags: currentPage.tags.join(', '),
-                      });
-                      setIsEditing(true);
-                    }}
-                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-                  >
-                    <PencilLine size={15} /> Edit
-                  </button>
+
+                {currentPage.description && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{currentPage.description}</p>
+                )}
+                <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-950/40">
+                  <div
+                    className="prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-a:text-indigo-500 prose-table:text-xs"
+                    dangerouslySetInnerHTML={{ __html: currentPage.content || '<p>No content available.</p>' }}
+                  />
                 </div>
               </div>
-
-              {isEditing ? (
-                <div className="space-y-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Path</label>
-                      <input
-                        className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                        value={draft.path}
-                        onChange={(event) => setDraft((current) => ({ ...current, path: event.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Title</label>
-                      <input
-                        className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                        value={draft.title}
-                        onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Locale</label>
-                      <select
-                        className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                        value={draft.locale}
-                        onChange={(event) => setDraft((current) => ({ ...current, locale: event.target.value }))}
-                      >
-                        <option value="de">de</option>
-                        <option value="en">en</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Tags</label>
-                      <input
-                        className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                        value={draft.tags}
-                        onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Description</label>
-                    <input
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                      value={draft.description}
-                      onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Content</label>
-                    <textarea
-                      className="min-h-[340px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                      value={draft.content}
-                      onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={() => saveMutation.mutate(draft)}
-                      disabled={!draft.path.trim() || !draft.title.trim() || saveMutation.isPending}
-                      className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                    >
-                      {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-                      Save to Wiki
-                    </button>
-                    <button
-                      onClick={() => setIsEditing(false)}
-                      className="rounded-xl border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {currentPage.description && (
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{currentPage.description}</p>
-                  )}
-                  <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-950/40">
-                    <div
-                      className="prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-a:text-indigo-500 prose-table:text-xs"
-                      dangerouslySetInnerHTML={{ __html: currentPage.content || '<p>No content available.</p>' }}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
             )
           ) : (
             <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
               <BookOpen size={42} className="mb-4 text-emerald-400 dark:text-emerald-600" />
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Select a page to get started</h3>
               <p className="mt-2 max-w-md text-sm text-gray-500 dark:text-gray-400">
-                Search Wiki.js, browse your recent pages, or create a new page for this project.
+                Search Wiki.js, explore the page tree, or create a new page for this project.
               </p>
             </div>
           )}
