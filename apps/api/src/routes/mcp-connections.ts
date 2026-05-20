@@ -786,7 +786,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { path: string; title: string; content: string; locale?: string; description?: string; tags?: string[] | string };
+    Body: { path: string; title: string; content: string; locale?: string; description?: string; tags?: string[] | string; editor?: string };
   }>('/:id/wiki-pages', async (req, reply) => {
     const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
     if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
@@ -813,13 +813,14 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const locale = req.body.locale?.trim() || 'de';
     const content = req.body.content ?? '';
     const description = req.body.description?.trim() ?? '';
+    const editor = (req.body.editor === 'html' ? 'html' : 'markdown') as 'html' | 'markdown';
     const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
       const { data, source, mcpError } = await tryWikiJs(
         mcpCfg,
         'wikijs_upsert_page',
-        { path: pagePath, title, content, description, tags, locale, editor: 'markdown' },
+        { path: pagePath, title, content, description, tags, locale, editor },
         async () => {
           // Direct GraphQL: check if page exists first, then create or update
           const existing = await wikiJsGraphQL(wikiUrl, credential!, `
@@ -833,14 +834,14 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
                 pages { update(id: $id, title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, locale: $locale, path: $path, tags: $tags) {
                   responseResult { succeeded errorCode message } page { id path title }
                 }}
-              }`, { id: existingId, title, content, description, editor: 'markdown', isPublished: true, locale, path: pagePath, tags });
+              }`, { id: existingId, title, content, description, editor, isPublished: true, locale, path: pagePath, tags });
           }
           return wikiJsGraphQL(wikiUrl, credential!, `
             mutation CreatePage($title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $isPrivate: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
               pages { create(title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, isPrivate: $isPrivate, locale: $locale, path: $path, tags: $tags) {
                 responseResult { succeeded errorCode slug message } page { id path title }
               }}
-            }`, { title, content, description, editor: 'markdown', isPublished: true, isPrivate: false, locale, path: pagePath, tags });
+            }`, { title, content, description, editor, isPublished: true, isPrivate: false, locale, path: pagePath, tags });
         },
       );
       clearWikiTreeCache(connection.id);
@@ -858,6 +859,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       path: string;
       title?: string;
       locale?: string;
+      format?: 'markdown' | 'html';
       sources?: {
         workItemId?: number;
         workItemContent?: string;
@@ -893,6 +895,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const suggestedPath = req.body.path?.trim();
       const suggestedTitle = req.body.title?.trim();
       const locale = req.body.locale?.trim() || 'de';
+      const format = req.body.format === 'html' ? 'html' : 'markdown';
       const sources = req.body.sources ?? {};
 
       if (!projectId) throw new Error('projectId is required');
@@ -979,19 +982,42 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         sendLog('Custom instructions added');
       }
 
-      sendLog('Generating wiki page draft...');
-      const systemPrompt = [
-        'You are a technical documentation writer for a Wiki.js knowledge base.',
-        locale === 'de'
-          ? 'Write the title and full page content in German.'
-          : 'Write the title and full page content in English.',
-        'Use the provided sources to generate a polished wiki page in Markdown.',
-        'Return ONLY valid JSON with this shape: { "title": string, "content": string, "path": string }.',
-        'The content should include a concise introduction, well-structured headings, bullet points where useful, and implementation details grounded in the source material.',
-        'Do not invent unsupported facts. If the sources are incomplete, write sensible placeholders or clearly marked assumptions.',
-        `Prefer this path unless a better nested path is clearly justified: ${suggestedPath}`,
-        contextParts.join('\n\n'),
-      ].join('\n\n');
+      sendLog(`Generating ${format === 'html' ? 'HTML' : 'Markdown'} wiki page draft...`);
+      const langInstruction = locale === 'de'
+        ? 'Write the title and full page content in German.'
+        : 'Write the title and full page content in English.';
+
+      const systemPrompt = format === 'html'
+        ? [
+            'You are a technical documentation designer for a Wiki.js knowledge base.',
+            langInstruction,
+            'Generate a visually rich HTML page using only inline CSS (no external stylesheets, no <script>, no <link> tags).',
+            'The HTML will be stored in Wiki.js using its HTML editor — it must render beautifully inside Wiki.js.',
+            'Style guidelines:',
+            '- Dark-friendly neutral colors (#1C1C1A text, #8A8985 secondary, white cards with box-shadow)',
+            '- Hero/banner section at top: full-width colored div with bold white title and subtitle',
+            '- Navigation tabs row for sub-pages (styled as pill buttons in a flex row)',
+            '- Feature/function cards in a responsive grid (3 columns, each with icon area, bold heading, description, and link list)',
+            '- Use <div> based layout with inline flex/grid styles',
+            '- Section headings with bottom border, font-weight 600',
+            '- Breadcrumb navigation at top using <a> tags with muted color and › separators',
+            '- No external fonts — use: font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+            'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
+            'The "content" value must be the complete HTML string (escaped for JSON).',
+            'Do not invent unsupported facts. Clearly mark placeholders where information is missing.',
+            `Prefer this path unless a better nested path is clearly justified: ${suggestedPath}`,
+            contextParts.join('\n\n'),
+          ].join('\n\n')
+        : [
+            'You are a technical documentation writer for a Wiki.js knowledge base.',
+            langInstruction,
+            'Use the provided sources to generate a polished wiki page in Markdown.',
+            'Return ONLY valid JSON with this shape: { "title": string, "content": string, "path": string }.',
+            'The content should include a concise introduction, well-structured headings, bullet points where useful, and implementation details grounded in the source material.',
+            'Do not invent unsupported facts. If the sources are incomplete, write sensible placeholders or clearly marked assumptions.',
+            `Prefer this path unless a better nested path is clearly justified: ${suggestedPath}`,
+            contextParts.join('\n\n'),
+          ].join('\n\n');
 
       const streamedJson = await streamJsonCompletion(
         token,
@@ -1000,7 +1026,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
           { role: 'system', content: systemPrompt },
           {
             role: 'user',
-            content: `Generate a complete wiki page draft for ${suggestedPath}.${suggestedTitle ? ` Suggested title: ${suggestedTitle}.` : ''}`,
+            content: `Generate a complete wiki page draft for ${suggestedPath}.${suggestedTitle ? ` Suggested title: ${suggestedTitle}.` : ''} Format: ${format.toUpperCase()}.`,
           },
         ],
         (chunk) => sendEvent('chunk', { content: chunk }),
@@ -1011,6 +1037,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         title: String(generated.title ?? suggestedTitle ?? ''),
         content: String(generated.content ?? ''),
         path: String(generated.path ?? suggestedPath),
+        format,
       });
       sendEvent('done', { ok: true });
       endStream();

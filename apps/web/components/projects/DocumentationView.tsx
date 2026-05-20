@@ -291,6 +291,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLogs, setAiLogs] = useState<string[]>([]);
   const [aiStreamText, setAiStreamText] = useState('');
+  const [editorFormat, setEditorFormat] = useState<'markdown' | 'html'>('markdown');
   const [workItemInput, setWorkItemInput] = useState('');
   const [loadedWorkItem, setLoadedWorkItem] = useState<WorkItemSource | null>(null);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
@@ -415,13 +416,14 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   }, [pageQuery.error]);
 
   const saveMutation = useMutation({
-    mutationFn: (input: WikiPageDraft) => api.post<{ data: unknown }>(`/api/mcp-connections/${activeMcpId}/wiki-pages`, {
+    mutationFn: (input: WikiPageDraft & { editorFormat?: 'markdown' | 'html' }) => api.post<{ data: unknown }>(`/api/mcp-connections/${activeMcpId}/wiki-pages`, {
       path: input.path.trim(),
       title: input.title.trim(),
       content: input.content,
       locale: input.locale,
       description: input.description.trim(),
       tags: input.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      editor: input.editorFormat === 'html' ? 'html' : 'markdown',
     }),
     onSuccess: async (result, input) => {
       setSelectedPath(input.path.trim());
@@ -581,6 +583,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           path: draft.path.trim(),
           title: draft.title.trim() || undefined,
           locale: draft.locale,
+          format: editorFormat,
           sources: {
             workItemId: loadedWorkItem?.id,
             workItemContent: loadedWorkItem ? formatWorkItemContent(loadedWorkItem) : undefined,
@@ -634,6 +637,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               title: current.title.trim() ? current.title : String(parsed.title ?? current.title),
               content: String(parsed.content ?? current.content),
             }));
+            if (parsed.format === 'html' || parsed.format === 'markdown') {
+              setEditorFormat(parsed.format as 'html' | 'markdown');
+            }
             setAiPanelOpen(false);
             toast.success('Wiki draft generated — review it before saving ✨');
           }
@@ -959,7 +965,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                     {isCreating ? 'Create new page' : 'Edit page'}
                   </h3>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Write markdown and save it directly to Wiki.js.
+                    {editorFormat === 'html' ? 'Write HTML (inline CSS) and save directly to Wiki.js.' : 'Write markdown and save it directly to Wiki.js.'}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1036,7 +1042,26 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                         Pull in work items, recordings, and repo context, then generate a draft directly into the editor.
                       </p>
                     </div>
-                    {aiLoading && <Loader2 size={16} className="mt-0.5 animate-spin text-violet-600 dark:text-violet-300" />}
+                    <div className="flex shrink-0 items-center gap-1">
+                      {/* Format toggle */}
+                      <div className="flex rounded-lg border border-violet-200 dark:border-violet-900/50 overflow-hidden text-xs font-medium">
+                        <button
+                          type="button"
+                          onClick={() => setEditorFormat('markdown')}
+                          className={`px-3 py-1.5 transition-colors ${editorFormat === 'markdown' ? 'bg-violet-600 text-white' : 'text-violet-700 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-900/30'}`}
+                        >
+                          Markdown
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditorFormat('html')}
+                          className={`px-3 py-1.5 transition-colors ${editorFormat === 'html' ? 'bg-violet-600 text-white' : 'text-violet-700 hover:bg-violet-100 dark:text-violet-300 dark:hover:bg-violet-900/30'}`}
+                        >
+                          HTML
+                        </button>
+                      </div>
+                      {aiLoading && <Loader2 size={16} className="animate-spin text-violet-600 dark:text-violet-300" />}
+                    </div>
                   </div>
 
                   <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -1167,19 +1192,41 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Content</label>
+                <div className="mb-1 flex items-center gap-2">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Content</label>
+                  {/* Inline format toggle below AI panel */}
+                  <div className="flex rounded-md border border-gray-200 dark:border-gray-700 overflow-hidden text-xs font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setEditorFormat('markdown')}
+                      className={`px-2.5 py-0.5 transition-colors ${editorFormat === 'markdown' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+                    >
+                      Markdown
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorFormat('html')}
+                      className={`px-2.5 py-0.5 transition-colors ${editorFormat === 'html' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+                    >
+                      HTML
+                    </button>
+                  </div>
+                  {editorFormat === 'html' && (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">Wiki.js HTML editor — inline CSS only</span>
+                  )}
+                </div>
                 <textarea
-                  className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 font-mono text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                   value={draft.content}
                   onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
-                  placeholder="# Overview"
+                  placeholder={editorFormat === 'html' ? '<div style="...">\n  <!-- Your HTML content here -->\n</div>' : '# Overview'}
                 />
               </div>
 
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={() => saveMutation.mutate(draft)}
+                  onClick={() => saveMutation.mutate({ ...draft, editorFormat })}
                   disabled={!draft.path.trim() || !draft.title.trim() || saveMutation.isPending}
                   className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
