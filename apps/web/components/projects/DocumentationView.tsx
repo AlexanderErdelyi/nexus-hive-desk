@@ -1587,8 +1587,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                             </label>
                             <select
                               className={inputClass}
-                              value={selectedModel}
-                              onChange={(event) => setSelectedModel(event.target.value)}
+                              value={selectedModel.startsWith('custom:') ? 'custom' : selectedModel}
+                              onChange={(event) => {
+                                if (event.target.value === 'custom') setSelectedModel('custom:');
+                                else setSelectedModel(event.target.value);
+                              }}
                               disabled={!!selectedAgentId}
                             >
                               <option value="">Default (gpt-4o-mini)</option>
@@ -1602,11 +1605,27 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               <optgroup label="OpenAI Codex">
                                 <option value="codex-mini-latest">codex-mini-latest — code-focused</option>
                               </optgroup>
-                              <optgroup label="Anthropic Claude">
+                              <optgroup label="Anthropic Claude (GitHub Models)">
+                                <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
+                                <option value="claude-3-7-sonnet">claude-3-7-sonnet</option>
                                 <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
-                                <option value="claude-sonnet-4-6">claude-sonnet-4-6 — latest</option>
+                                <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
                               </optgroup>
+                              <option value="custom">Custom model ID…</option>
                             </select>
+                            {selectedModel.startsWith('custom:') && (
+                              <input
+                                type="text"
+                                className={`${inputClass} mt-1 font-mono text-xs`}
+                                placeholder="e.g. claude-sonnet-4-6 or gpt-4.5"
+                                value={selectedModel.slice(7)}
+                                onChange={(event) => setSelectedModel(`custom:${event.target.value}`)}
+                              />
+                            )}
+                            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                              Uses GitHub Models API — model must be in the{' '}
+                              <a href="https://github.com/marketplace/models" target="_blank" rel="noreferrer" className="underline text-violet-500">GitHub Models catalog</a>.
+                            </p>
                           </div>
                           {/* Agent */}
                           {projectAgents.length > 0 && (

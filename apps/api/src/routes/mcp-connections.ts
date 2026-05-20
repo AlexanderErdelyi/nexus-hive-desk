@@ -1040,7 +1040,12 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         }
       }
 
-      const model = resolvedModel;
+      // Strip 'custom:' prefix if user typed a custom model ID
+      const model = resolvedModel.startsWith('custom:')
+        ? resolvedModel.slice(7).trim() || 'gpt-4o-mini'
+        : resolvedModel;
+
+      sendLog(`Model: ${model}`);
 
       const project = await prisma.project.findUnique({ where: { id: projectId } });
       if (!project) throw new Error('Project not found');
