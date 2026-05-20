@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { executeAgentRun } from '../lib/agent-engine';
 
 function stripMCPCredentials(agent: any) {
   if (!agent?.mcpConnections) return agent;
@@ -177,12 +178,11 @@ export async function agentRoutes(app: FastifyInstance) {
         },
       });
 
-      const completedRun = await prisma.agentRun.update({
-        where: { id: run.id },
-        data: { status: 'completed', endedAt: new Date() },
-      });
+      // Fire-and-forget: execute in background so we don't block the HTTP response
+      const inputData = req.body.input ?? {};
+      void executeAgentRun(agent.id, run.id, inputData);
 
-      return reply.status(201).send({ data: completedRun });
+      return reply.status(201).send({ data: run });
     }
   );
 
