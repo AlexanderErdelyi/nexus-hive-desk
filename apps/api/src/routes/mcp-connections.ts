@@ -957,6 +957,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         repoContent?: string;
         customPrompt?: string;
       };
+      styleSkillId?: string;
     };
   }>('/:id/generate-wiki-page', async (req, reply) => {
     reply.hijack();
@@ -985,6 +986,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const locale = req.body.locale?.trim() || 'de';
       const format = req.body.format === 'html' ? 'html' : 'markdown';
       const sources = req.body.sources ?? {};
+      const styleSkillId = req.body.styleSkillId?.trim() || null;
 
       if (!projectId) throw new Error('projectId is required');
       if (!suggestedPath) throw new Error('path is required');
@@ -1212,34 +1214,53 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         ? 'Write the title and full page content in German.'
         : 'Write the title and full page content in English.';
 
+      // Resolve HTML style: use selected skill's promptTemplate, fall back to hardcoded Nobilis style
+      let htmlStylePrompt: string | null = null;
+      if (format === 'html') {
+        if (styleSkillId) {
+          const styleSkill = await prisma.skill.findUnique({ where: { id: styleSkillId } });
+          htmlStylePrompt = styleSkill?.promptTemplate ?? null;
+          if (htmlStylePrompt) sendLog(`Using style: ${styleSkill?.name}`);
+        }
+        if (!htmlStylePrompt) {
+          // Fallback: fetch built-in Nobilis Green style
+          const defaultStyle = await prisma.skill.findFirst({ where: { name: 'WikiHtmlStyleNobilisGreen', builtIn: true } });
+          htmlStylePrompt = defaultStyle?.promptTemplate ?? null;
+        }
+      }
+
+      const HARDCODED_HTML_STYLE = [
+        'You are a technical documentation designer for a Wiki.js knowledge base.',
+        'Generate a visually rich HTML page using only inline CSS (no external stylesheets, no <script>, no <link> tags).',
+        'CRITICAL — Element rules (violations break the page in Wiki.js):',
+        '  1. NEVER use <h1>, <h2>, <h3>, <h4>, <h5>, <h6> — use <div style="font-size:...;font-weight:600;"> instead.',
+        '  2. NEVER use <p> — use <div style="font-size:13px;color:#5C5B57;line-height:1.5;"> for body text.',
+        '  3. NEVER use <ul>, <ol>, <li> — use <div> rows with a bullet character if needed.',
+        '  4. NEVER use <figure>, <figcaption>, <section>, <article>, <header>, <footer>, <nav>, <main> — use <div> or <span> only.',
+        '  5. NEVER use <em>, <i>, <b> — use <span style="font-style:italic"> or <span style="font-weight:600"> instead.',
+        '  6. <strong> and <a> and <code> are OK to use.',
+        'CRITICAL — CSS rules (any violation silently breaks layouts):',
+        '  7. NEVER use display:flex or display:grid ANYWHERE — not even for single-row nav.',
+        '  8. NEVER use grid-template-columns, auto-fit, minmax, or any CSS Grid/Flex property.',
+        '  9. For ALL multi-column layouts: use <table cellpadding="0" cellspacing="8" border="0">.',
+        '  10. For inline pill tabs: use display:inline-block on each <a> or <div> — no flex container.',
+        '  11. Use HTML entities for special chars: &rarr; &rsaquo; &uuml; &ouml; &auml; &Uuml; &amp; &mdash; etc.',
+        '  12. Do NOT set background-color or padding on the outermost wrapper div.',
+        '  13. Outer wrapper: <div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;color:#1C1C1A;line-height:1.5;padding:0;">',
+        'Style guidelines (proven to work — match exactly):',
+        '- Breadcrumb: <div style="padding:12px 0 0;"><span style="font-size:12px;font-weight:500;color:#8A8985;"><a style="color:#8A8985;text-decoration:none;">...</a><span style="margin:0 6px;">&rsaquo;</span>...</span></div>',
+        '- Tab pills: <div style="margin:12px 0 0;"> containing <a style="display:inline-block;background:#2D7A4F;border-radius:20px;padding:8px 20px;font-size:13px;font-weight:500;color:#FFFFFF;margin-right:8px;"> for active and <a style="display:inline-block;background:#FFFFFF;border:1px solid #E0DFDB;border-radius:20px;..."> for inactive',
+        '- Hero banner: <div style="background:#2D7A4F;border-radius:12px;padding:32px;margin:12px 0 24px;"> with <div style="font-size:32px;font-weight:600;color:#FFFFFF;"> for title and <div style="font-size:15px;color:#FFFFFFB3;"> for subtitle',
+        '- Section heading: <div style="font-size:18px;font-weight:600;color:#1C1C1A;margin-top:32px;margin-bottom:16px;">',
+        '- Feature cards: <table cellpadding="0" cellspacing="8" border="0"><tr><td style="vertical-align:top;background:transparent;"> with card div inside',
+        '- Card structure: <div style="background:#FFFFFF;border:1px solid #E0DFDB;border-radius:12px;overflow:hidden;"><div style="background:#EAF5EE;padding:16px 20px;border-bottom:1px solid #E0DFDB;"> header + <div style="padding:14px 20px 18px;"> body',
+        '- Screenshot: <div style="margin:20px 0;"><img src="..." style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);"><div style="text-align:center;color:#8A8985;font-size:14px;margin-top:8px;">caption</div></div>',
+      ].join('\n');
+
       const systemPrompt = format === 'html'
         ? [
-            'You are a technical documentation designer for a Wiki.js knowledge base.',
+            htmlStylePrompt ?? HARDCODED_HTML_STYLE,
             langInstruction,
-            'Generate a visually rich HTML page using only inline CSS (no external stylesheets, no <script>, no <link> tags).',
-            'CRITICAL — Element rules (violations break the page in Wiki.js):',
-            '  1. NEVER use <h1>, <h2>, <h3>, <h4>, <h5>, <h6> — use <div style="font-size:...;font-weight:600;"> instead.',
-            '  2. NEVER use <p> — use <div style="font-size:13px;color:#5C5B57;line-height:1.5;"> for body text.',
-            '  3. NEVER use <ul>, <ol>, <li> — use <div> rows with a bullet character if needed.',
-            '  4. NEVER use <figure>, <figcaption>, <section>, <article>, <header>, <footer>, <nav>, <main> — use <div> or <span> only.',
-            '  5. NEVER use <em>, <i>, <b> — use <span style="font-style:italic"> or <span style="font-weight:600"> instead.',
-            '  6. <strong> and <a> and <code> are OK to use.',
-            'CRITICAL — CSS rules (any violation silently breaks layouts):',
-            '  7. NEVER use display:flex or display:grid ANYWHERE — not even for single-row nav.',
-            '  8. NEVER use grid-template-columns, auto-fit, minmax, or any CSS Grid/Flex property.',
-            '  9. For ALL multi-column layouts: use <table cellpadding="0" cellspacing="8" border="0">.',
-            '  10. For inline pill tabs: use display:inline-block on each <a> or <div> — no flex container.',
-            '  11. Use HTML entities for special chars: &rarr; &rsaquo; &uuml; &ouml; &auml; &Uuml; &amp; &mdash; etc.',
-            '  12. Do NOT set background-color or padding on the outermost wrapper div.',
-            '  13. Outer wrapper: <div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;color:#1C1C1A;line-height:1.5;padding:0;">',
-            'Style guidelines (proven to work — match exactly):',
-            '- Breadcrumb: <div style="padding:12px 0 0;"><span style="font-size:12px;font-weight:500;color:#8A8985;"><a style="color:#8A8985;text-decoration:none;">...</a><span style="margin:0 6px;">&rsaquo;</span>...</span></div>',
-            '- Tab pills: <div style="margin:12px 0 0;"> containing <a style="display:inline-block;background:#2D7A4F;border-radius:20px;padding:8px 20px;font-size:13px;font-weight:500;color:#FFFFFF;margin-right:8px;"> for active and <a style="display:inline-block;background:#FFFFFF;border:1px solid #E0DFDB;border-radius:20px;..."> for inactive',
-            '- Hero banner: <div style="background:#2D7A4F;border-radius:12px;padding:32px;margin:12px 0 24px;"> with <div style="font-size:32px;font-weight:600;color:#FFFFFF;"> for title and <div style="font-size:15px;color:#FFFFFFB3;"> for subtitle',
-            '- Section heading: <div style="font-size:18px;font-weight:600;color:#1C1C1A;margin-top:32px;margin-bottom:16px;">',
-            '- Feature cards: <table cellpadding="0" cellspacing="8" border="0"><tr><td style="vertical-align:top;background:transparent;"> with card div inside',
-            '- Card structure: <div style="background:#FFFFFF;border:1px solid #E0DFDB;border-radius:12px;overflow:hidden;"><div style="background:#EAF5EE;padding:16px 20px;border-bottom:1px solid #E0DFDB;"> header + <div style="padding:14px 20px 18px;"> body',
-            '- Screenshot: <div style="margin:20px 0;"><img src="..." style="max-width:100%;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.12);"><div style="text-align:center;color:#8A8985;font-size:14px;margin-top:8px;">caption</div></div>',
             screenshotInstruction,
             'Return ONLY valid JSON: { "title": string, "content": string, "path": string }',
             'The "content" value must be the complete HTML string (escaped for JSON).',

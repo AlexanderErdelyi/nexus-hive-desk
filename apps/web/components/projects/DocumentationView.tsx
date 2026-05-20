@@ -307,6 +307,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [repoBrowserOpen, setRepoBrowserOpen] = useState(false);
   const [repoBrowsePath, setRepoBrowsePath] = useState('/');
   const [customInstructions, setCustomInstructions] = useState('');
+  const [selectedStyleSkillId, setSelectedStyleSkillId] = useState('');
   const [debugLogOpen, setDebugLogOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<Array<{ ts: number; op: string; source: string; ok: boolean; detail?: string }>>([]);
   const aiLogRef = useRef<HTMLDivElement>(null);
@@ -397,6 +398,12 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     enabled: !!projectId,
   });
 
+  const wikiStylesQuery = useQuery({
+    queryKey: ['wiki-styles'],
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; description?: string; builtIn: boolean }> }>('/api/skills/wiki-styles'),
+    staleTime: 60_000,
+  });
+
   const repoTreeQuery = useQuery({
     queryKey: ['repo-tree', projectId, selectedRepoId, repoBrowsePath],
     queryFn: () => api.get<{ data: Array<{ name: string; path: string; type: string }> }>(
@@ -431,6 +438,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const treeNodes = useMemo(() => buildTree(treeQuery.data?.data ?? []), [treeQuery.data?.data]);
   const recordings = recordingsQuery.data?.data ?? [];
   const projectRepos = reposQuery.data?.data ?? [];
+  const wikiStyles = wikiStylesQuery.data?.data ?? [];
   const treeItems = repoTreeQuery.data?.data ?? [];
   const selectedRepoEntries = useMemo(() => new Set(parseListInput(repoQueryInput)), [repoQueryInput]);
   const defaultExpandedPaths = useMemo(() => treeNodes.slice(0, 6).map((node) => node.path), [treeNodes]);
@@ -688,6 +696,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           title: draft.title.trim() || undefined,
           locale: draft.locale,
           format: editorFormat,
+          styleSkillId: selectedStyleSkillId || undefined,
           sources: {
             workItemId: loadedWorkItem?.id,
             workItemContent: loadedWorkItem ? formatWorkItemContent(loadedWorkItem) : undefined,
@@ -1523,6 +1532,28 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                           placeholder="What should this page cover? Any special focus?"
                         />
                       </div>
+                      {editorFormat === 'html' && wikiStyles.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                            HTML Style
+                          </label>
+                          <select
+                            className={inputClass}
+                            value={selectedStyleSkillId}
+                            onChange={(event) => setSelectedStyleSkillId(event.target.value)}
+                          >
+                            <option value="">Default (built-in Nobilis Green)</option>
+                            {wikiStyles.map((style) => (
+                              <option key={style.id} value={style.id}>
+                                {style.name}{style.builtIn ? ' ✦' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                            Create custom styles in the Skills section (type: wiki-style).
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="mt-4 rounded-2xl border border-violet-200 bg-white p-3 dark:border-violet-900/40 dark:bg-gray-950/40">
