@@ -41,6 +41,21 @@ export async function customerRoutes(app: FastifyInstance) {
     return { data: customer };
   });
 
+  // ─── List customer projects ─────────────────────────────────────────────────
+  app.get<{ Params: { id: string } }>('/:id/projects', async (req, reply) => {
+    const customer = await prisma.customer.findUnique({ where: { id: req.params.id } });
+    if (!customer) {
+      return reply.status(404).send({ error: 'not_found', message: 'Customer not found' });
+    }
+
+    const projects = await prisma.project.findMany({
+      where: { customerId: req.params.id },
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { xliffFiles: true } } },
+    });
+    return { data: projects };
+  });
+
   // ─── Create customer ───────────────────────────────────────────────────────
   app.post<{ Body: { name: string; description?: string } }>('/', async (req, reply) => {
     const { name, description } = req.body;

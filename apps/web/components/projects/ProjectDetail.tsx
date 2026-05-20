@@ -11,10 +11,17 @@ import { api } from '@/lib/api';
 import { ProjectMembers } from './ProjectMembers';
 import { formatDate } from '@/lib/utils';
 
+interface Customer {
+  id: string;
+  name: string;
+}
+
 interface Project {
   id: string;
   name: string;
   description?: string;
+  customerId?: string | null;
+  customer?: Customer | null;
   sourceLanguage: string;
   targetLanguage: string;
   xliffFiles: Array<{
@@ -168,6 +175,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{project.name}</h1>
           {project.description && <p className="text-sm text-gray-500 dark:text-gray-400">{project.description}</p>}
+          {project.customer && (
+            <p className="mt-1 text-sm">
+              <a
+                href={`/customers/${project.customer.id}`}
+                className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+              >
+                {project.customer.name}
+              </a>
+            </p>
+          )}
         </div>
       </div>
 

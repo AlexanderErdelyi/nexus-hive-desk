@@ -7,10 +7,17 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 
+interface Customer {
+  id: string;
+  name: string;
+}
+
 interface Project {
   id: string;
   name: string;
   description?: string;
+  customerId?: string | null;
+  customer?: { id: string; name: string } | null;
   sourceLanguage: string;
   targetLanguage: string;
   createdAt: string;
@@ -21,22 +28,34 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Request failed';
 }
 
-export function ProjectsList() {
+export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string }) {
   const qc = useQueryClient();
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', description: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+  const [showCreate, setShowCreate] = useState(!!defaultCustomerId);
+  const [form, setForm] = useState({ name: '', description: '', customerId: defaultCustomerId ?? '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+  const [customerFilter, setCustomerFilter] = useState('');
+
+  const { data: customersData } = useQuery({
+    queryKey: ['customers'],
+    queryFn: () => api.get<{ data: Customer[] }>('/api/customers'),
+  });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => api.get<{ data: Project[] }>('/api/projects'),
+    queryKey: ['projects', customerFilter],
+    queryFn: () => {
+      const params = customerFilter ? `?customerId=${customerFilter}` : '';
+      return api.get<{ data: Project[] }>(`/api/projects${params}`);
+    },
   });
 
   const createMutation = useMutation({
-    mutationFn: (input: typeof form) => api.post('/api/projects', input),
+    mutationFn: (input: typeof form) => {
+      const { customerId, ...rest } = input;
+      return api.post('/api/projects', { ...rest, customerId: customerId || undefined });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
+      setForm({ name: '', description: '', customerId: '', sourceLanguage: 'en-US', targetLanguage: 'de-DE' });
       toast.success('Project created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -51,10 +70,25 @@ export function ProjectsList() {
   });
 
   const projects = data?.data ?? [];
+  const customers = customersData?.data ?? [];
 
   return (
     <div>
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Customer:</label>
+          <select
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+          >
+            <option value="">All</option>
+            <option value="none">Unassigned</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
@@ -83,6 +117,19 @@ export function ProjectsList() {
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Customer</label>
+              <select
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                value={form.customerId}
+                onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))}
+              >
+                <option value="">None (unassigned)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Source Language</label>
@@ -147,8 +194,16 @@ export function ProjectsList() {
                   <Trash2 size={15} />
                 </button>
               </div>
-              <div className="mt-3 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
                 <span className="rounded bg-gray-100 px-2 py-0.5 dark:bg-gray-800">{p.sourceLanguage} → {p.targetLanguage}</span>
+                {p.customer && (
+                  <a
+                    href={`/customers/${p.customer.id}`}
+                    className="rounded bg-indigo-50 px-2 py-0.5 font-medium text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                  >
+                    {p.customer.name}
+                  </a>
+                )}
                 <span>{p._count?.xliffFiles ?? 0} file(s)</span>
               </div>
               <div className="mt-3 text-xs text-gray-400 dark:text-gray-600">{formatDate(p.createdAt)}</div>
