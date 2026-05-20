@@ -1594,24 +1594,50 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               }}
                               disabled={!!selectedAgentId}
                             >
-                              <option value="">Default (gpt-4o-mini)</option>
-                              <optgroup label="OpenAI GPT">
-                                <option value="gpt-4o-mini">gpt-4o-mini — fast, cheap</option>
-                                <option value="gpt-4o">gpt-4o — smarter, balanced</option>
-                                <option value="gpt-4.1-mini">gpt-4.1-mini — fast + capable</option>
-                                <option value="gpt-4.1">gpt-4.1 — most capable GPT</option>
-                                <option value="o4-mini">o4-mini — reasoning</option>
+                              <option value="">Default (openai/gpt-4o-mini)</option>
+
+                              <optgroup label="── OpenAI GPT-4.x — General purpose ──">
+                                <option value="openai/gpt-4o-mini">gpt-4o-mini · fast, cheap · good for drafts</option>
+                                <option value="openai/gpt-4o">gpt-4o · balanced, multimodal</option>
+                                <option value="openai/gpt-4.1-nano">gpt-4.1-nano · fastest GPT-4.1, lowest cost</option>
+                                <option value="openai/gpt-4.1-mini">gpt-4.1-mini · fast + capable, better than 4o-mini</option>
+                                <option value="openai/gpt-4.1">gpt-4.1 · best overall · ideal for documentation</option>
                               </optgroup>
-                              <optgroup label="OpenAI Codex">
-                                <option value="codex-mini-latest">codex-mini-latest — code-focused</option>
+
+                              <optgroup label="── OpenAI GPT-5 — Latest generation ──">
+                                <option value="openai/gpt-5-nano">gpt-5-nano · ultra-fast, low latency</option>
+                                <option value="openai/gpt-5-mini">gpt-5-mini · lightweight gpt-5, cost-efficient</option>
+                                <option value="openai/gpt-5">gpt-5 · most capable · best for rich detailed docs</option>
                               </optgroup>
-                              <optgroup label="Anthropic Claude (GitHub Models)">
-                                <option value="claude-3-5-sonnet">claude-3-5-sonnet</option>
-                                <option value="claude-3-7-sonnet">claude-3-7-sonnet</option>
-                                <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
-                                <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+
+                              <optgroup label="── OpenAI o-series — Reasoning ──">
+                                <option value="openai/o4-mini">o4-mini · fast reasoning, great for structured output</option>
+                                <option value="openai/o3-mini">o3-mini · efficient reasoning</option>
+                                <option value="openai/o3">o3 · advanced reasoning + safety</option>
                               </optgroup>
-                              <option value="custom">Custom model ID…</option>
+
+                              <optgroup label="── Meta Llama 4 — Open source ──">
+                                <option value="meta/llama-4-scout-17b-16e-instruct">Llama 4 Scout · 10M context · multi-doc summarization</option>
+                                <option value="meta/llama-4-maverick-17b-128e-instruct-fp8">Llama 4 Maverick · creative writing, quality</option>
+                                <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B · strong multilingual reasoning</option>
+                              </optgroup>
+
+                              <optgroup label="── DeepSeek — Coding + Reasoning ──">
+                                <option value="deepseek/deepseek-r1-0528">DeepSeek-R1-0528 · best reasoning, code, BC logic</option>
+                                <option value="deepseek/deepseek-v3-0324">DeepSeek-V3 · coding, agents, function calling</option>
+                              </optgroup>
+
+                              <optgroup label="── Microsoft Phi-4 — Efficient ──">
+                                <option value="microsoft/phi-4">Phi-4 · 14B, highly capable, low latency</option>
+                                <option value="microsoft/phi-4-mini-instruct">Phi-4-mini · ultra-efficient, math + coding</option>
+                              </optgroup>
+
+                              <optgroup label="── Other ──">
+                                <option value="ai21-labs/ai21-jamba-1.5-large">Jamba 1.5 Large · 256K context · multilingual RAG</option>
+                                <option value="cohere/cohere-command-a">Cohere Command A · RAG, multilingual agents</option>
+                              </optgroup>
+
+                              <option value="custom">✏ Custom model ID…</option>
                             </select>
                             {selectedModel.startsWith('custom:') && (
                               <input
@@ -1623,8 +1649,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               />
                             )}
                             <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                              Uses GitHub Models API — model must be in the{' '}
-                              <a href="https://github.com/marketplace/models" target="_blank" rel="noreferrer" className="underline text-violet-500">GitHub Models catalog</a>.
+                              Uses <a href="https://github.com/marketplace/models" target="_blank" rel="noreferrer" className="underline text-violet-500">GitHub Models</a> — Claude is not available there. Use custom ID for any exact model name.
                             </p>
                           </div>
                           {/* Agent */}

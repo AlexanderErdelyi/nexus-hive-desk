@@ -334,19 +334,19 @@ async function streamJsonCompletion(
   messages: ChatModelMessage[],
   onChunk: (chunk: string) => void,
 ): Promise<string> {
-  // Claude models don't support response_format: json_object — use prompt instruction instead
-  const isClaudeModel = model.startsWith('claude-');
+  // Only OpenAI models support response_format: json_object
+  const isOpenAIModel = model.startsWith('openai/') || (!model.includes('/') && !model.startsWith('claude-'));
   const body: Record<string, unknown> = {
     model,
     messages,
     temperature: 0.4,
     stream: true,
   };
-  if (!isClaudeModel) {
+  if (isOpenAIModel) {
     body.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+  const response = await fetch('https://models.github.ai/inference/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1009,7 +1009,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       // ── Resolve agent + model ────────────────────────────────────────────────
       let agentSystemPrompt: string | null = null;
       let agentSkillPrompts: string[] = [];
-      let resolvedModel = requestedModel ?? (process.env.AI_MODEL ?? 'gpt-4o-mini');
+      let resolvedModel = requestedModel ?? (process.env.AI_MODEL ?? 'openai/gpt-4o-mini');
 
       if (agentId) {
         const agent = await prisma.agent.findUnique({
