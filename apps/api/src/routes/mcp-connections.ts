@@ -45,7 +45,52 @@ function getWikiJsConfig(connection: {
     ''
   ).replace(/\/$/, '') || undefined;
 
-  return { wikiUrl };
+  const scriptPath = typeof caps.scriptPath === 'string' && caps.scriptPath.trim() ? caps.scriptPath.trim() : undefined;
+  const pythonPath = typeof caps.pythonPath === 'string' && caps.pythonPath.trim() ? caps.pythonPath.trim() : 'python';
+
+  return { wikiUrl, scriptPath, pythonPath };
+}
+
+type WikiJsSource = 'mcp' | 'direct';
+
+interface WikiJsMcpConfig {
+  pythonPath: string;
+  scriptPath: string;
+  wikiUrl: string;
+  apiKey: string;
+}
+
+async function callWikiJsMcp(cfg: WikiJsMcpConfig, toolName: string, toolArgs: Record<string, unknown>): Promise<unknown> {
+  const { callMcpTool } = await import('../lib/mcp-client.js');
+  const result = await callMcpTool(
+    cfg.pythonPath,
+    [cfg.scriptPath],
+    { WIKIJS_URL: cfg.wikiUrl, WIKIJS_API_KEY: cfg.apiKey },
+    toolName,
+    toolArgs,
+  );
+  return parseMcpToolResponse(result);
+}
+
+async function tryWikiJs<T>(
+  mcpCfg: WikiJsMcpConfig | null,
+  toolName: string,
+  mcpArgs: Record<string, unknown>,
+  directFallback: () => Promise<T>,
+): Promise<{ data: T; source: WikiJsSource; mcpError?: string }> {
+  if (mcpCfg) {
+    try {
+      const data = await callWikiJsMcp(mcpCfg, toolName, mcpArgs) as T;
+      return { data, source: 'mcp' };
+    } catch (err) {
+      const mcpError = err instanceof Error ? err.message : 'MCP call failed';
+      console.warn(`[wiki-js] MCP call '${toolName}' failed, falling back to direct GraphQL: ${mcpError}`);
+      const data = await directFallback();
+      return { data, source: 'direct', mcpError };
+    }
+  }
+  const data = await directFallback();
+  return { data, source: 'direct' };
 }
 
 async function wikiJsGraphQL(
@@ -529,24 +574,33 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       }
 
       if (connection.type === 'wiki_js') {
-        const { wikiUrl } = getWikiJsConfig(connection);
-        const directWikiUrl = wikiUrl;
-        if (!directWikiUrl) {
+        const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
+        if (!wikiUrl) {
           return { data: { status: 'error', message: 'No Wiki.js URL configured' } };
         }
-        const res = await fetch(`${directWikiUrl}/graphql`, {
+        // Test direct GraphQL
+        const res = await fetch(`${wikiUrl}/graphql`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${credential}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: '{ site { title } }' }),
         });
         if (!res.ok) {
           const errText = await res.text();
           return { data: { status: 'error', message: `Wiki.js API returned ${res.status}: ${errText}` } };
         }
-        return { data: { status: 'ok', message: 'Connected to Wiki.js' } };
+        const directMsg = 'Direct GraphQL: connected';
+        if (!scriptPath) {
+          return { data: { status: 'ok', message: `${directMsg} (no MCP script configured)` } };
+        }
+        // Also test MCP if configured
+        try {
+          const { listMcpTools } = await import('../lib/mcp-client.js');
+          const tools = await listMcpTools(pythonPath, [scriptPath], { WIKIJS_URL: wikiUrl, WIKIJS_API_KEY: credential });
+          return { data: { status: 'ok', message: `${directMsg} + MCP: ${tools.length} tool(s) (${tools.map(t => t.name).join(', ')})` } };
+        } catch (mcpErr) {
+          const mcpMsg = mcpErr instanceof Error ? mcpErr.message : 'MCP failed';
+          return { data: { status: 'ok', message: `${directMsg} | MCP unavailable: ${mcpMsg}` } };
+        }
       }
 
       return { data: { status: 'ok', message: `Connection type '${connection.type}' stored — no adapter test available` } };
@@ -556,7 +610,59 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
   });
 
-  // ─── Wiki.js pages via direct GraphQL ────────────────────────────────────
+  // ─── Wiki.js MCP + direct status ─────────────────────────────────────────
+  app.get<{ Params: { id: string } }>('/:id/wiki-status', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'Not found' });
+    if (connection.type !== 'wiki_js') return reply.status(400).send({ error: 'invalid_type', message: 'Only wiki_js MCPs' });
+
+    let credential: string | null = null;
+    if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+      credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+    }
+
+    const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
+
+    // Test direct GraphQL
+    let directAvailable = false;
+    let directError: string | undefined;
+    try {
+      if (wikiUrl && credential) {
+        const res = await fetch(`${wikiUrl}/graphql`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: '{ site { title } }' }),
+        });
+        directAvailable = res.ok;
+        if (!res.ok) directError = `HTTP ${res.status}`;
+      } else {
+        directError = !wikiUrl ? 'Wiki.js URL not configured' : 'API key not configured';
+      }
+    } catch (err) {
+      directError = err instanceof Error ? err.message : 'Direct GraphQL failed';
+    }
+
+    // Test MCP (only if scriptPath configured)
+    let mcpConfigured = Boolean(scriptPath);
+    let mcpAvailable = false;
+    let mcpError: string | undefined;
+    if (scriptPath && wikiUrl && credential) {
+      try {
+        const { listMcpTools } = await import('../lib/mcp-client.js');
+        const tools = await listMcpTools(pythonPath, [scriptPath], { WIKIJS_URL: wikiUrl, WIKIJS_API_KEY: credential });
+        mcpAvailable = true;
+        mcpError = undefined;
+        return { data: { directAvailable, directError, mcpConfigured, mcpAvailable, mcpTools: tools.map(t => t.name), activeSource: 'mcp' as WikiJsSource } };
+      } catch (err) {
+        mcpError = err instanceof Error ? err.message : 'MCP failed';
+      }
+    }
+
+    const activeSource: WikiJsSource = (mcpAvailable ? 'mcp' : 'direct');
+    return { data: { directAvailable, directError, mcpConfigured, mcpAvailable, mcpError, activeSource } };
+  });
+
+  // ─── Wiki.js pages ────────────────────────────────────────────────────────
   app.get<{
     Params: { id: string };
     Querystring: { locale?: string };
@@ -576,25 +682,21 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
 
     const locale = req.query.locale?.trim() || 'de';
     const cached = readWikiTreeCache(connection.id, locale);
-    if (cached) return { data: cached };
+    if (cached) return { data: cached, source: 'direct' };
 
+    // Tree/list has no MCP tool — always use direct GraphQL
     try {
       const data = await wikiJsGraphQL(wikiUrl, credential, `
         query ListPages($locale: String!) {
           pages {
             list(locale: $locale, orderBy: PATH) {
-              id
-              path
-              title
-              description
-              locale
-              updatedAt
+              id path title description locale updatedAt
             }
           }
         }`, { locale }) as { pages?: { list?: WikiPageSummary[] } };
       const pages = (data.pages?.list ?? []).filter((page) => page?.path);
       writeWikiTreeCache(connection.id, locale, pages);
-      return { data: pages };
+      return { data: pages, source: 'direct' };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.status(502).send({ error: 'wiki_error', message });
@@ -617,30 +719,49 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
     if (!credential) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
 
-    const { wikiUrl } = getWikiJsConfig(connection);
+    const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
     if (!wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured (set baseUrl to the wiki URL)' });
 
     const locale = req.query.locale?.trim() || 'de';
+    const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
       if (req.query.path?.trim()) {
-        const data = await wikiJsGraphQL(wikiUrl, credential, `
-          query GetPage($path: String!, $locale: String!) {
-            pages { singleByPath(path: $path, locale: $locale) {
-              id path title description content tags { tag } updatedAt
-            }}
-          }`, { path: req.query.path.trim(), locale }) as Record<string, unknown>;
-        const page = (data as any)?.pages?.singleByPath ?? null;
-        return { data: page };
+        const path = req.query.path.trim();
+        const { data, source, mcpError } = await tryWikiJs(
+          mcpCfg,
+          'wikijs_get_page',
+          { path, locale },
+          async () => {
+            const gqlData = await wikiJsGraphQL(wikiUrl, credential!, `
+              query GetPage($path: String!, $locale: String!) {
+                pages { singleByPath(path: $path, locale: $locale) {
+                  id path title description content tags { tag } updatedAt
+                }}
+              }`, { path, locale }) as Record<string, unknown>;
+            return (gqlData as any)?.pages?.singleByPath ?? null;
+          },
+        );
+        return { data, source, ...(mcpError && { mcpError }) };
       } else {
-        const data = await wikiJsGraphQL(wikiUrl, credential, `
-          query SearchPages($query: String!, $locale: String!) {
-            pages { search(query: $query, locale: $locale) {
-              results { id path title description locale } totalHits
-            }}
-          }`, { query: req.query.query!.trim(), locale }) as Record<string, unknown>;
-        const results = (data as any)?.pages?.search?.results ?? [];
-        return { data: results };
+        const query = req.query.query!.trim();
+        const { data, source, mcpError } = await tryWikiJs(
+          mcpCfg,
+          'wikijs_search_pages',
+          { query, locale },
+          async () => {
+            const gqlData = await wikiJsGraphQL(wikiUrl, credential!, `
+              query SearchPages($query: String!, $locale: String!) {
+                pages { search(query: $query, locale: $locale) {
+                  results { id path title description locale } totalHits
+                }}
+              }`, { query, locale }) as Record<string, unknown>;
+            return (gqlData as any)?.pages?.search?.results ?? [];
+          },
+        );
+        // normalize MCP search result (returns { results: [...], totalHits: N })
+        const results = Array.isArray(data) ? data : ((data as any)?.results ?? []);
+        return { data: results, source, ...(mcpError && { mcpError }) };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -666,7 +787,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     }
     if (!credential) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
 
-    const { wikiUrl } = getWikiJsConfig(connection);
+    const { wikiUrl, scriptPath, pythonPath } = getWikiJsConfig(connection);
     if (!wikiUrl) return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured' });
 
     const tags = Array.isArray(req.body.tags)
@@ -677,34 +798,38 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const locale = req.body.locale?.trim() || 'de';
     const content = req.body.content ?? '';
     const description = req.body.description?.trim() ?? '';
+    const mcpCfg: WikiJsMcpConfig | null = scriptPath ? { pythonPath, scriptPath, wikiUrl, apiKey: credential } : null;
 
     try {
-      // Check if page exists first
-      const existing = await wikiJsGraphQL(wikiUrl, credential, `
-        query FindPage($path: String!, $locale: String!) {
-          pages { singleByPath(path: $path, locale: $locale) { id } }
-        }`, { path: pagePath, locale }) as Record<string, unknown>;
-      const existingId = (existing as any)?.pages?.singleByPath?.id as number | undefined;
-
-      let result: unknown;
-      if (existingId) {
-        result = await wikiJsGraphQL(wikiUrl, credential, `
-          mutation UpdatePage($id: Int!, $title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
-            pages { update(id: $id, title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, locale: $locale, path: $path, tags: $tags) {
-              responseResult { succeeded errorCode message } page { id path title }
-            }}
-          }`, { id: existingId, title, content, description, editor: 'markdown', isPublished: true, locale, path: pagePath, tags });
-      } else {
-        result = await wikiJsGraphQL(wikiUrl, credential, `
-          mutation CreatePage($title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $isPrivate: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
-            pages { create(title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, isPrivate: $isPrivate, locale: $locale, path: $path, tags: $tags) {
-              responseResult { succeeded errorCode slug message } page { id path title }
-            }}
-          }`, { title, content, description, editor: 'markdown', isPublished: true, isPrivate: false, locale, path: pagePath, tags });
-      }
-
+      const { data, source, mcpError } = await tryWikiJs(
+        mcpCfg,
+        'wikijs_upsert_page',
+        { path: pagePath, title, content, description, tags, locale, editor: 'markdown' },
+        async () => {
+          // Direct GraphQL: check if page exists first, then create or update
+          const existing = await wikiJsGraphQL(wikiUrl, credential!, `
+            query FindPage($path: String!, $locale: String!) {
+              pages { singleByPath(path: $path, locale: $locale) { id } }
+            }`, { path: pagePath, locale }) as Record<string, unknown>;
+          const existingId = (existing as any)?.pages?.singleByPath?.id as number | undefined;
+          if (existingId) {
+            return wikiJsGraphQL(wikiUrl, credential!, `
+              mutation UpdatePage($id: Int!, $title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
+                pages { update(id: $id, title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, locale: $locale, path: $path, tags: $tags) {
+                  responseResult { succeeded errorCode message } page { id path title }
+                }}
+              }`, { id: existingId, title, content, description, editor: 'markdown', isPublished: true, locale, path: pagePath, tags });
+          }
+          return wikiJsGraphQL(wikiUrl, credential!, `
+            mutation CreatePage($title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $isPrivate: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
+              pages { create(title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, isPrivate: $isPrivate, locale: $locale, path: $path, tags: $tags) {
+                responseResult { succeeded errorCode slug message } page { id path title }
+              }}
+            }`, { title, content, description, editor: 'markdown', isPublished: true, isPrivate: false, locale, path: pagePath, tags });
+        },
+      );
       clearWikiTreeCache(connection.id);
-      return { data: result };
+      return { data, source, ...(mcpError && { mcpError }) };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.status(502).send({ error: 'wiki_error', message });

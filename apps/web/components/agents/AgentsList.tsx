@@ -721,6 +721,7 @@ function McpTab() {
     recordingsFolder: '',
     wikiUrl: '',
     scriptPath: '',
+    pythonPath: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -730,12 +731,13 @@ function McpTab() {
 
   const createMutation = useMutation({
     mutationFn: (input: typeof form) => {
-      const { recordingsFolder, wikiUrl, scriptPath, ...rest } = input;
+      const { recordingsFolder, wikiUrl, scriptPath, pythonPath, ...rest } = input;
       const caps: Record<string, string> = {};
       if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
       if (input.type === 'wiki_js') {
         if (wikiUrl.trim()) caps.wikiUrl = wikiUrl.trim();
         if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
+        if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
       }
       const capabilities = Object.keys(caps).length > 0 ? JSON.stringify(caps) : undefined;
       return api.post('/api/mcp-connections', { ...rest, ...(capabilities ? { capabilities } : {}) });
@@ -752,6 +754,7 @@ function McpTab() {
         recordingsFolder: '',
         wikiUrl: '',
         scriptPath: '',
+        pythonPath: '',
       });
       toast.success('MCP connection created');
     },
@@ -785,6 +788,7 @@ function McpTab() {
       recordingsFolder: String(data.recordingsFolder ?? ''),
       wikiUrl: String(data.wikiUrl ?? ''),
       scriptPath: String(data.scriptPath ?? ''),
+      pythonPath: String(data.pythonPath ?? ''),
     });
     setShowAIPanel(false);
     setShowCreate(true);
@@ -918,6 +922,34 @@ function McpTab() {
                   Local folder where Teams recordings (.mp4 / .vtt) are stored. The folder will be scanned automatically each time recordings are fetched.
                 </p>
               </div>
+            )}
+            {form.type === 'wiki_js' && (
+              <>
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>MCP Server Script (optional)</label>
+                  <input
+                    className={inputClass}
+                    value={form.scriptPath}
+                    onChange={(e) => setForm((f) => ({ ...f, scriptPath: e.target.value }))}
+                    placeholder="C:/VSCodeProjects/GitHub/mcp-wikijs-server/server.py"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Path to the Wiki.js MCP <code>server.py</code>. If set, operations go through the MCP first with direct GraphQL as fallback.
+                  </p>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>Python Executable (optional)</label>
+                  <input
+                    className={inputClass}
+                    value={form.pythonPath}
+                    onChange={(e) => setForm((f) => ({ ...f, pythonPath: e.target.value }))}
+                    placeholder="C:/VSCodeProjects/GitHub/mcp-wikijs-server/.venv/Scripts/python.exe"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Python executable for the MCP venv. Defaults to <code>python</code> if left blank.
+                  </p>
+                </div>
+              </>
             )}
           </div>
           <div className="mt-4 flex gap-3">

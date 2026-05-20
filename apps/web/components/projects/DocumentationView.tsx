@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   Settings2,
   Sparkles,
   Wifi,
+  Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -364,7 +366,14 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const pageQuery = useQuery({
     queryKey: ['wiki-page', activeMcpId, selectedPath, activeLocale],
     enabled: Boolean(activeMcpId && selectedPath && !isCreating),
-    queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(activeMcpId, { path: selectedPath, locale: activeLocale })),
+    queryFn: () => api.get<{ data: unknown; source?: string; mcpError?: string }>(buildWikiPagesUrl(activeMcpId, { path: selectedPath, locale: activeLocale })),
+  });
+
+  const wikiStatusQuery = useQuery({
+    queryKey: ['wiki-status', activeMcpId],
+    enabled: Boolean(activeMcpId),
+    staleTime: 30_000,
+    queryFn: () => api.get<{ data: { directAvailable: boolean; mcpConfigured: boolean; mcpAvailable: boolean; mcpError?: string; activeSource: 'mcp' | 'direct' } }>(`/api/mcp-connections/${activeMcpId}/wiki-status`),
   });
 
   const currentPage = useMemo(() => normalizePage(pageQuery.data?.data), [pageQuery.data?.data]);
@@ -410,7 +419,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       description: input.description.trim(),
       tags: input.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
     }),
-    onSuccess: async (_result, input) => {
+    onSuccess: async (result, input) => {
       setSelectedPath(input.path.trim());
       setActiveLocale(input.locale);
       setIsCreating(false);
@@ -419,7 +428,16 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       await queryClient.invalidateQueries({ queryKey: ['wiki-pages-search', activeMcpId] });
       await queryClient.invalidateQueries({ queryKey: ['wiki-page', activeMcpId, input.path.trim(), input.locale] });
       await queryClient.invalidateQueries({ queryKey: ['wiki-tree', activeMcpId] });
-      toast.success('Page saved to Wiki.js');
+      await queryClient.invalidateQueries({ queryKey: ['wiki-status', activeMcpId] });
+      const source = (result as any)?.source as string | undefined;
+      const mcpError = (result as any)?.mcpError as string | undefined;
+      if (source === 'mcp') {
+        toast.success('Page saved via MCP');
+      } else if (mcpError) {
+        toast.warning(`Page saved (MCP failed, used direct GraphQL: ${mcpError})`);
+      } else {
+        toast.success('Page saved to Wiki.js');
+      }
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
@@ -763,6 +781,28 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
               <Wifi size={12} /> Sync with Wiki
             </span>
+            {wikiStatusQuery.data?.data && (() => {
+              const st = wikiStatusQuery.data.data;
+              if (st.mcpAvailable) {
+                return (
+                  <span title="Operations routed through MCP server" className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 dark:border-violet-900/50 dark:bg-violet-900/20 dark:text-violet-300">
+                    <Zap size={12} /> MCP
+                  </span>
+                );
+              }
+              if (st.mcpConfigured && !st.mcpAvailable) {
+                return (
+                  <span title={`MCP unavailable — using direct GraphQL. Error: ${st.mcpError ?? 'unknown'}`} className="inline-flex cursor-help items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                    <AlertTriangle size={12} /> MCP failed → Direct
+                  </span>
+                );
+              }
+              return (
+                <span title="Using direct GraphQL (no MCP configured)" className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+                  Direct GraphQL
+                </span>
+              );
+            })()}
           </div>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Browse, create, edit, and generate Wiki.js pages directly from NexusHiveDesk.
