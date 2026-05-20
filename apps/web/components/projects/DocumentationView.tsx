@@ -1607,10 +1607,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                               <optgroup label="── OpenAI GPT-5 — Latest generation ──">
                                 <option value="openai/gpt-5-nano">gpt-5-nano · ultra-fast, low latency</option>
                                 <option value="openai/gpt-5-mini">gpt-5-mini · lightweight gpt-5, cost-efficient</option>
-                                <option value="openai/gpt-5">gpt-5 · most capable · best for rich detailed docs</option>
+                                <option value="openai/gpt-5">gpt-5 · most capable · best for rich detailed docs ⚡</option>
                               </optgroup>
 
-                              <optgroup label="── OpenAI o-series — Reasoning ──">
+                              <optgroup label="── OpenAI o-series — Reasoning ⚡ ──">
                                 <option value="openai/o4-mini">o4-mini · fast reasoning, great for structured output</option>
                                 <option value="openai/o3-mini">o3-mini · efficient reasoning</option>
                                 <option value="openai/o3">o3 · advanced reasoning + safety</option>

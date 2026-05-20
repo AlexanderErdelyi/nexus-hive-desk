@@ -449,8 +449,13 @@ async function streamJsonCompletionOpenAICompat(
   onChunk: (chunk: string) => void,
   useJsonFormat: boolean,
 ): Promise<string> {
-  const body: Record<string, unknown> = { model, messages, temperature: 0.4, stream: true };
-  if (useJsonFormat) body.response_format = { type: 'json_object' };
+  // Reasoning/gpt-5 models don't accept temperature or response_format
+  const isReasoningModel = /\/(gpt-5|gpt-5-mini|gpt-5-nano|gpt-5-chat|o1|o1-mini|o1-preview|o3|o3-mini|o4-mini)$/.test(model)
+    || /deepseek-r1/.test(model);
+
+  const body: Record<string, unknown> = { model, messages, stream: true };
+  if (!isReasoningModel) body.temperature = 0.4;
+  if (useJsonFormat && !isReasoningModel) body.response_format = { type: 'json_object' };
 
   const response = await fetch(endpoint, {
     method: 'POST',
