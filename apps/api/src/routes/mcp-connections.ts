@@ -262,6 +262,17 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const env: Record<string, string> = {};
       if (credential) env.GITHUB_TOKEN = credential;
 
+      // Auto-process configured recordings folder before listing
+      let caps: Record<string, unknown> = {};
+      try { caps = connection.capabilities ? JSON.parse(connection.capabilities) : {}; } catch { /* ignore */ }
+      const recordingsFolder = caps.recordingsFolder as string | undefined;
+
+      if (recordingsFolder?.trim()) {
+        try {
+          await callMcpTool('node', [mcpPath], env, 'process_recording_folder', { folder_path: recordingsFolder.trim() });
+        } catch { /* non-fatal — still list what's cached */ }
+      }
+
       const result = await callMcpTool('node', [mcpPath], env, 'list_recordings', {});
       const text = result.content.find(c => c.type === 'text')?.text ?? '[]';
 

@@ -712,7 +712,7 @@ function McpTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '' });
+  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '', recordingsFolder: '' });
 
   const { data, isLoading } = useQuery({
     queryKey: ['mcp-connections'],
@@ -720,11 +720,15 @@ function McpTab() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (input: typeof form) => api.post('/api/mcp-connections', input),
+    mutationFn: (input: typeof form) => {
+      const { recordingsFolder, ...rest } = input;
+      const capabilities = recordingsFolder.trim() ? JSON.stringify({ recordingsFolder: recordingsFolder.trim() }) : undefined;
+      return api.post('/api/mcp-connections', { ...rest, ...(capabilities ? { capabilities } : {}) });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-connections'] });
       setShowCreate(false);
-      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '' });
+      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '', recordingsFolder: '' });
       toast.success('MCP connection created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -865,6 +869,20 @@ function McpTab() {
                 </p>
               )}
             </div>
+            {form.type === 'teams_recorder' && (
+              <div className="sm:col-span-2">
+                <label className={labelClass}>Recordings Folder</label>
+                <input
+                  className={inputClass}
+                  value={form.recordingsFolder}
+                  onChange={(e) => setForm((f) => ({ ...f, recordingsFolder: e.target.value }))}
+                  placeholder="C:/Temp/nexus (folder containing .mp4 and .vtt files)"
+                />
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Local folder where Teams recordings (.mp4 / .vtt) are stored. The folder will be scanned automatically each time recordings are fetched.
+                </p>
+              </div>
+            )}
           </div>
           <div className="mt-4 flex gap-3">
             <button
