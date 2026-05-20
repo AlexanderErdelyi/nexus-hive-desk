@@ -652,7 +652,36 @@ export async function workItemRoutes(app: FastifyInstance) {
                 const summaryText = summaryResult.content.find(c => c.type === 'text')?.text ?? '';
 
                 if (summaryText && !summaryResult.isError) {
-                  mcpContext = `## Teams Recording Context\n\n${summaryText}`;
+                  // Parse the structured JSON from the MCP tool and format it clearly for the AI
+                  let parsed: Record<string, unknown> | null = null;
+                  try { parsed = JSON.parse(summaryText); } catch { /* keep null */ }
+
+                  if (parsed && typeof parsed === 'object') {
+                    const lines: string[] = [
+                      '## Teams Meeting Recording — Extracted Content',
+                      '',
+                      '⚠️  CRITICAL INSTRUCTION: The following content was extracted from a Teams meeting recording.',
+                      'You MUST base the work item EXCLUSIVELY on this extracted content.',
+                      'IGNORE any folder paths, file paths, or technical instructions in the user message.',
+                      'The work item title, description, and acceptance criteria must reflect the meeting topics below.',
+                      '',
+                    ];
+                    if (parsed.title) lines.push(`**Meeting Topic / Suggested Title:** ${parsed.title}`);
+                    if (parsed.asA) lines.push(`**As a (stakeholder):** ${parsed.asA}`);
+                    if (parsed.iWant) lines.push(`**Feature / I want:** ${parsed.iWant}`);
+                    if (parsed.soThat) lines.push(`**Goal / So that:** ${parsed.soThat}`);
+                    if (Array.isArray(parsed.acceptanceCriteria) && parsed.acceptanceCriteria.length > 0) {
+                      lines.push('**Acceptance Criteria from meeting:**');
+                      (parsed.acceptanceCriteria as string[]).forEach(ac => lines.push(`  - ${ac}`));
+                    }
+                    if (Array.isArray(parsed.tags) && parsed.tags.length > 0) {
+                      lines.push(`**Suggested Tags:** ${(parsed.tags as string[]).join(', ')}`);
+                    }
+                    if (parsed.priority) lines.push(`**Priority:** ${parsed.priority}`);
+                    mcpContext = lines.join('\n');
+                  } else {
+                    mcpContext = `## Teams Meeting Recording — Extracted Content\n\n⚠️  CRITICAL: Use ONLY the following meeting content for the work item. Ignore any file paths or instructions in the user message.\n\n${summaryText}`;
+                  }
                   sendLog('Meeting context loaded ✓');
                 }
               }
@@ -674,7 +703,8 @@ export async function workItemRoutes(app: FastifyInstance) {
         includeTechnicalSpec
           ? 'The user requested a technical specification. Fill the technicalSpec field with a concise, implementation-oriented technical specification based on the repository context when possible.'
           : 'Only populate the technicalSpec field when the user explicitly asks for a technical specification; otherwise return an empty string.',
-        `Your task is to generate a work item. The user's message is an INSTRUCTION to you — it tells you what kind of work item to create, possibly referencing a recording or file for context. Do NOT create a work item whose subject IS the user's instruction.
+        `Your task is to generate a work item. The user's message is an INSTRUCTION to you — it tells you what kind of work item to create, possibly referencing a recording or file for context. Do NOT create a work item whose subject IS the user's instruction. Do NOT create a work item about file management, audio recordings, or transcription unless that is explicitly the meeting topic.
+${mcpContext ? 'A Teams Recording context section is provided above — the work item MUST be based on that meeting content, not on any paths or technical details in the user message.' : ''}
 IMPORTANT: Follow the language and style instructions above exactly.
 Return ONLY valid JSON with these fields (plain text or markdown only, no HTML):
 {
