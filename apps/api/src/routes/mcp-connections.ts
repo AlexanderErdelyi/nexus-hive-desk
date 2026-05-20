@@ -477,6 +477,11 @@ async function streamJsonCompletionOpenAICompat(
 
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText);
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after');
+      const wait = retryAfter ? ` Wait ${retryAfter}s and try again.` : ' Please wait a minute and try again.';
+      throw new Error(`Rate limit reached (429) for model "${model}".${wait} Tip: gpt-5 and reasoning models have very low rate limits — switch to gpt-4o-mini or gpt-4.1 for frequent use.`);
+    }
     throw new Error(`AI API error ${response.status}: ${text}`);
   }
 
