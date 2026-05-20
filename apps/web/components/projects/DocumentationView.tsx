@@ -302,6 +302,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [repoQueryInput, setRepoQueryInput] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
+  const [debugLogOpen, setDebugLogOpen] = useState(false);
+  const [debugLog, setDebugLog] = useState<Array<{ ts: number; op: string; source: string; ok: boolean; detail?: string }>>([]);
   const aiLogRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -447,6 +449,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       await queryClient.invalidateQueries({ queryKey: ['wiki-status', activeMcpId] });
       const source = (result as any)?.source as string | undefined;
       const mcpError = (result as any)?.mcpError as string | undefined;
+      const logEntry = { ts: Date.now(), op: `Save: ${input.path.trim()}`, source: source ?? 'unknown', ok: true, detail: mcpError ? `MCP failed → direct: ${mcpError}` : undefined };
+      setDebugLog((l) => [logEntry, ...l].slice(0, 50));
       if (source === 'mcp') {
         toast.success('Page saved via MCP');
       } else if (mcpError) {
@@ -455,7 +459,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
         toast.success('Page saved to Wiki.js');
       }
     },
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) => {
+      setDebugLog((l) => [{ ts: Date.now(), op: 'Save', source: '?', ok: false, detail: getErrorMessage(error) }, ...l].slice(0, 50));
+      toast.error(getErrorMessage(error));
+    },
   });
 
   const loadWorkItemMutation = useMutation({
@@ -473,17 +480,29 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     ),
     onSuccess: (result) => {
       const rr = (result?.rawResponse as any)?.data?.pages?.create?.responseResult;
+      let msg = '';
+      let ok = false;
       if (result.httpStatus === 403) {
+        msg = `WAF blocked (HTTP 403) — ${result.bodyByteLength}B via ${result.approach}`;
         toast.error(`WAF blocked write test (HTTP 403). Body was ${result.bodyByteLength} bytes as ${result.approach}.`);
       } else if (rr?.succeeded === false) {
+        msg = `GraphQL error ${rr.errorCode}: ${rr.message}`;
         toast.error(`Write test: GraphQL error ${rr.errorCode}: ${rr.message}`);
       } else if (rr?.succeeded === true) {
-        toast.success(`Write test succeeded (page id=${((result?.rawResponse as any)?.data?.pages?.create?.page?.id) ?? '?'}). Direct GraphQL works!`);
+        ok = true;
+        msg = `OK — page id=${((result?.rawResponse as any)?.data?.pages?.create?.page?.id) ?? '?'} via direct GraphQL`;
+        toast.success(`Write test succeeded. Direct GraphQL works!`);
       } else {
-        toast.info(`Write test HTTP ${result.httpStatus} — ${JSON.stringify(result.rawResponse).slice(0, 200)}`);
+        msg = `HTTP ${result.httpStatus} — ${JSON.stringify(result.rawResponse).slice(0, 120)}`;
+        toast.info(msg);
       }
+      setDebugLog((l) => [{ ts: Date.now(), op: 'Test Write', source: 'direct', ok, detail: msg }, ...l].slice(0, 50));
     },
-    onError: (error) => toast.error(`Write test error: ${getErrorMessage(error)}`),
+    onError: (error) => {
+      const msg = getErrorMessage(error);
+      setDebugLog((l) => [{ ts: Date.now(), op: 'Test Write', source: '?', ok: false, detail: msg }, ...l].slice(0, 50));
+      toast.error(`Write test error: ${msg}`);
+    },
   });
 
   function updateExpanded(path: string, expanded?: boolean) {
@@ -936,11 +955,43 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
             >
               {testWriteMutation.isPending ? '…' : '🔬 Test Write'}
             </button>
+            <button
+              type="button"
+              title="Toggle debug log"
+              onClick={() => setDebugLogOpen((v) => !v)}
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${debugLogOpen ? 'border-slate-400 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200' : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400'}`}
+            >
+              🪵 {debugLog.length > 0 ? debugLog.length : ''} Log
+            </button>
           </div>
+          {debugLogOpen && (
+            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 dark:border-slate-700">
+                <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Wiki.js Operation Log</span>
+                <button type="button" onClick={() => setDebugLog([])} className="text-xs text-slate-400 hover:text-red-500">Clear</button>
+              </div>
+              {debugLog.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-slate-400">No operations yet. Save a page or run Test Write to see logs.</div>
+              ) : (
+                <div className="max-h-48 overflow-y-auto font-mono text-xs">
+                  {debugLog.map((entry) => (
+                    <div key={entry.ts} className={`flex items-start gap-2 border-b border-slate-100 px-3 py-1.5 last:border-0 dark:border-slate-800 ${entry.ok ? '' : 'bg-red-50 dark:bg-red-900/10'}`}>
+                      <span className="mt-0.5 shrink-0">{entry.ok ? '✅' : '❌'}</span>
+                      <span className="shrink-0 text-slate-400">{new Date(entry.ts).toLocaleTimeString()}</span>
+                      <span className={`shrink-0 rounded px-1 py-0.5 text-xs font-semibold ${entry.source === 'mcp' ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
+                        {entry.source}
+                      </span>
+                      <span className="text-slate-600 dark:text-slate-300">{entry.op}</span>
+                      {entry.detail && <span className="ml-auto text-slate-400 dark:text-slate-500">{entry.detail}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Browse, create, edit, and generate Wiki.js pages directly from NexusHiveDesk.
           </p>
-        </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <select
             className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
