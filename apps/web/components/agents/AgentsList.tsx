@@ -854,7 +854,7 @@ function McpTab() {
               </select>
             </div>
             <div>
-              <label className={labelClass}>{form.type === 'wiki_js' ? 'Python path *' : 'Base URL *'}</label>
+              <label className={labelClass}>{form.type === 'wiki_js' ? 'Wiki.js URL *' : 'Base URL *'}</label>
               <input
                 className={inputClass}
                 value={form.baseUrl}
@@ -862,8 +862,8 @@ function McpTab() {
                 placeholder={form.type === 'teams_recorder'
                   ? 'C:/VSCodeProjects/GitHub/mcp-teams-recorder/dist/index.js'
                   : form.type === 'wiki_js'
-                    ? 'C:/VSCodeProjects/GitHub/mcp-wikijs-server/.venv/Scripts/python.exe'
-                    : 'https://wiki.example.com'}
+                    ? 'https://wiki.nobilis-group.com'
+                    : 'https://example.com'}
               />
               {form.type === 'teams_recorder' && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -872,32 +872,10 @@ function McpTab() {
               )}
               {form.type === 'wiki_js' && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  For Wiki.js MCP, baseUrl stores the local path to python.exe used to launch the MCP server.
+                  The full URL of your Wiki.js instance (e.g. https://wiki.nobilis-group.com). The API key goes in the Credential field.
                 </p>
               )}
             </div>
-            {form.type === 'wiki_js' && (
-              <>
-                <div>
-                  <label className={labelClass}>Wiki.js URL</label>
-                  <input
-                    className={inputClass}
-                    value={form.wikiUrl}
-                    onChange={(e) => setForm((f) => ({ ...f, wikiUrl: e.target.value }))}
-                    placeholder="https://wiki.nobilis-group.com"
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>server.py path</label>
-                  <input
-                    className={inputClass}
-                    value={form.scriptPath}
-                    onChange={(e) => setForm((f) => ({ ...f, scriptPath: e.target.value }))}
-                    placeholder="C:/VSCodeProjects/GitHub/mcp-wikijs-server/server.py"
-                  />
-                </div>
-              </>
-            )}
             <div>
               <label className={labelClass}>Auth Type</label>
               <select
@@ -948,7 +926,6 @@ function McpTab() {
               disabled={
                 !form.name
                 || !form.baseUrl
-                || (form.type === 'wiki_js' && (!form.wikiUrl.trim() || !form.scriptPath.trim()))
                 || createMutation.isPending
               }
               className={primaryBtn}
