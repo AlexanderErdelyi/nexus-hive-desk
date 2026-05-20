@@ -9,14 +9,58 @@ function stripCredentials(conn: any) {
   return safe;
 }
 
+function parseCapabilities(capabilities?: string | null): Record<string, unknown> {
+  if (!capabilities) return {};
+  try {
+    return JSON.parse(capabilities) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function parseMcpToolResponse(result: { content: Array<{ type: string; text?: string }>; isError?: boolean }) {
+  if (result.isError) {
+    throw new Error(result.content.find((entry) => entry.type === 'text')?.text ?? 'MCP tool call failed');
+  }
+
+  const text = result.content.find((entry) => entry.type === 'text')?.text;
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function getWikiJsConfig(connection: {
+  baseUrl?: string | null;
+  capabilities?: string | null;
+}) {
+  const caps = parseCapabilities(connection.capabilities);
+  const wikiUrl = typeof caps.wikiUrl === 'string' && caps.wikiUrl.trim()
+    ? caps.wikiUrl.trim()
+    : undefined;
+  const scriptPath = typeof caps.scriptPath === 'string' && caps.scriptPath.trim()
+    ? caps.scriptPath.trim()
+    : undefined;
+
+  return {
+    pythonPath: connection.baseUrl?.trim(),
+    wikiUrl,
+    scriptPath,
+  };
+}
+
 export async function mcpConnectionRoutes(app: FastifyInstance) {
   // ─── List MCP connections ─────────────────────────────────────────────────
-  app.get<{ Querystring: { customerId?: string; projectId?: string } }>(
+  app.get<{ Querystring: { customerId?: string; projectId?: string; type?: string } }>(
     '/',
     async (req) => {
       const where: Record<string, string> = {};
       if (req.query.customerId) where.customerId = req.query.customerId;
       if (req.query.projectId) where.projectId = req.query.projectId;
+      if (req.query.type) where.type = req.query.type;
 
       const connections = await prisma.mCPConnection.findMany({
         where,
@@ -211,11 +255,12 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       }
 
       if (connection.type === 'wiki_js') {
-        const baseUrl = connection.baseUrl?.replace(/\/$/, '');
-        if (!baseUrl) {
-          return { data: { status: 'error', message: 'No baseUrl configured' } };
+        const { wikiUrl } = getWikiJsConfig(connection);
+        const directWikiUrl = (wikiUrl ?? connection.baseUrl)?.replace(/\/$/, '');
+        if (!directWikiUrl) {
+          return { data: { status: 'error', message: 'No Wiki.js URL configured' } };
         }
-        const res = await fetch(`${baseUrl}/graphql`, {
+        const res = await fetch(`${directWikiUrl}/graphql`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${credential}`,
@@ -234,6 +279,140 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return { data: { status: 'error', message } };
+    }
+  });
+
+  // ─── Wiki.js pages via MCP ────────────────────────────────────────────────
+  app.get<{
+    Params: { id: string };
+    Querystring: { query?: string; path?: string; locale?: string };
+  }>('/:id/wiki-pages', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) {
+      return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    }
+    if (connection.type !== 'wiki_js') {
+      return reply.status(400).send({ error: 'invalid_type', message: 'Only wiki_js MCPs support wiki pages' });
+    }
+
+    if (!req.query.path?.trim() && !req.query.query?.trim()) {
+      return { data: [] };
+    }
+
+    let credential: string | null = null;
+    if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+      credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+    }
+    if (!credential) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
+    }
+
+    const { pythonPath, scriptPath, wikiUrl } = getWikiJsConfig(connection);
+    if (!pythonPath) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Python path not configured in baseUrl' });
+    }
+    if (!scriptPath) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js server.py path not configured' });
+    }
+    if (!wikiUrl) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured' });
+    }
+
+    try {
+      const { callMcpTool } = await import('../lib/mcp-client.js');
+      const locale = req.query.locale?.trim() || 'de';
+      const toolName = req.query.path?.trim() ? 'wikijs_get_page' : 'wikijs_search_pages';
+      const toolArgs = req.query.path?.trim()
+        ? { path: req.query.path.trim(), locale }
+        : { query: req.query.query!.trim(), locale };
+
+      const result = await callMcpTool(
+        pythonPath,
+        [scriptPath],
+        { WIKIJS_URL: wikiUrl, WIKIJS_API_KEY: credential },
+        toolName,
+        toolArgs,
+      );
+
+      return { data: parseMcpToolResponse(result) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.status(502).send({ error: 'mcp_error', message });
+    }
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      path: string;
+      title: string;
+      content: string;
+      locale?: string;
+      description?: string;
+      tags?: string[] | string;
+    };
+  }>('/:id/wiki-pages', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) {
+      return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    }
+    if (connection.type !== 'wiki_js') {
+      return reply.status(400).send({ error: 'invalid_type', message: 'Only wiki_js MCPs support wiki pages' });
+    }
+
+    const path = req.body.path?.trim();
+    const title = req.body.title?.trim();
+    if (!path || !title) {
+      return reply.status(400).send({ error: 'validation', message: 'path and title are required' });
+    }
+
+    let credential: string | null = null;
+    if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+      credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+    }
+    if (!credential) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js API key not configured' });
+    }
+
+    const { pythonPath, scriptPath, wikiUrl } = getWikiJsConfig(connection);
+    if (!pythonPath) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Python path not configured in baseUrl' });
+    }
+    if (!scriptPath) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js server.py path not configured' });
+    }
+    if (!wikiUrl) {
+      return reply.status(400).send({ error: 'not_configured', message: 'Wiki.js URL not configured' });
+    }
+
+    const tags = Array.isArray(req.body.tags)
+      ? req.body.tags.map((tag) => String(tag).trim()).filter(Boolean)
+      : typeof req.body.tags === 'string'
+        ? req.body.tags.split(',').map((tag) => tag.trim()).filter(Boolean)
+        : [];
+
+    try {
+      const { callMcpTool } = await import('../lib/mcp-client.js');
+      const result = await callMcpTool(
+        pythonPath,
+        [scriptPath],
+        { WIKIJS_URL: wikiUrl, WIKIJS_API_KEY: credential },
+        'wikijs_upsert_page',
+        {
+          path,
+          title,
+          content: req.body.content ?? '',
+          locale: req.body.locale?.trim() || 'de',
+          description: req.body.description?.trim() ?? '',
+          tags,
+          editor: 'markdown',
+        },
+      );
+
+      return { data: parseMcpToolResponse(result) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.status(502).send({ error: 'mcp_error', message });
     }
   });
 

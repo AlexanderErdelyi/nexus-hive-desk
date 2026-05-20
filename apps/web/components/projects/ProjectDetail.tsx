@@ -16,6 +16,7 @@ import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
 import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
+import { DocumentationView } from './DocumentationView';
 import { formatDate } from '@/lib/utils';
 
 type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
@@ -305,10 +306,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         icon: <BookOpen size={28} className="text-emerald-500" />,
         title: 'Documentation',
         description: 'Create and manage project documentation. Sync with wikis and generate docs from your codebase.',
-        badge: 'Coming soon',
-        badgeColor: 'text-gray-400 bg-gray-100 dark:bg-gray-800',
-        available: false,
-        comingSoon: true,
+        badge: 'Wiki.js ready',
+        badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
+        available: true,
+        comingSoon: false,
       },
     ];
 
@@ -649,17 +650,11 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     );
   }
 
-  // ─── Documentation view (coming soon) ───────────────────────────────────────
+  // ─── Documentation view ─────────────────────────────────────────────────────
   return (
     <div>
       {header}
-      <div className="rounded-xl border border-dashed border-gray-200 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-900">
-        <BookOpen size={40} className="mx-auto mb-4 text-emerald-400 dark:text-emerald-600" />
-        <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">Documentation — Coming Soon</h3>
-        <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
-          Create and manage project documentation, sync with wiki platforms, and generate docs from your codebase using AI agents.
-        </p>
-      </div>
+      <DocumentationView projectId={projectId} customerId={project.customerId} />
     </div>
   );
 }

@@ -712,7 +712,16 @@ function McpTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '', recordingsFolder: '' });
+  const [form, setForm] = useState({
+    name: '',
+    type: 'custom',
+    baseUrl: '',
+    authType: 'pat',
+    credential: '',
+    recordingsFolder: '',
+    wikiUrl: '',
+    scriptPath: '',
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['mcp-connections'],
@@ -721,14 +730,29 @@ function McpTab() {
 
   const createMutation = useMutation({
     mutationFn: (input: typeof form) => {
-      const { recordingsFolder, ...rest } = input;
-      const capabilities = recordingsFolder.trim() ? JSON.stringify({ recordingsFolder: recordingsFolder.trim() }) : undefined;
+      const { recordingsFolder, wikiUrl, scriptPath, ...rest } = input;
+      const caps: Record<string, string> = {};
+      if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
+      if (input.type === 'wiki_js') {
+        if (wikiUrl.trim()) caps.wikiUrl = wikiUrl.trim();
+        if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
+      }
+      const capabilities = Object.keys(caps).length > 0 ? JSON.stringify(caps) : undefined;
       return api.post('/api/mcp-connections', { ...rest, ...(capabilities ? { capabilities } : {}) });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mcp-connections'] });
       setShowCreate(false);
-      setForm({ name: '', type: 'custom', baseUrl: '', authType: 'pat', credential: '', recordingsFolder: '' });
+      setForm({
+        name: '',
+        type: 'custom',
+        baseUrl: '',
+        authType: 'pat',
+        credential: '',
+        recordingsFolder: '',
+        wikiUrl: '',
+        scriptPath: '',
+      });
       toast.success('MCP connection created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -758,6 +782,9 @@ function McpTab() {
       baseUrl: String(data.baseUrl ?? ''),
       authType: String(data.authType ?? 'pat'),
       credential: '',
+      recordingsFolder: String(data.recordingsFolder ?? ''),
+      wikiUrl: String(data.wikiUrl ?? ''),
+      scriptPath: String(data.scriptPath ?? ''),
     });
     setShowAIPanel(false);
     setShowCreate(true);
@@ -827,19 +854,50 @@ function McpTab() {
               </select>
             </div>
             <div>
-              <label className={labelClass}>Base URL *</label>
+              <label className={labelClass}>{form.type === 'wiki_js' ? 'Python path *' : 'Base URL *'}</label>
               <input
                 className={inputClass}
                 value={form.baseUrl}
                 onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
-                placeholder={form.type === 'teams_recorder' ? 'C:/VSCodeProjects/GitHub/mcp-teams-recorder/dist/index.js' : 'https://wiki.example.com'}
+                placeholder={form.type === 'teams_recorder'
+                  ? 'C:/VSCodeProjects/GitHub/mcp-teams-recorder/dist/index.js'
+                  : form.type === 'wiki_js'
+                    ? 'C:/VSCodeProjects/GitHub/mcp-wikijs-server/.venv/Scripts/python.exe'
+                    : 'https://wiki.example.com'}
               />
               {form.type === 'teams_recorder' && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   For Teams Recorder, baseUrl is the local path to the MCP server dist/index.js file.
                 </p>
               )}
+              {form.type === 'wiki_js' && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  For Wiki.js MCP, baseUrl stores the local path to python.exe used to launch the MCP server.
+                </p>
+              )}
             </div>
+            {form.type === 'wiki_js' && (
+              <>
+                <div>
+                  <label className={labelClass}>Wiki.js URL</label>
+                  <input
+                    className={inputClass}
+                    value={form.wikiUrl}
+                    onChange={(e) => setForm((f) => ({ ...f, wikiUrl: e.target.value }))}
+                    placeholder="https://wiki.nobilis-group.com"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>server.py path</label>
+                  <input
+                    className={inputClass}
+                    value={form.scriptPath}
+                    onChange={(e) => setForm((f) => ({ ...f, scriptPath: e.target.value }))}
+                    placeholder="C:/VSCodeProjects/GitHub/mcp-wikijs-server/server.py"
+                  />
+                </div>
+              </>
+            )}
             <div>
               <label className={labelClass}>Auth Type</label>
               <select
@@ -887,7 +945,12 @@ function McpTab() {
           <div className="mt-4 flex gap-3">
             <button
               onClick={() => createMutation.mutate(form)}
-              disabled={!form.name || !form.baseUrl || createMutation.isPending}
+              disabled={
+                !form.name
+                || !form.baseUrl
+                || (form.type === 'wiki_js' && (!form.wikiUrl.trim() || !form.scriptPath.trim()))
+                || createMutation.isPending
+              }
               className={primaryBtn}
             >
               {createMutation.isPending ? 'Creating...' : 'Create'}
