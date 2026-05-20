@@ -301,11 +301,15 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [loadedWorkItem, setLoadedWorkItem] = useState<WorkItemSource | null>(null);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [repoQueryInput, setRepoQueryInput] = useState('');
+  const [selectedRepoId, setSelectedRepoId] = useState('');
+  const [repoBrowserOpen, setRepoBrowserOpen] = useState(false);
+  const [repoBrowsePath, setRepoBrowsePath] = useState('/');
   const [customInstructions, setCustomInstructions] = useState('');
   const [debugLogOpen, setDebugLogOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<Array<{ ts: number; op: string; source: string; ok: boolean; detail?: string }>>([]);
   const aiLogRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const contentSectionRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedSearch(searchTerm.trim()), 400);
@@ -320,6 +324,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory]);
+
+  useEffect(() => {
+    contentSectionRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [selectedPath]);
 
   const connectionsQuery = useQuery({
     queryKey: ['mcp-connections', 'wiki-js'],
@@ -376,6 +384,20 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     queryFn: () => api.get<{ data: RecordingItem[] }>(`/api/mcp-connections/${activeTeamsMcpId}/recordings`),
   });
 
+  const reposQuery = useQuery({
+    queryKey: ['repos', projectId],
+    queryFn: () => api.get<{ data: Array<{ id: string; label?: string; repoName: string; defaultBranch?: string }> }>(`/api/projects/${projectId}/repositories`),
+    enabled: !!projectId,
+  });
+
+  const repoTreeQuery = useQuery({
+    queryKey: ['repo-tree', projectId, selectedRepoId, repoBrowsePath],
+    queryFn: () => api.get<{ data: Array<{ name: string; path: string; type: string }> }>(
+      `/api/projects/${projectId}/repositories/${selectedRepoId}/tree?path=${encodeURIComponent(repoBrowsePath)}`
+    ),
+    enabled: !!selectedRepoId && repoBrowserOpen,
+  });
+
   const pageQuery = useQuery({
     queryKey: ['wiki-page', activeMcpId, selectedPath, activeLocale],
     enabled: Boolean(activeMcpId && selectedPath && !isCreating),
@@ -393,6 +415,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const searchResults = useMemo(() => normalizeSearchResults(searchQuery.data?.data), [searchQuery.data?.data]);
   const treeNodes = useMemo(() => buildTree(treeQuery.data?.data ?? []), [treeQuery.data?.data]);
   const recordings = recordingsQuery.data?.data ?? [];
+  const projectRepos = reposQuery.data?.data ?? [];
+  const treeItems = repoTreeQuery.data?.data ?? [];
+  const selectedRepoEntries = useMemo(() => new Set(parseListInput(repoQueryInput)), [repoQueryInput]);
   const defaultExpandedPaths = useMemo(() => treeNodes.slice(0, 6).map((node) => node.path), [treeNodes]);
   const expandedSet = useMemo(() => new Set(expandedPaths ?? defaultExpandedPaths), [defaultExpandedPaths, expandedPaths]);
 
@@ -419,6 +444,22 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   useEffect(() => {
     if (recordingsQuery.error) toast.error(getErrorMessage(recordingsQuery.error));
   }, [recordingsQuery.error]);
+
+  useEffect(() => {
+    if (reposQuery.error) toast.error(getErrorMessage(reposQuery.error));
+  }, [reposQuery.error]);
+
+  useEffect(() => {
+    if (repoTreeQuery.error) toast.error(getErrorMessage(repoTreeQuery.error));
+  }, [repoTreeQuery.error]);
+
+  useEffect(() => {
+    if (selectedRepoId && !projectRepos.some((repo) => repo.id === selectedRepoId)) {
+      setSelectedRepoId('');
+      setRepoBrowserOpen(false);
+      setRepoBrowsePath('/');
+    }
+  }, [projectRepos, selectedRepoId]);
 
   useEffect(() => {
     if (pageQuery.error) {
@@ -713,6 +754,16 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       return;
     }
     loadWorkItemMutation.mutate(workItemId);
+  }
+
+  function toggleRepoContextItem(path: string) {
+    setRepoQueryInput((current) => {
+      const lines = current.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      if (lines.includes(path)) {
+        return lines.filter((line) => line !== path).join('\n');
+      }
+      return [...lines, path].join('\n');
+    });
   }
 
   async function handleRefine() {
@@ -1019,8 +1070,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <aside className="flex min-h-[760px] flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+      <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)] xl:items-start">
+        <aside className="sticky top-4 flex max-h-[calc(100vh-6rem)] flex-col gap-3 overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
           <div className={paneClass}>
             <div className="mb-4 flex items-center justify-between gap-2">
               <div className="relative flex-1">
@@ -1056,7 +1107,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
               </select>
             </div>
 
-            <div className="max-h-[290px] space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-[200px] space-y-2 overflow-y-auto pr-1">
               {searchQuery.isFetching && debouncedSearch ? (
                 <div className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
                   <Loader2 size={14} className="animate-spin" /> Searching Wiki.js…
@@ -1131,7 +1182,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           </div>
         </aside>
 
-        <section className="min-h-[760px] rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+        <section ref={contentSectionRef} className="min-h-[600px] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
           {showEditor ? (
             <div className="space-y-4">
               <div className="flex flex-col gap-3 border-b border-gray-100 pb-4 dark:border-gray-800 md:flex-row md:items-start md:justify-between">
@@ -1261,7 +1312,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                             className={inputClass}
                             value={workItemInput}
                             onChange={(event) => setWorkItemInput(event.target.value)}
-                            placeholder="ADO work item ID"
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' && workItemInput.trim()) handleLoadWorkItem();
+                            }}
+                            placeholder="Work item ID (e.g. 12345)"
                           />
                           <button
                             type="button"
@@ -1282,6 +1336,9 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                             </div>
                             <div className="mt-1 text-sm font-medium text-gray-900 dark:text-white">{loadedWorkItem.title}</div>
                           </div>
+                        )}
+                        {!loadedWorkItem && !workItemInput.trim() && (
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Type an ID and press Enter or click Load</p>
                         )}
                       </div>
 
@@ -1309,13 +1366,95 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
 
                     <div className="mt-4 grid gap-4">
                       <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Repo files or keywords</label>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">Repo context</label>
+                        {projectRepos.length > 0 && (
+                          <div className="mb-2 flex gap-2">
+                            <select
+                              className={inputClass}
+                              value={selectedRepoId}
+                              onChange={(event) => {
+                                setSelectedRepoId(event.target.value);
+                                setRepoBrowserOpen(false);
+                                setRepoBrowsePath('/');
+                              }}
+                            >
+                              <option value="">Select a repo...</option>
+                              {projectRepos.map((repo) => (
+                                <option key={repo.id} value={repo.id}>{repo.label || repo.repoName}</option>
+                              ))}
+                            </select>
+                            {selectedRepoId && (
+                              <button
+                                type="button"
+                                onClick={() => setRepoBrowserOpen((current) => !current)}
+                                className="shrink-0 rounded-xl border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-gray-900 dark:text-violet-300 dark:hover:bg-violet-900/20"
+                              >
+                                {repoBrowserOpen ? 'Close' : 'Browse'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {repoBrowserOpen && selectedRepoId && (
+                          <div className="mb-2 rounded-xl border border-violet-200 bg-white dark:border-violet-900/40 dark:bg-gray-900/60">
+                            <div className="flex items-center gap-2 border-b border-violet-100 px-3 py-2 dark:border-violet-900/20">
+                              <span className="text-xs text-gray-500">Path:</span>
+                              <span className="text-xs font-mono text-gray-700 dark:text-gray-300">{repoBrowsePath}</span>
+                              {repoBrowsePath !== '/' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const parent = repoBrowsePath.split('/').slice(0, -1).join('/') || '/';
+                                    setRepoBrowsePath(parent);
+                                  }}
+                                  className="ml-auto text-xs text-violet-600 hover:underline dark:text-violet-400"
+                                >← Up</button>
+                              )}
+                            </div>
+                            <div className="max-h-48 overflow-y-auto p-2">
+                              {repoTreeQuery.isLoading ? (
+                                <p className="py-4 text-center text-xs text-gray-500">Loading…</p>
+                              ) : treeItems.length === 0 ? (
+                                <p className="py-4 text-center text-xs text-gray-500">No items found</p>
+                              ) : (
+                                <div className="space-y-1">
+                                  {treeItems.map((item) => (
+                                    <div key={item.path} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-violet-50 dark:hover:bg-violet-900/20">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (item.type === 'tree') {
+                                            setRepoBrowsePath(item.path);
+                                          } else {
+                                            toggleRepoContextItem(item.path);
+                                          }
+                                        }}
+                                        className="flex flex-1 items-center gap-2 text-left text-xs text-gray-700 dark:text-gray-300"
+                                      >
+                                        <span>{item.type === 'tree' ? '📁' : '📄'}</span>
+                                        <span>{item.name}</span>
+                                        {item.type === 'tree' && <span className="ml-auto text-gray-400">→</span>}
+                                      </button>
+                                      {item.type === 'blob' && (
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedRepoEntries.has(item.path)}
+                                          onChange={() => toggleRepoContextItem(item.path)}
+                                          className="h-3 w-3 rounded accent-violet-600"
+                                        />
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                         <textarea
                           rows={2}
                           className={inputClass}
                           value={repoQueryInput}
                           onChange={(event) => setRepoQueryInput(event.target.value)}
-                          placeholder="src/wiki.ts, README, onboarding"
+                          placeholder="Selected files appear here, or type keywords: README, onboarding"
                         />
                       </div>
                       <div>

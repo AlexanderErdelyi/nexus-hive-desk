@@ -382,6 +382,63 @@ export async function projectRoutes(app: FastifyInstance) {
     return reply.status(204).send();
   });
 
+  // GET /:id/repositories/:repoId/tree?path=&branch=
+  app.get<{
+    Params: { id: string; repoId: string };
+    Querystring: { path?: string; branch?: string };
+  }>('/:id/repositories/:repoId/tree', async (req, reply) => {
+    const repo = await prisma.projectRepository.findUnique({ where: { id: req.params.repoId } });
+    if (!repo) return reply.status(404).send({ error: 'not_found' });
+
+    const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+    if (!conn) return reply.status(404).send({ error: 'connection_not_found' });
+
+    const path = req.query.path || '/';
+    const branch = req.query.branch || repo.defaultBranch || 'main';
+    const pat = conn.pat;
+
+    try {
+      if (conn.type === 'azure-devops') {
+        const adoProject = repo.adoProjectName || repo.repoName.split('/').slice(-2, -1)[0];
+        const repoName = repo.repoName.split('/').pop() || repo.repoName;
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodeURIComponent(path)}&recursionLevel=oneLevel&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json() as { value?: Array<{ path: string; isFolder?: boolean; gitObjectType?: string }> };
+        const items = (data.value ?? []).map((item) => ({
+          name: item.path.split('/').pop() || item.path,
+          path: item.path,
+          type: (item.isFolder || item.gitObjectType === 'tree') ? 'tree' : 'blob',
+        }));
+        return { data: items };
+      }
+
+      const parts = repo.repoName.split('/');
+      const [owner, repoSlug] = parts.length >= 2 ? [parts[0], parts[1]] : [parts[0], parts[0]];
+      const cleanPath = path.replace(/^\//, '');
+      const url = `https://api.github.com/repos/${owner}/${repoSlug}/contents/${cleanPath}?ref=${encodeURIComponent(branch)}`;
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${pat}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as Array<{ name: string; path: string; type: string }>;
+      const items = Array.isArray(data)
+        ? data.map((item) => ({ name: item.name, path: item.path, type: item.type === 'dir' ? 'tree' : 'blob' }))
+        : [];
+      return { data: items };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      return reply.status(502).send({ error: 'remote_error', message });
+    }
+  });
+
   // ─── ADO Access Config ───────────────────────────────────────────────────────
 
   app.patch<{
