@@ -702,6 +702,59 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     return { data: { directAvailable, directError, mcpConfigured, mcpAvailable, mcpError, activeSource } };
   });
 
+  // ─── Wiki.js write-test ───────────────────────────────────────────────────
+  // Diagnostic endpoint: creates a tiny test page using WAF-safe Buffer encoding
+  // and returns the raw GraphQL response so we know exactly what's failing.
+  app.post<{ Params: { id: string } }>('/:id/wiki-test-write', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'Not found' });
+    if (connection.type !== 'wiki_js') return reply.status(400).send({ error: 'invalid_type' });
+
+    let credential: string | null = null;
+    if (connection.encryptedCredential && connection.credentialIv && connection.credentialTag) {
+      credential = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+    }
+    if (!credential) return reply.status(400).send({ error: 'not_configured' });
+
+    const { wikiUrl } = getWikiJsConfig(connection);
+    if (!wikiUrl) return reply.status(400).send({ error: 'not_configured' });
+
+    const testPath = `nexus-hive-desk/write-test-${Date.now()}`;
+    const testContent = '<div style="font-family:sans-serif;padding:16px;"><div style="font-size:18px;font-weight:600;">NexusHiveDesk Write Test</div><div style="color:#555;margin-top:8px;">This is an automated write test page.</div></div>';
+
+    const mutation = `
+      mutation CreatePage($title: String!, $content: String!, $description: String!, $editor: String!, $isPublished: Boolean!, $isPrivate: Boolean!, $locale: String!, $path: String!, $tags: [String]!) {
+        pages {
+          create(title: $title, content: $content, description: $description, editor: $editor, isPublished: $isPublished, isPrivate: $isPrivate, locale: $locale, path: $path, tags: $tags) {
+            responseResult { succeeded errorCode slug message }
+            page { id path title }
+          }
+        }
+      }`;
+
+    const variables = { title: 'NexusHiveDesk Write Test', content: testContent, description: 'Auto write test', editor: 'code', isPublished: true, isPrivate: false, locale: 'de', path: testPath, tags: ['test'] };
+    const bodyJson = JSON.stringify({ query: mutation, variables });
+    const bodyBytes = Buffer.from(bodyJson, 'utf8');
+
+    let httpStatus: number | undefined;
+    let rawResponse: unknown;
+    let error: string | undefined;
+
+    try {
+      const res = await axios.post(`${wikiUrl}/graphql`, bodyBytes, {
+        headers: { Authorization: `Bearer ${credential}`, 'Content-Type': 'application/json; charset=utf-8' },
+        httpsAgent: tlsAgent,
+        validateStatus: null,
+      });
+      httpStatus = res.status;
+      rawResponse = res.data;
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Request failed';
+    }
+
+    return { httpStatus, error, rawResponse, bodyByteLength: bodyBytes.length, approach: 'Buffer.from-utf8' };
+  });
+
   // ─── Wiki.js pages ────────────────────────────────────────────────────────
   app.get<{
     Params: { id: string };

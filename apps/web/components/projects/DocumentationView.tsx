@@ -467,6 +467,25 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
+  const testWriteMutation = useMutation({
+    mutationFn: () => api.post<{ httpStatus?: number; error?: string; rawResponse?: unknown; bodyByteLength?: number; approach?: string }>(
+      `/api/mcp-connections/${activeMcpId}/wiki-test-write`, {}
+    ),
+    onSuccess: (result) => {
+      const rr = (result?.rawResponse as any)?.data?.pages?.create?.responseResult;
+      if (result.httpStatus === 403) {
+        toast.error(`WAF blocked write test (HTTP 403). Body was ${result.bodyByteLength} bytes as ${result.approach}.`);
+      } else if (rr?.succeeded === false) {
+        toast.error(`Write test: GraphQL error ${rr.errorCode}: ${rr.message}`);
+      } else if (rr?.succeeded === true) {
+        toast.success(`Write test succeeded (page id=${((result?.rawResponse as any)?.data?.pages?.create?.page?.id) ?? '?'}). Direct GraphQL works!`);
+      } else {
+        toast.info(`Write test HTTP ${result.httpStatus} — ${JSON.stringify(result.rawResponse).slice(0, 200)}`);
+      }
+    },
+    onError: (error) => toast.error(`Write test error: ${getErrorMessage(error)}`),
+  });
+
   function updateExpanded(path: string, expanded?: boolean) {
     setExpandedPaths((current) => {
       const next = new Set(current ?? defaultExpandedPaths);
@@ -908,6 +927,15 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                 </span>
               );
             })()}
+            <button
+              type="button"
+              title="Run a diagnostic write test to check if Wiki.js accepts pages from this server"
+              onClick={() => testWriteMutation.mutate()}
+              disabled={testWriteMutation.isPending}
+              className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-500 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-indigo-900/20 dark:hover:text-indigo-300"
+            >
+              {testWriteMutation.isPending ? '…' : '🔬 Test Write'}
+            </button>
           </div>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Browse, create, edit, and generate Wiki.js pages directly from NexusHiveDesk.
