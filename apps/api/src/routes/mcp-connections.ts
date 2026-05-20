@@ -66,10 +66,15 @@ async function wikiJsGraphQL(
     const errText = await res.text();
     throw new Error(`Wiki.js GraphQL returned ${res.status}: ${errText}`);
   }
-  const body = await res.json() as { data?: unknown; errors?: Array<{ extensions?: { code?: number } }> };
-  // Code 6003 = PageNotFound — treat as null, not an error
+  const body = await res.json() as { data?: unknown; errors?: Array<{ message?: string; extensions?: { code?: number | string; exception?: { stack?: string } } }> };
+  // PageNotFound (6003) — treat as null, not an error.
+  // Wiki.js returns extensions.code = "INTERNAL_SERVER_ERROR" with the real 6003 buried in the stack.
   if (body.errors?.length) {
-    const isPageNotFound = body.errors.every((e) => e?.extensions?.code === 6003);
+    const isPageNotFound = body.errors.every((e) => {
+      const msg = (e?.message ?? '').toLowerCase();
+      const stack = (e?.extensions?.exception?.stack ?? '').toLowerCase();
+      return msg.includes('page does not exist') || msg.includes('not found') || stack.includes('pagenotfound') || stack.includes('6003');
+    });
     if (!isPageNotFound) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors)}`);
   }
   return body.data;

@@ -363,7 +363,7 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
 
   const pageQuery = useQuery({
     queryKey: ['wiki-page', activeMcpId, selectedPath, activeLocale],
-    enabled: Boolean(activeMcpId && selectedPath),
+    enabled: Boolean(activeMcpId && selectedPath && !isCreating),
     queryFn: () => api.get<{ data: unknown }>(buildWikiPagesUrl(activeMcpId, { path: selectedPath, locale: activeLocale })),
   });
 
@@ -1147,23 +1147,22 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
             <div className="flex min-h-[420px] items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <Loader2 size={16} className="animate-spin" /> Loading page…
             </div>
+          ) : selectedPath && !isCreating && !pageQuery.isLoading && !currentPage ? (
+            <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
+              <BookOpen size={42} className="mb-4 text-amber-400 dark:text-amber-600" />
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Page not found</h3>
+              <p className="mt-2 max-w-md text-sm text-gray-500 dark:text-gray-400">
+                <code className="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">{selectedPath}</code> does not exist yet. You can create it as a new page.
+              </p>
+              <button
+                type="button"
+                onClick={() => startNewPage(selectedPath, false)}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+              >
+                <FilePlus2 size={15} /> Create this page
+              </button>
+            </div>
           ) : currentPage ? (
-            currentPage.found === false ? (
-              <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                <BookOpen size={42} className="mb-4 text-amber-400 dark:text-amber-600" />
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Page not found</h3>
-                <p className="mt-2 max-w-md text-sm text-gray-500 dark:text-gray-400">
-                  The selected path does not exist in Wiki.js for locale {activeLocale}. You can create it as a new page.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => startNewPage(selectedPath, false)}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-                >
-                  <FilePlus2 size={15} /> Create this page
-                </button>
-              </div>
-            ) : (
               <div className="space-y-5">
                 <div className="flex flex-col gap-3 border-b border-gray-100 pb-4 dark:border-gray-800 md:flex-row md:items-start md:justify-between">
                   <div>
@@ -1214,7 +1213,6 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                   />
                 </div>
               </div>
-            )
           ) : (
             <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
               <BookOpen size={42} className="mb-4 text-emerald-400 dark:text-emerald-600" />
