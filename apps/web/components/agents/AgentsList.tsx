@@ -17,7 +17,9 @@ interface Agent {
   systemPrompt?: string;
   triggerType: string;
   createdAt: string;
-  _count?: { skills: number; mcpConnections: number; runs: number };
+  skills?: Array<{ id: string; skill: Skill }>;
+  mcpConnections?: Array<{ id: string; mcpConnection: McpConnection }>;
+  _count?: { runs: number };
 }
 
 interface Skill {
@@ -257,8 +259,8 @@ function AgentsTab() {
                 </span>
               </div>
               <div className="mt-3 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-                <span className="flex items-center gap-1"><Wrench size={12} /> {a._count?.skills ?? 0} skill(s)</span>
-                <span className="flex items-center gap-1"><Plug size={12} /> {a._count?.mcpConnections ?? 0} MCP</span>
+                <span className="flex items-center gap-1"><Wrench size={12} /> {a.skills?.length ?? 0} skill(s)</span>
+                <span className="flex items-center gap-1"><Plug size={12} /> {a.mcpConnections?.length ?? 0} MCP</span>
                 <span className="flex items-center gap-1"><Play size={12} /> {a._count?.runs ?? 0} run(s)</span>
               </div>
               <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(a.createdAt)}</div>
