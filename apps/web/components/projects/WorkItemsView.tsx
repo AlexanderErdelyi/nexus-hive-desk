@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
-  Filter, Loader2, Plus, RefreshCw, Search, Sparkles, Star, X, Zap,
+  Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -71,6 +71,19 @@ interface GeneratedWorkItem {
   screenshotPaths?: string[];
 }
 
+interface WiComment {
+  id: number;
+  text: string;
+  createdDate: string;
+  createdBy: { displayName: string; uniqueName?: string };
+}
+
+interface RefineResult {
+  title?: string;
+  description?: string;
+  acceptanceCriteria?: string;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function typeIcon(type: string, size = 14) {
@@ -120,76 +133,507 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── Detail side panel ─────────────────────────────────────────────────────────
+// ── Work Item Detail Modal ────────────────────────────────────────────────────
 
-function WorkItemDetail({ item, onClose }: { item: WorkItem; onClose: () => void }) {
-  return (
-    <div className="flex flex-col gap-5">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-          {typeIcon(item.type)}
-          <span className="font-medium">{item.type}</span>
-          <span className="text-gray-300 dark:text-gray-700">·</span>
-          <span>#{item.id}</span>
-        </div>
-        <button onClick={onClose} className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800">
-          <X size={15} />
-        </button>
-      </div>
+function WorkItemDetailModal({
+  item,
+  projectId,
+  agents,
+  onClose,
+  onUpdated,
+}: {
+  item: WorkItem;
+  projectId: string;
+  agents: Agent[];
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'refine'>('details');
+  const [commentText, setCommentText] = useState('');
+  const [refinePrompt, setRefinePrompt] = useState('');
+  const [refineMessages, setRefineMessages] = useState<ChatMessage[]>([]);
+  const [refineResult, setRefineResult] = useState<RefineResult | null>(null);
+  const [refining, setRefining] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [portalReady, setPortalReady] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-      <h2 className="text-base font-semibold leading-snug text-gray-900 dark:text-white">{item.title}</h2>
+  const { data: commentsData, isLoading: commentsLoading, refetch: refetchComments } = useQuery({
+    queryKey: ['wi-comments', projectId, item.id],
+    queryFn: () => api.get<{ data: WiComment[] }>(`/api/projects/${projectId}/work-items/${item.id}/comments`),
+    enabled: activeTab === 'comments',
+  });
+  const comments = commentsData?.data ?? [];
 
-      {/* Meta chips */}
-      <div className="flex flex-wrap items-center gap-2">
-        {stateChip(item.state)}
-        {priorityBadge(item.priority)}
-        {item.url && (
-          <a href={item.url} target="_blank" rel="noopener noreferrer"
-            className="ml-auto flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs text-gray-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-gray-700 dark:text-gray-400 dark:hover:text-indigo-400">
-            <ExternalLink size={11} /> Open in ADO
-          </a>
-        )}
-      </div>
+  const addCommentMutation = useMutation({
+    mutationFn: () => api.post(`/api/projects/${projectId}/work-items/${item.id}/comments`, { text: commentText }),
+    onSuccess: () => {
+      setCommentText('');
+      void refetchComments();
+      toast.success('Comment added');
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  });
 
-      {item.assignedTo && (
-        <p className="text-xs text-gray-500 dark:text-gray-400">Assigned to: <span className="font-medium text-gray-700 dark:text-gray-300">{item.assignedTo}</span></p>
-      )}
+  useEffect(() => {
+    setPortalReady(true);
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener('keydown', handleKeyDown);
+      setPortalReady(false);
+    };
+  }, [onClose]);
 
-      {/* Description */}
-      {item.description && (
-        <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Description</h4>
-          <div className="prose prose-sm max-w-none rounded-lg bg-gray-50 p-3 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
-            dangerouslySetInnerHTML={{ __html: item.description }} />
-        </section>
-      )}
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [refineMessages]);
 
-      {/* Acceptance Criteria */}
-      {item.acceptanceCriteria && (
-        <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Acceptance Criteria</h4>
-          <div className="prose prose-sm max-w-none rounded-lg bg-blue-50 p-3 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
-            dangerouslySetInnerHTML={{ __html: item.acceptanceCriteria }} />
-        </section>
-      )}
+  async function refineWithAI() {
+    if (!refinePrompt.trim() || refining) return;
+    const msg = refinePrompt;
+    setRefinePrompt('');
+    setRefining(true);
+    setRefineResult(null);
+    setRefineMessages((prev) => [...prev, { role: 'user', content: msg, timestamp: new Date() }]);
 
-      {/* Meta info */}
-      <div className="border-t border-gray-100 pt-3 dark:border-gray-800">
-        {item.iterationPath && (
-          <p className="mb-1 text-xs text-gray-400">Sprint: <span className="text-gray-600 dark:text-gray-300">{item.iterationPath.split('\\').pop()}</span></p>
-        )}
-        {item.tags && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {item.tags.split(';').filter(Boolean).map((tag) => (
-              <span key={tag} className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                {tag.trim()}
-              </span>
-            ))}
+    const token = localStorage.getItem('nexus_auth_token');
+    try {
+      const response = await fetch(`/api/projects/${projectId}/work-items/${item.id}/refine-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ prompt: msg, agentId: selectedAgentId || undefined }),
+      });
+
+      if (!response.ok || !response.body) throw new Error(await response.text().catch(() => 'Stream failed'));
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          let eventType = 'message';
+          let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+          if (!data) continue;
+          const parsed = JSON.parse(data) as RefineResult & { message?: string };
+          if (eventType === 'log' && parsed.message) {
+            setRefineMessages((prev) => [...prev, { role: 'log', content: parsed.message!, timestamp: new Date() }]);
+          }
+          if (eventType === 'result') {
+            setRefineResult(parsed);
+            setRefineMessages((prev) => [...prev, { role: 'agent', content: 'Refinement ready — review the proposed changes on the right.', timestamp: new Date() }]);
+          }
+          if (eventType === 'error') throw new Error(parsed.message ?? 'Refinement failed');
+        }
+      }
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+      setRefineMessages((prev) => [...prev, { role: 'log', content: `Error: ${getErrorMessage(e)}`, timestamp: new Date() }]);
+    } finally {
+      setRefining(false);
+    }
+  }
+
+  async function applyRefinement() {
+    if (!refineResult) return;
+    setApplying(true);
+    try {
+      await api.patch(`/api/projects/${projectId}/work-items/${item.id}`, refineResult);
+      toast.success('Work item updated ✔');
+      void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+      onUpdated();
+      onClose();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  if (!portalReady) return null;
+
+  const isc = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:bg-gray-800';
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-black/70 px-4 py-6 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="mx-auto flex h-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start gap-4 border-b border-gray-200 px-6 py-5 dark:border-gray-800">
+          <div className="mt-0.5 shrink-0">{typeIcon(item.type, 22)}</div>
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+              <span className="font-medium">{item.type}</span>
+              <span>·</span>
+              <span>#{item.id}</span>
+              {item.assignedTo && <><span>·</span><span>{item.assignedTo}</span></>}
+            </div>
+            <h2 className="text-xl font-bold leading-snug text-gray-900 dark:text-white">{item.title}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {stateChip(item.state)}
+              {priorityBadge(item.priority)}
+              {item.iterationPath && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">🔁 {item.iterationPath.split('\\').pop()}</span>
+              )}
+              {item.areaPath && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">{item.areaPath.split('\\').slice(-2).join('\\')}</span>
+              )}
+            </div>
           </div>
-        )}
+          <div className="flex shrink-0 items-center gap-2">
+            {item.url && (
+              <a
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-indigo-300 hover:text-indigo-600 dark:border-gray-700 dark:text-gray-400 dark:hover:text-indigo-400"
+              >
+                <ExternalLink size={12} /> Open in ADO
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="rounded-full border border-gray-200 bg-white p-1.5 text-gray-400 transition hover:bg-gray-50 hover:text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:hover:text-white"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-0 border-b border-gray-200 px-6 dark:border-gray-800">
+          <button
+            onClick={() => setActiveTab('details')}
+            className={`-mb-px border-b-2 px-4 py-3 text-sm font-medium transition ${activeTab === 'details' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'}`}
+          >
+            Details
+          </button>
+          <button
+            onClick={() => setActiveTab('comments')}
+            className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition ${activeTab === 'comments' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'}`}
+          >
+            <MessageCircle size={14} /> Comments
+            {comments.length > 0 && (
+              <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+                {comments.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('refine')}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-3 text-sm font-medium transition ${activeTab === 'refine' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'}`}
+          >
+            <Sparkles size={14} /> AI Refine
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="min-h-0 flex-1 overflow-hidden">
+
+          {/* ── Details tab ── */}
+          {activeTab === 'details' && (
+            <div className="flex h-full min-h-0 overflow-hidden">
+              {/* Main content */}
+              <div className="flex-1 space-y-6 overflow-y-auto p-6">
+                {item.description ? (
+                  <section>
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Description</h3>
+                    <div
+                      className="prose prose-sm max-w-none rounded-2xl bg-gray-50 p-5 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
+                      dangerouslySetInnerHTML={{ __html: item.description }}
+                    />
+                  </section>
+                ) : (
+                  <div className="flex items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 py-12 text-center dark:border-gray-800">
+                    <p className="text-sm text-gray-400">No description</p>
+                  </div>
+                )}
+                {item.acceptanceCriteria && (
+                  <section>
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Acceptance Criteria</h3>
+                    <div
+                      className="prose prose-sm max-w-none rounded-2xl bg-blue-50 p-5 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
+                      dangerouslySetInnerHTML={{ __html: item.acceptanceCriteria }}
+                    />
+                  </section>
+                )}
+              </div>
+              {/* Meta sidebar */}
+              <div className="w-64 shrink-0 space-y-5 overflow-y-auto border-l border-gray-100 p-6 dark:border-gray-800">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Details</h3>
+                {item.assignedTo && (
+                  <div>
+                    <p className="mb-0.5 text-xs text-gray-400">Assigned to</p>
+                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{item.assignedTo}</p>
+                  </div>
+                )}
+                {item.iterationPath && (
+                  <div>
+                    <p className="mb-0.5 text-xs text-gray-400">Sprint</p>
+                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200">{item.iterationPath.split('\\').pop()}</p>
+                  </div>
+                )}
+                {item.areaPath && (
+                  <div>
+                    <p className="mb-0.5 text-xs text-gray-400">Area</p>
+                    <p className="text-sm text-gray-700 dark:text-gray-300">{item.areaPath}</p>
+                  </div>
+                )}
+                {item.createdDate && (
+                  <div>
+                    <p className="mb-0.5 text-xs text-gray-400">Created</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">{new Date(item.createdDate).toLocaleDateString()}</p>
+                  </div>
+                )}
+                {item.changedDate && (
+                  <div>
+                    <p className="mb-0.5 text-xs text-gray-400">Last updated</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">{new Date(item.changedDate).toLocaleDateString()}</p>
+                  </div>
+                )}
+                {item.tags && (
+                  <div>
+                    <p className="mb-1.5 text-xs text-gray-400">Tags</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {item.tags.split(';').filter(Boolean).map((tag) => (
+                        <span key={tag.trim()} className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                          {tag.trim()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Comments tab ── */}
+          {activeTab === 'comments' && (
+            <div className="flex h-full flex-col gap-5 overflow-y-auto p-6">
+              {/* Add comment form */}
+              <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-900/50">
+                <h3 className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Add Comment</h3>
+                <textarea
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  rows={3}
+                  className={isc}
+                  placeholder="Write a comment…"
+                />
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={() => addCommentMutation.mutate()}
+                    disabled={!commentText.trim() || addCommentMutation.isPending}
+                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {addCommentMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+                    Post Comment
+                  </button>
+                </div>
+              </div>
+
+              {/* Comment list */}
+              {commentsLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-400">
+                  <Loader2 size={24} className="animate-spin" />
+                </div>
+              ) : comments.length === 0 ? (
+                <div className="flex items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 py-12 dark:border-gray-800">
+                  <p className="text-sm text-gray-400">No comments yet — be the first to comment.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {[...comments].reverse().map((comment) => (
+                    <div key={comment.id} className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">{comment.createdBy.displayName}</span>
+                        <span className="text-xs text-gray-400">{new Date(comment.createdDate).toLocaleString()}</span>
+                      </div>
+                      <div
+                        className="prose prose-sm max-w-none text-gray-700 dark:prose-invert dark:text-gray-300"
+                        dangerouslySetInnerHTML={{ __html: comment.text }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── AI Refine tab ── */}
+          {activeTab === 'refine' && (
+            <div className="flex h-full min-h-0 overflow-hidden">
+              {/* Chat panel (left) */}
+              <div className="flex w-1/2 flex-col border-r border-gray-200 dark:border-gray-800">
+                {/* Chat header */}
+                <div className="flex items-center gap-3 border-b border-gray-200 p-4 dark:border-gray-800">
+                  <div className="rounded-xl bg-violet-100 p-2 dark:bg-violet-900/30">
+                    <Sparkles size={16} className="text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">AI Refine</h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Improve this work item with AI</p>
+                  </div>
+                  {agents.length > 0 && (
+                    <select
+                      value={selectedAgentId}
+                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                    >
+                      <option value="">Direct AI</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Messages */}
+                <div className="flex-1 space-y-3 overflow-y-auto p-4">
+                  {refineMessages.length === 0 && (
+                    <div className="rounded-xl bg-gray-50 p-4 text-center dark:bg-gray-800/40">
+                      <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
+                        Tell the AI how to improve this work item
+                      </p>
+                      <div className="flex flex-wrap justify-center gap-1.5">
+                        {[
+                          'Make description more detailed',
+                          'Add BDD acceptance criteria',
+                          'Translate to German',
+                          'Add implementation notes',
+                        ].map((hint) => (
+                          <button
+                            key={hint}
+                            onClick={() => setRefinePrompt(hint)}
+                            className="rounded-full border border-gray-200 px-2.5 py-1 text-xs text-gray-600 transition hover:border-indigo-300 hover:text-indigo-600 dark:border-gray-700 dark:text-gray-400"
+                          >
+                            {hint}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {refineMessages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      {msg.role === 'log' ? (
+                        <span className="text-xs italic text-gray-400 dark:text-gray-600">{msg.content}</span>
+                      ) : (
+                        <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
+                          msg.role === 'user'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+                        }`}>
+                          {msg.content}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {refining && (
+                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                      <Loader2 size={12} className="animate-spin" /> Refining…
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Input */}
+                <div className="border-t border-gray-200 p-4 dark:border-gray-800">
+                  <div className="flex gap-2">
+                    <input
+                      value={refinePrompt}
+                      onChange={(e) => setRefinePrompt(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void refineWithAI(); } }}
+                      placeholder="Describe what to improve…"
+                      className={`flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500 dark:focus:border-indigo-500 dark:focus:bg-gray-800`}
+                      disabled={refining}
+                    />
+                    <button
+                      onClick={() => void refineWithAI()}
+                      disabled={!refinePrompt.trim() || refining}
+                      className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Send size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Result preview panel (right) */}
+              <div className="flex w-1/2 flex-col overflow-y-auto p-6">
+                <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">
+                  Proposed Changes
+                </h3>
+
+                {!refineResult && !refining && (
+                  <div className="flex flex-1 items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800">
+                    <p className="text-sm text-gray-400">Changes will appear here after refinement</p>
+                  </div>
+                )}
+
+                {refineResult && (
+                  <div className="space-y-4">
+                    {refineResult.title && refineResult.title !== item.title && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-900/10">
+                        <p className="mb-1 text-xs font-semibold text-amber-700 dark:text-amber-400">Title</p>
+                        <p className="text-sm text-gray-800 dark:text-gray-200">{refineResult.title}</p>
+                      </div>
+                    )}
+                    {refineResult.description && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-semibold text-gray-400 dark:text-gray-600">Description</p>
+                        <div
+                          className="prose prose-sm max-w-none rounded-xl bg-gray-50 p-4 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
+                          dangerouslySetInnerHTML={{ __html: refineResult.description }}
+                        />
+                      </div>
+                    )}
+                    {refineResult.acceptanceCriteria && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-semibold text-gray-400 dark:text-gray-600">Acceptance Criteria</p>
+                        <div
+                          className="prose prose-sm max-w-none rounded-xl bg-blue-50 p-4 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
+                          dangerouslySetInnerHTML={{ __html: refineResult.acceptanceCriteria }}
+                        />
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => void applyRefinement()}
+                      disabled={applying}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {applying ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                      Apply Changes to ADO
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -932,12 +1376,10 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
     return wi.title.toLowerCase().includes(q) || String(wi.id).includes(q) || (wi.tags?.toLowerCase().includes(q) ?? false);
   });
 
-  const panelOpen = selectedItem !== null;
-
   return (
-    <div className="flex gap-5">
+    <div>
       {/* ── List column ── */}
-      <div className={`min-w-0 flex-1 ${panelOpen ? 'hidden lg:block' : ''}`}>
+      <div className="min-w-0 flex-1">
         {/* Toolbar */}
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="relative min-w-0 flex-1">
@@ -1032,22 +1474,6 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
         )}
       </div>
 
-      {/* ── Right panel ── */}
-      {panelOpen && (
-        <div className="w-full shrink-0 lg:w-[26rem]">
-          {/* Back button on mobile */}
-          <button onClick={() => setSelectedItem(null)}
-            className="mb-3 flex items-center gap-1 text-xs text-indigo-500 lg:hidden">
-            ← Back to list
-          </button>
-          <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900 overflow-y-auto max-h-[calc(100vh-180px)]">
-            {selectedItem ? (
-              <WorkItemDetail item={selectedItem} onClose={() => setSelectedItem(null)} />
-            ) : null}
-          </div>
-        </div>
-      )}
-
       {showCreateModal && (
         <WorkItemForm
           projectId={projectId}
@@ -1059,6 +1485,19 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             void refetch();
           }}
           onClose={() => setShowCreateModal(false)}
+        />
+      )}
+
+      {selectedItem && (
+        <WorkItemDetailModal
+          item={selectedItem}
+          projectId={projectId}
+          agents={agents}
+          onClose={() => setSelectedItem(null)}
+          onUpdated={() => {
+            void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+            void refetch();
+          }}
         />
       )}
     </div>

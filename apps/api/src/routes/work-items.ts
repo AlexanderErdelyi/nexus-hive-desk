@@ -922,4 +922,164 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
       return reply.status(500).send({ error: 'ai_error', message });
     }
   });
+
+  // ─── Get comments ──────────────────────────────────────────────────────────
+  app.get<{ Params: { id: string; wiId: string } }>(
+    '/:id/work-items/:wiId/comments',
+    async (req, reply) => {
+      const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+      if (!project?.connectionId || !project.adoProjectName) {
+        return reply.status(400).send({ error: 'not_configured', message: 'ADO connection not configured' });
+      }
+      const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const data = await fetchJsonWithInit<{
+          comments?: Array<{ id: number; text: string; createdDate: string; createdBy: { displayName: string; uniqueName?: string } }>;
+          totalCount?: number;
+        }>(
+          `${baseUrl}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.2-preview.4`,
+          { method: 'GET', headers: azureHeaders(conn.pat) }
+        );
+        return { data: data.comments ?? [], meta: { total: data.totalCount ?? 0 } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── Add comment ───────────────────────────────────────────────────────────
+  app.post<{
+    Params: { id: string; wiId: string };
+    Body: { text: string };
+  }>('/:id/work-items/:wiId/comments', async (req, reply) => {
+    const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+    if (!project?.connectionId || !project.adoProjectName) {
+      return reply.status(400).send({ error: 'not_configured', message: 'ADO connection not configured' });
+    }
+    const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+    if (!conn || conn.type !== 'azure-devops') {
+      return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+    }
+    const { text } = req.body;
+    if (!text?.trim()) return reply.status(400).send({ error: 'validation', message: 'text is required' });
+    try {
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+      const comment = await fetchJsonWithInit<{ id: number; text: string; createdDate: string }>(
+        `${baseUrl}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.2-preview.4`,
+        {
+          method: 'POST',
+          headers: azureHeaders(conn.pat),
+          body: JSON.stringify({ text: `<p>${text.trim().replace(/\n/g, '<br>')}</p>` }),
+        }
+      );
+      return reply.status(201).send({ data: comment });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return reply.status(502).send({ error: 'remote_error', message });
+    }
+  });
+
+  // ─── AI refine stream ──────────────────────────────────────────────────────
+  app.post<{
+    Params: { id: string; wiId: string };
+    Body: { prompt: string; agentId?: string };
+  }>('/:id/work-items/:wiId/refine-stream', async (req, reply) => {
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.flushHeaders?.();
+
+    const sendEvent = (type: string, payload: Record<string, unknown>) => {
+      reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    const sendLog = (message: string) => sendEvent('log', { message });
+    const endStream = () => { if (!reply.raw.writableEnded) reply.raw.end(); };
+
+    try {
+      const { prompt, agentId } = req.body;
+      if (!prompt?.trim()) throw new Error('prompt is required');
+
+      const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+      if (!project?.connectionId || !project.adoProjectName) throw new Error('ADO connection not configured');
+
+      const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+      if (!conn || conn.type !== 'azure-devops') throw new Error('Azure DevOps connection not found');
+
+      const token = process.env.GITHUB_TOKEN;
+      if (!token) throw new Error('AI provider token not configured');
+
+      const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+
+      sendLog('Loading current work item...');
+      const fields = [
+        'System.Id', 'System.Title', 'System.WorkItemType',
+        'System.Description', 'Microsoft.VSTS.Common.AcceptanceCriteria',
+      ].join(',');
+
+      const wiData = await fetchJsonWithInit<Record<string, unknown>>(
+        `${baseUrl}/_apis/wit/workitems/${req.params.wiId}?fields=${fields}&api-version=7.1`,
+        { method: 'GET', headers: azureHeaders(conn.pat) }
+      );
+
+      const f = wiData.fields as Record<string, unknown>;
+      const currentTitle = String(f['System.Title'] ?? '');
+      const currentDescription = String(f['System.Description'] ?? '');
+      const currentAC = String(f['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? '');
+      const wiType = String(f['System.WorkItemType'] ?? 'User Story');
+
+      let agentSystemPrompt = '';
+      if (agentId) {
+        const agent = await prisma.agent.findUnique({
+          where: { id: agentId },
+          include: { skills: { include: { skill: true } } },
+        });
+        if (agent) {
+          agentSystemPrompt = agent.systemPrompt ?? '';
+          sendLog(`Using agent: ${agent.name}`);
+        }
+      }
+
+      sendLog('Generating refinement...');
+
+      const systemContent = [
+        agentSystemPrompt || 'You are a skilled work item writer.',
+        `You are refining an existing Azure DevOps ${wiType}.`,
+        '',
+        '## Current work item:',
+        `**Title:** ${currentTitle}`,
+        '',
+        `**Description:**\n${currentDescription || '(empty)'}`,
+        '',
+        `**Acceptance Criteria:**\n${currentAC || '(empty)'}`,
+        '',
+        "Apply the user's instructions to improve this work item.",
+        'Only change what the user asks. Keep unchanged content intact.',
+        'Return ONLY valid JSON: { "title": "...", "description": "...", "acceptanceCriteria": "..." }',
+      ].filter(Boolean).join('\n');
+
+      const generated = await fetchModelJson<{ title?: string; description?: string; acceptanceCriteria?: string }>(
+        token, model,
+        [
+          { role: 'system', content: systemContent },
+          { role: 'user', content: prompt.trim() },
+        ]
+      );
+
+      sendEvent('result', generated);
+      sendEvent('done', { ok: true });
+      endStream();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      sendEvent('error', { message });
+      endStream();
+    }
+  });
 }
