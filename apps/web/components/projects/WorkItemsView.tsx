@@ -233,6 +233,9 @@ function WorkItemDetailModal({
   const [splitEditedItems, setSplitEditedItems] = useState<SplitResultItem[]>([]);
   const [splitEditedFeature, setSplitEditedFeature] = useState<SplitResult['feature'] | null>(null);
   const [splitCreating, setSplitCreating] = useState(false);
+  const [splitExpandedIdx, setSplitExpandedIdx] = useState<number | null>(null);
+  const [splitItemRefinePrompt, setSplitItemRefinePrompt] = useState('');
+  const [splitItemRefining, setSplitItemRefining] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const splitLogsEndRef = useRef<HTMLDivElement>(null);
@@ -453,6 +456,57 @@ function WorkItemDetailModal({
       toast.error(getErrorMessage(e));
     } finally {
       setSplitCreating(false);
+    }
+  }
+
+  async function refineItemWithAI(idx: number) {
+    if (!splitItemRefinePrompt.trim() || splitItemRefining) return;
+    const prompt = splitItemRefinePrompt;
+    setSplitItemRefinePrompt('');
+    setSplitItemRefining(true);
+    const token = localStorage.getItem('nexus_auth_token');
+    try {
+      const currentItem = splitEditedItems[idx];
+      const context = `Work item type: ${currentItem.type}\nTitle: ${currentItem.title}\nDescription: ${currentItem.description ?? ''}\nTechnical spec: ${currentItem.technicalSpec ?? ''}\nAcceptance criteria: ${currentItem.acceptanceCriteria ?? ''}`;
+      const response = await fetch(`/api/projects/${projectId}/work-items/${item.id}/refine-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ prompt: `Given this generated work item:\n\n${context}\n\nUser request: ${prompt}`, agentId: selectedAgentId || undefined }),
+      });
+      if (!response.ok || !response.body) throw new Error('Stream failed');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          let eventType = 'message'; let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+          if (!data) continue;
+          const parsed = JSON.parse(data) as { message?: string; title?: string; description?: string; acceptanceCriteria?: string };
+          if (eventType === 'result') {
+            setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? {
+              ...x,
+              title: parsed.title ?? x.title,
+              description: parsed.description ? markdownToHtml(parsed.description) : x.description,
+              acceptanceCriteria: parsed.acceptanceCriteria ? markdownToHtml(parsed.acceptanceCriteria) : x.acceptanceCriteria,
+            } : x));
+            toast.success('Item updated by AI');
+          }
+          if (eventType === 'error') throw new Error(parsed.message ?? 'AI failed');
+        }
+      }
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setSplitItemRefining(false);
     }
   }
 
@@ -1065,62 +1119,142 @@ function WorkItemDetailModal({
                     </div>
                   )}
                   {/* Items */}
-                  {splitEditedItems.map((it, idx) => (
+                  {splitEditedItems.map((it, idx) => {
+                    const isExpanded = splitExpandedIdx === idx;
+                    return (
                     <div key={idx} className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-                      <div className="flex items-center gap-2 bg-gray-50 p-3 dark:bg-gray-800/50">
+                      {/* Card header — click to expand */}
+                      <button
+                        type="button"
+                        onClick={() => setSplitExpandedIdx(isExpanded ? null : idx)}
+                        className="flex w-full items-center gap-2 bg-gray-50 p-3 text-left dark:bg-gray-800/50"
+                      >
                         <span className={`text-xs font-bold uppercase tracking-wider ${it.type === 'Task' ? 'text-yellow-600 dark:text-yellow-400' : 'text-blue-600 dark:text-blue-400'}`}>
                           {it.type}
                         </span>
+                        <span className="flex-1 truncate text-sm font-medium text-gray-800 dark:text-gray-200">{it.title}</span>
                         {it.estimatedHours && (
-                          <span className="ml-auto text-xs text-gray-400">{it.estimatedHours}h</span>
+                          <span className="text-xs text-gray-400">{it.estimatedHours}h</span>
                         )}
-                      </div>
-                      <div className="p-3">
-                        <input
-                          value={it.title}
-                          onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, title: e.target.value } : x))}
-                          className="mb-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                        />
-                        {it.description && (
-                          <div
-                            className="prose prose-sm max-w-none line-clamp-2 text-xs text-gray-600 dark:text-gray-400"
-                            dangerouslySetInnerHTML={{ __html: it.description }}
+                        <ChevronDown size={14} className={`shrink-0 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {/* Collapsed: just title edit */}
+                      {!isExpanded && (
+                        <div className="p-3">
+                          <input
+                            value={it.title}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, title: e.target.value } : x))}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                           />
-                        )}
-                        {it.technicalSpec && (
-                          <p className="mt-1 line-clamp-1 text-xs italic text-indigo-600 dark:text-indigo-400">
-                            🔧 {it.technicalSpec}
-                          </p>
-                        )}
-                        {it.acceptanceCriteria && (
-                          <p className="mt-1 line-clamp-1 text-xs text-green-600 dark:text-green-400">
-                            ✓ {it.acceptanceCriteria}
-                          </p>
-                        )}
-                        {/* Children */}
-                        {it.children && it.children.length > 0 && (
-                          <div className="ml-3 mt-3 space-y-2 border-l-2 border-yellow-200 pl-3 dark:border-yellow-900/40">
-                            {it.children.map((child, ci) => (
-                              <div key={ci} className="rounded-lg border border-yellow-100 bg-yellow-50/50 p-2 dark:border-yellow-900/30 dark:bg-yellow-900/5">
-                                <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-yellow-600 dark:text-yellow-400">Task</span>
-                                <input
-                                  value={child.title}
-                                  onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? {
-                                    ...x,
-                                    children: x.children?.map((c, j) => j === ci ? { ...c, title: e.target.value } : c),
-                                  } : x))}
-                                  className="w-full rounded border border-yellow-200 bg-white px-2 py-1.5 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none dark:border-yellow-800/40 dark:bg-gray-800 dark:text-white"
-                                />
-                                {child.technicalSpec && (
-                                  <p className="mt-1 line-clamp-1 text-xs italic text-indigo-500">🔧 {child.technicalSpec}</p>
-                                )}
-                              </div>
-                            ))}
+                          {(it.description || it.technicalSpec) && (
+                            <p className="mt-1.5 line-clamp-1 text-xs text-gray-400">
+                              {it.description ? '📄 has description' : ''}{it.description && it.technicalSpec ? ' · ' : ''}{it.technicalSpec ? '🔧 has tech spec' : ''}
+                              {' — '}
+                              <button type="button" onClick={() => setSplitExpandedIdx(idx)} className="text-indigo-500 underline hover:no-underline">expand to view & edit</button>
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Expanded: full content + AI chat */}
+                      {isExpanded && (
+                        <div className="space-y-3 p-4">
+                          {/* Title */}
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">Title</label>
+                            <input
+                              value={it.title}
+                              onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, title: e.target.value } : x))}
+                              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                            />
                           </div>
-                        )}
-                      </div>
+                          {/* Description */}
+                          {it.description !== undefined && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
+                              <textarea
+                                rows={4}
+                                value={it.description ?? ''}
+                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                              />
+                            </div>
+                          )}
+                          {/* Technical Spec */}
+                          {it.technicalSpec !== undefined && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-indigo-500 dark:text-indigo-400">🔧 Technical Spec</label>
+                              <textarea
+                                rows={3}
+                                value={it.technicalSpec ?? ''}
+                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, technicalSpec: e.target.value } : x))}
+                                className="w-full rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-indigo-900/30 dark:bg-gray-800 dark:text-white"
+                              />
+                            </div>
+                          )}
+                          {/* Acceptance Criteria */}
+                          {it.acceptanceCriteria !== undefined && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-green-600 dark:text-green-400">✓ Acceptance Criteria</label>
+                              <textarea
+                                rows={3}
+                                value={it.acceptanceCriteria ?? ''}
+                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, acceptanceCriteria: e.target.value } : x))}
+                                className="w-full rounded-lg border border-green-100 bg-green-50/50 px-3 py-2 text-xs text-gray-800 focus:border-green-400 focus:outline-none dark:border-green-900/30 dark:bg-gray-800 dark:text-white"
+                              />
+                            </div>
+                          )}
+                          {/* Children tasks */}
+                          {it.children && it.children.length > 0 && (
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold text-yellow-600 dark:text-yellow-400">Sub-tasks</label>
+                              <div className="space-y-2 border-l-2 border-yellow-200 pl-3 dark:border-yellow-900/40">
+                                {it.children.map((child, ci) => (
+                                  <div key={ci} className="rounded-lg border border-yellow-100 bg-yellow-50/50 p-2 dark:border-yellow-900/30 dark:bg-yellow-900/5">
+                                    <input
+                                      value={child.title}
+                                      onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? {
+                                        ...x, children: x.children?.map((c, j) => j === ci ? { ...c, title: e.target.value } : c),
+                                      } : x))}
+                                      className="w-full rounded border border-yellow-200 bg-white px-2 py-1.5 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none dark:border-yellow-800/40 dark:bg-gray-800 dark:text-white"
+                                    />
+                                    {child.technicalSpec && <p className="mt-1 text-xs italic text-indigo-500">🔧 {child.technicalSpec}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {/* AI refine this item */}
+                          <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3 dark:border-violet-900/40 dark:bg-violet-900/10">
+                            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-violet-700 dark:text-violet-400">
+                              <Sparkles size={11} /> Ask AI to refine this item
+                            </p>
+                            <div className="flex gap-2">
+                              <input
+                                value={splitExpandedIdx === idx ? splitItemRefinePrompt : ''}
+                                onChange={(e) => setSplitItemRefinePrompt(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void refineItemWithAI(idx); } }}
+                                placeholder="e.g. Add more detail to the description, split into 3 sub-tasks, add AC..."
+                                className="flex-1 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs text-gray-800 placeholder-gray-400 focus:border-violet-400 focus:outline-none dark:border-violet-800 dark:bg-gray-900 dark:text-white"
+                                disabled={splitItemRefining}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void refineItemWithAI(idx)}
+                                disabled={!splitItemRefinePrompt.trim() || splitItemRefining}
+                                className="flex items-center gap-1 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                              >
+                                {splitItemRefining ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

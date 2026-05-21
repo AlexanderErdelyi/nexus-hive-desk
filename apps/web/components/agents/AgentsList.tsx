@@ -1,8 +1,8 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil } from 'lucide-react';
-import { useState } from 'react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil, Upload } from 'lucide-react';
+import { useState, useRef } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -71,6 +71,47 @@ function exportAgentAsInstructions(agent: Agent) {
   a.download = `${agent.name.replace(/\s+/g, '-').toLowerCase()}.instructions.md`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Import helper ──────────────────────────────────────────────────────────────
+
+function parseInstructionsMd(content: string): Partial<Agent> | null {
+  try {
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!fmMatch) return null;
+    const fm = fmMatch[1];
+    const body = content.slice(fmMatch[0].length).trim();
+    const get = (key: string) => { const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim().replace(/^["']|["']$/g, '') : undefined; };
+    const toolsMatch = fm.match(/^tools:\s*\[([^\]]*)\]/m);
+    const tools: string[] = toolsMatch?.[1] ? toolsMatch[1].split(',').map(t => t.trim()).filter(Boolean) : [];
+    return {
+      name: get('name') ?? 'Imported Agent',
+      description: get('description'),
+      model: get('model'),
+      argumentHint: get('argument-hint'),
+      systemPrompt: body,
+      tools: JSON.stringify(tools),
+      modelProvider: 'openai',
+      triggerType: 'manual',
+    };
+  } catch { return null; }
+}
+
+function parseAgentsJson(content: string): Partial<Agent>[] {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    return arr.map((a: Record<string, unknown>) => ({
+      name: String(a.name ?? 'Imported Agent'),
+      description: a.description ? String(a.description) : undefined,
+      model: a.model ? String(a.model) : undefined,
+      systemPrompt: a.systemPrompt ? String(a.systemPrompt) : undefined,
+      argumentHint: a.argumentHint ? String(a.argumentHint) : undefined,
+      tools: a.tools ? (typeof a.tools === 'string' ? a.tools : JSON.stringify(a.tools)) : '[]',
+      modelProvider: a.modelProvider ? String(a.modelProvider) : 'openai',
+      triggerType: a.triggerType ? String(a.triggerType) : 'manual',
+    }));
+  } catch { return []; }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -192,6 +233,8 @@ function AgentsTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -254,11 +297,44 @@ function AgentsTab() {
     toast.success('Form pre-filled by AI — review and save');
   }
 
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setImporting(true);
+    let imported = 0; let failed = 0;
+    for (const file of files) {
+      const text = await file.text();
+      const agents: Partial<Agent>[] = file.name.endsWith('.json')
+        ? parseAgentsJson(text)
+        : file.name.endsWith('.md') ? [parseInstructionsMd(text) as Partial<Agent>].filter(Boolean) : [];
+      for (const agent of agents) {
+        if (!agent?.name) { failed++; continue; }
+        try {
+          await api.post('/api/agents', { modelProvider: 'openai', triggerType: 'manual', ...agent });
+          imported++;
+        } catch { failed++; }
+      }
+    }
+    qc.invalidateQueries({ queryKey: ['agents'] });
+    setImporting(false);
+    if (imported > 0) toast.success(`Imported ${imported} agent${imported > 1 ? 's' : ''}`);
+    if (failed > 0) toast.error(`${failed} item${failed > 1 ? 's' : ''} could not be imported`);
+    if (importFileRef.current) importFileRef.current.value = '';
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Agents</h2>
         <div className="flex gap-2">
+          <input ref={importFileRef} type="file" accept=".md,.json" multiple className="hidden" onChange={handleImportFile} />
+          <button
+            onClick={() => importFileRef.current?.click()}
+            disabled={importing}
+            className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800"
+          >
+            {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Import
+          </button>
           <button
             onClick={() => { setShowAIPanel(true); setShowCreate(false); }}
             className="flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/40"
