@@ -172,12 +172,28 @@ function buildTree(items: WorkItem[]): BacklogNode[] {
   return sort(roots);
 }
 
+function collectIds(nodes: BacklogNode[], depth = 0, maxDepth = Infinity): number[] {
+  const ids: number[] = [];
+  for (const n of nodes) {
+    if (n.children.length > 0) {
+      ids.push(n.id);
+      if (depth < maxDepth) ids.push(...collectIds(n.children, depth + 1, maxDepth));
+    }
+  }
+  return ids;
+}
+
 function BacklogRow({
-  node, depth, onSelect, selectedId,
+  node, depth, onSelect, selectedId, expandedIds, onToggle,
 }: {
-  node: BacklogNode; depth: number; onSelect: (item: WorkItem) => void; selectedId?: number;
+  node: BacklogNode;
+  depth: number;
+  onSelect: (item: WorkItem) => void;
+  selectedId?: number;
+  expandedIds: Set<number>;
+  onToggle: (id: number) => void;
 }) {
-  const [expanded, setExpanded] = useState(depth < 2);
+  const expanded = expandedIds.has(node.id);
   const hasChildren = node.children.length > 0;
   const indent = depth * 20 + 12;
 
@@ -197,7 +213,7 @@ function BacklogRow({
       >
         {hasChildren ? (
           <button
-            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+            onClick={(e) => { e.stopPropagation(); onToggle(node.id); }}
             className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400"
           >
             {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
@@ -222,7 +238,15 @@ function BacklogRow({
         )}
       </div>
       {expanded && hasChildren && node.children.map((child) => (
-        <BacklogRow key={child.id} node={child} depth={depth + 1} onSelect={onSelect} selectedId={selectedId} />
+        <BacklogRow
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          onSelect={onSelect}
+          selectedId={selectedId}
+          expandedIds={expandedIds}
+          onToggle={onToggle}
+        />
       ))}
     </>
   );
@@ -2190,6 +2214,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'backlog'>('list');
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['work-items', projectId, typeFilter, stateFilter, viewMode],
@@ -2228,6 +2253,24 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   });
 
   const backlogTree = buildTree(filtered);
+
+  // Initialise expanded state when tree changes (expand first 2 levels)
+  useEffect(() => {
+    if (viewMode === 'backlog' && backlogTree.length > 0) {
+      setExpandedIds(new Set(collectIds(backlogTree, 0, 1)));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, viewMode]);
+
+  const handleToggle = (id: number) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const expandAll = () => setExpandedIds(new Set(collectIds(backlogTree)));
+  const collapseAll = () => setExpandedIds(new Set());
 
   return (
     <div>
@@ -2345,9 +2388,21 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           /* Backlog tree view */
           <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
             {/* Header row */}
-            <div className="grid grid-cols-[1fr_auto] items-center gap-2 border-b border-gray-100 dark:border-gray-800 px-3 py-2 text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide">
-              <span>Title</span>
-              <span className="pr-1">State / Priority</span>
+            <div className="flex items-center gap-2 border-b border-gray-100 dark:border-gray-800 px-3 py-2">
+              <span className="flex-1 text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide">Title</span>
+              <button
+                onClick={expandAll}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+              >
+                <ChevronDown size={11} /> Expand all
+              </button>
+              <button
+                onClick={collapseAll}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+              >
+                <ChevronRight size={11} /> Collapse all
+              </button>
+              <span className="text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide pr-1">State</span>
             </div>
             <div className="divide-y divide-gray-50 dark:divide-gray-800/50 p-1">
               {backlogTree.map((node) => (
@@ -2357,6 +2412,8 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
                   depth={0}
                   onSelect={(wi) => { setSelectedItem(wi); setShowCreateModal(false); }}
                   selectedId={selectedItem?.id}
+                  expandedIds={expandedIds}
+                  onToggle={handleToggle}
                 />
               ))}
             </div>
