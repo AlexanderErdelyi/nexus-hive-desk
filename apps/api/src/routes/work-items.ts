@@ -39,6 +39,21 @@ type ChatModelMessage = { role: 'system' | 'user' | 'assistant'; content: string
 
 type ScreenshotUpload = { index: number; url: string | null };
 
+type DecomposeResultItem = {
+  type: string;
+  title: string;
+  description?: string;
+  acceptanceCriteria?: string;
+  technicalSpec?: string;
+  estimatedHours?: number;
+  children?: Array<{ type: string; title: string; description?: string; technicalSpec?: string }>;
+};
+
+type DecomposeResult = {
+  feature?: { type: string; title: string; description?: string };
+  items: DecomposeResultItem[];
+};
+
 type AdoClassificationNode = {
   name: string;
   path?: string;
@@ -941,7 +956,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
           comments?: Array<{ id: number; text: string; createdDate: string; createdBy: { displayName: string; uniqueName?: string } }>;
           totalCount?: number;
         }>(
-          `${baseUrl}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.2-preview.4`,
+          `${baseUrl}/${encodeURIComponent(project.adoProjectName!)}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.1-preview.3`,
           { method: 'GET', headers: azureHeaders(conn.pat) }
         );
         return { data: data.comments ?? [], meta: { total: data.totalCount ?? 0 } };
@@ -970,7 +985,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
     try {
       const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
       const comment = await fetchJsonWithInit<{ id: number; text: string; createdDate: string }>(
-        `${baseUrl}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.2-preview.4`,
+        `${baseUrl}/${encodeURIComponent(project.adoProjectName!)}/_apis/wit/workitems/${req.params.wiId}/comments?api-version=7.1-preview.3`,
         {
           method: 'POST',
           headers: azureHeaders(conn.pat),
@@ -987,7 +1002,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
   // ─── AI refine stream ──────────────────────────────────────────────────────
   app.post<{
     Params: { id: string; wiId: string };
-    Body: { prompt: string; agentId?: string };
+    Body: { prompt: string; agentId?: string; recordingId?: string };
   }>('/:id/work-items/:wiId/refine-stream', async (req, reply) => {
     reply.hijack();
     reply.raw.statusCode = 200;
@@ -1003,7 +1018,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
     const endStream = () => { if (!reply.raw.writableEnded) reply.raw.end(); };
 
     try {
-      const { prompt, agentId } = req.body;
+      const { prompt, agentId, recordingId } = req.body;
       if (!prompt?.trim()) throw new Error('prompt is required');
 
       const project = await prisma.project.findUnique({ where: { id: req.params.id } });
@@ -1036,14 +1051,61 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
       const wiType = String(f['System.WorkItemType'] ?? 'User Story');
 
       let agentSystemPrompt = '';
+      let mcpContext = '';
       if (agentId) {
         const agent = await prisma.agent.findUnique({
           where: { id: agentId },
-          include: { skills: { include: { skill: true } } },
+          include: {
+            skills: { include: { skill: true } },
+            mcpConnections: { include: { mcpConnection: true } },
+          },
         });
         if (agent) {
           agentSystemPrompt = agent.systemPrompt ?? '';
           sendLog(`Using agent: ${agent.name}`);
+
+          // Teams recording context
+          const teamsMcp = (agent.mcpConnections ?? []).find((l) => l.mcpConnection.type === 'teams_recorder');
+          if (teamsMcp && recordingId) {
+            const mcpConn = teamsMcp.mcpConnection;
+            const mcpPath = mcpConn.baseUrl;
+            if (mcpPath) {
+              let mcpCredential: string | null = null;
+              if (mcpConn.encryptedCredential && mcpConn.credentialIv && mcpConn.credentialTag) {
+                const { decryptToken } = await import('../lib/crypto.js');
+                mcpCredential = decryptToken(mcpConn.encryptedCredential, mcpConn.credentialIv, mcpConn.credentialTag);
+              }
+              const mcpEnv: Record<string, string> = {};
+              if (mcpCredential) mcpEnv.GITHUB_TOKEN = mcpCredential;
+              const { callMcpTool } = await import('../lib/mcp-client.js');
+              try {
+                sendLog('Loading Teams recording transcript...');
+                const [transcriptResult, summaryResult] = await Promise.all([
+                  callMcpTool('node', [mcpPath], mcpEnv, 'get_full_transcript', { recording_id: recordingId }),
+                  callMcpTool('node', [mcpPath], mcpEnv, 'summarize_for_user_story', { recording_id: recordingId }),
+                ]);
+                const transcriptText = transcriptResult.content.find((c: any) => c.type === 'text')?.text ?? '';
+                const summaryText = summaryResult.content.find((c: any) => c.type === 'text')?.text ?? '';
+                let transcriptData: Record<string, unknown> | null = null;
+                let summaryData: Record<string, unknown> | null = null;
+                try { transcriptData = JSON.parse(transcriptText); } catch { /* ignore */ }
+                try { summaryData = JSON.parse(summaryText); } catch { /* ignore */ }
+                if (transcriptData || summaryData) {
+                  const lines: string[] = ['## Teams Recording Context'];
+                  const recTitle = ((transcriptData?.title ?? summaryData?.title) ?? '') as string;
+                  if (recTitle) lines.push(`**Recording:** ${recTitle}`);
+                  const hrSummary = (transcriptData as any)?.humanReadableSummary as string | undefined;
+                  if (hrSummary) lines.push('', '### Meeting summary', hrSummary);
+                  const fullText = (transcriptData as any)?.fullTranscriptText as string | undefined;
+                  if (fullText) lines.push('', '### Full transcript', '```', fullText.slice(0, 5000), '```');
+                  mcpContext = lines.join('\n');
+                  sendLog('Recording context loaded ✓');
+                }
+              } catch (mcpErr) {
+                sendLog(`Teams recording unavailable: ${mcpErr instanceof Error ? mcpErr.message : 'unknown'}`);
+              }
+            }
+          }
         }
       }
 
@@ -1059,8 +1121,10 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
         `**Description:**\n${currentDescription || '(empty)'}`,
         '',
         `**Acceptance Criteria:**\n${currentAC || '(empty)'}`,
+        mcpContext ? `\n${mcpContext}` : '',
         '',
         "Apply the user's instructions to improve this work item.",
+        mcpContext ? 'Use the Teams recording context as additional background information to enrich the content.' : '',
         'Only change what the user asks. Keep unchanged content intact.',
         'Return ONLY valid JSON: { "title": "...", "description": "...", "acceptanceCriteria": "..." }',
       ].filter(Boolean).join('\n');
@@ -1082,4 +1146,304 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
       endStream();
     }
   });
+
+  // ─── AI decompose stream ───────────────────────────────────────────────────
+  app.post<{
+    Params: { id: string; wiId: string };
+    Body: { mode: string; agentId?: string; recordingId?: string; instructions?: string };
+  }>('/:id/work-items/:wiId/decompose-stream', async (req, reply) => {
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.flushHeaders?.();
+
+    const sendEvent = (type: string, payload: Record<string, unknown>) => {
+      reply.raw.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    const sendLog = (message: string) => sendEvent('log', { message });
+    const endStream = () => { if (!reply.raw.writableEnded) reply.raw.end(); };
+
+    try {
+      const { mode, agentId, recordingId, instructions } = req.body;
+      const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+      if (!project?.connectionId || !project.adoProjectName) throw new Error('ADO connection not configured');
+
+      const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+      if (!conn || conn.type !== 'azure-devops') throw new Error('Azure DevOps connection not found');
+
+      const token = process.env.GITHUB_TOKEN;
+      if (!token) throw new Error('AI provider token not configured');
+
+      const modeConfigs = {
+        tasks: {
+          system: (wiType: string) => `You are a senior developer decomposing a ${wiType} into concrete implementation Tasks.`,
+          format: `Return ONLY valid JSON in this format:\n${JSON.stringify({
+            items: [{ type: 'Task', title: '...', description: 'HTML', technicalSpec: '...', estimatedHours: 4 }],
+          }, null, 2)}`,
+        },
+        'split-stories': {
+          system: (wiType: string) => `You are a product owner splitting a large ${wiType} into smaller, independently deliverable User Stories (INVEST principle).`,
+          format: `Return ONLY valid JSON in this format:\n${JSON.stringify({
+            items: [{ type: 'User Story', title: 'As a... I want... so that...', description: 'HTML', acceptanceCriteria: 'BDD' }],
+          }, null, 2)}`,
+        },
+        'feature-wrap': {
+          system: (wiType: string) => `Create a Feature grouping the work, then split the ${wiType} into smaller User Stories under that Feature.`,
+          format: `Return ONLY valid JSON in this format:\n${JSON.stringify({
+            feature: { type: 'Feature', title: '...', description: 'HTML' },
+            items: [{ type: 'User Story', title: '...', description: 'HTML', acceptanceCriteria: 'BDD' }],
+          }, null, 2)}`,
+        },
+        'stories-from-feature': {
+          system: (_wiType: string) => 'Break down a Feature into User Stories.',
+          format: `Return ONLY valid JSON in this format:\n${JSON.stringify({
+            items: [{ type: 'User Story', title: '...', description: 'HTML', acceptanceCriteria: 'BDD' }],
+          }, null, 2)}`,
+        },
+        'stories-with-tasks': {
+          system: (_wiType: string) => 'Break Feature into User Stories, each with implementation Tasks.',
+          format: `Return ONLY valid JSON in this format:\n${JSON.stringify({
+            items: [{
+              type: 'User Story',
+              title: '...',
+              description: 'HTML',
+              acceptanceCriteria: 'BDD',
+              children: [{ type: 'Task', title: '...', description: 'HTML', technicalSpec: '...' }],
+            }],
+          }, null, 2)}`,
+        },
+      } as const;
+
+      const modeConfig = modeConfigs[mode as keyof typeof modeConfigs];
+      if (!modeConfig) throw new Error('Invalid decomposition mode');
+
+      const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+
+      sendLog('Loading current work item...');
+      const fields = [
+        'System.Id', 'System.Title', 'System.WorkItemType',
+        'System.Description', 'Microsoft.VSTS.Common.AcceptanceCriteria',
+      ].join(',');
+
+      const wiData = await fetchJsonWithInit<Record<string, unknown>>(
+        `${baseUrl}/_apis/wit/workitems/${req.params.wiId}?fields=${fields}&api-version=7.1`,
+        { method: 'GET', headers: azureHeaders(conn.pat) }
+      );
+
+      const f = wiData.fields as Record<string, unknown>;
+      const wiTitle = String(f['System.Title'] ?? '');
+      const wiDescription = String(f['System.Description'] ?? '');
+      const wiAC = String(f['Microsoft.VSTS.Common.AcceptanceCriteria'] ?? '');
+      const wiType = String(f['System.WorkItemType'] ?? 'User Story');
+
+      let agentSystemPrompt = '';
+      let mcpContext = '';
+      if (agentId) {
+        const agent = await prisma.agent.findUnique({
+          where: { id: agentId },
+          include: {
+            mcpConnections: { include: { mcpConnection: true } },
+          },
+        });
+        if (agent) {
+          agentSystemPrompt = agent.systemPrompt ?? '';
+          sendLog(`Using agent: ${agent.name}`);
+
+          const teamsMcp = (agent.mcpConnections ?? []).find((l) => l.mcpConnection.type === 'teams_recorder');
+          if (teamsMcp && recordingId) {
+            const mcpConn = teamsMcp.mcpConnection;
+            const mcpPath = mcpConn.baseUrl;
+            if (mcpPath) {
+              let mcpCredential: string | null = null;
+              if (mcpConn.encryptedCredential && mcpConn.credentialIv && mcpConn.credentialTag) {
+                const { decryptToken } = await import('../lib/crypto.js');
+                mcpCredential = decryptToken(mcpConn.encryptedCredential, mcpConn.credentialIv, mcpConn.credentialTag);
+              }
+              const mcpEnv: Record<string, string> = {};
+              if (mcpCredential) mcpEnv.GITHUB_TOKEN = mcpCredential;
+              const { callMcpTool } = await import('../lib/mcp-client.js');
+              try {
+                sendLog('Loading Teams recording transcript...');
+                const [transcriptResult, summaryResult] = await Promise.all([
+                  callMcpTool('node', [mcpPath], mcpEnv, 'get_full_transcript', { recording_id: recordingId }),
+                  callMcpTool('node', [mcpPath], mcpEnv, 'summarize_for_user_story', { recording_id: recordingId }),
+                ]);
+                const transcriptText = transcriptResult.content.find((c: any) => c.type === 'text')?.text ?? '';
+                const summaryText = summaryResult.content.find((c: any) => c.type === 'text')?.text ?? '';
+                let transcriptData: Record<string, unknown> | null = null;
+                let summaryData: Record<string, unknown> | null = null;
+                try { transcriptData = JSON.parse(transcriptText); } catch { /* ignore */ }
+                try { summaryData = JSON.parse(summaryText); } catch { /* ignore */ }
+                if (transcriptData || summaryData) {
+                  const lines: string[] = ['## Teams Recording Context'];
+                  const recTitle = ((transcriptData?.title ?? summaryData?.title) ?? '') as string;
+                  if (recTitle) lines.push(`**Recording:** ${recTitle}`);
+                  const hrSummary = (transcriptData as any)?.humanReadableSummary as string | undefined;
+                  if (hrSummary) lines.push('', '### Meeting summary', hrSummary);
+                  const fullText = (transcriptData as any)?.fullTranscriptText as string | undefined;
+                  if (fullText) lines.push('', '### Full transcript', '```', fullText.slice(0, 5000), '```');
+                  mcpContext = lines.join('\n');
+                  sendLog('Recording context loaded ✓');
+                }
+              } catch (mcpErr) {
+                sendLog(`Teams recording unavailable: ${mcpErr instanceof Error ? mcpErr.message : 'unknown'}`);
+              }
+            }
+          }
+        }
+      }
+
+      sendLog('Generating decomposition...');
+
+      const systemContent = [
+        agentSystemPrompt || modeConfig.system(wiType),
+        agentSystemPrompt ? modeConfig.system(wiType) : '',
+        '',
+        '## Work Item to decompose:',
+        `**Type:** ${wiType}`,
+        `**Title:** ${wiTitle}`,
+        wiDescription ? `\n**Description:**\n${wiDescription}` : '',
+        wiAC ? `\n**Acceptance Criteria:**\n${wiAC}` : '',
+        mcpContext ? `\n${mcpContext}` : '',
+        '',
+        modeConfig.format,
+      ].filter(Boolean).join('\n');
+
+      const generated = await fetchModelJson<DecomposeResult>(
+        token,
+        model,
+        [
+          { role: 'system', content: systemContent },
+          {
+            role: 'user',
+            content: instructions?.trim() ? `Additional instructions: ${instructions.trim()}` : `Decompose the above ${wiType}.`,
+          },
+        ]
+      );
+
+      sendEvent('result', { ...generated, parentId: req.params.wiId, parentType: wiType });
+      sendEvent('done', { ok: true });
+      endStream();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      sendEvent('error', { message });
+      endStream();
+    }
+  });
+
+  // ─── Create decomposed work items ──────────────────────────────────────────
+  app.post<{
+    Params: { id: string; wiId: string };
+    Body: { feature?: DecomposeResult['feature']; items: DecomposeResult['items'] };
+  }>('/:id/work-items/:wiId/decompose-create', async (req, reply) => {
+    const project = await prisma.project.findUnique({ where: { id: req.params.id } });
+    if (!project?.connectionId || !project.adoProjectName) {
+      return reply.status(400).send({ error: 'not_configured', message: 'ADO connection not configured' });
+    }
+
+    const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
+    if (!conn || conn.type !== 'azure-devops') {
+      return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+    }
+
+    try {
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+      const parentData = await fetchJsonWithInit<{ _links?: { self?: { href?: string } } }>(
+        `${baseUrl}/_apis/wit/workitems/${req.params.wiId}?api-version=7.1`,
+        { method: 'GET', headers: azureHeaders(conn.pat) }
+      );
+
+      const parentItemUrl = parentData._links?.self?.href;
+      if (!parentItemUrl) throw new Error('Parent work item URL not found');
+
+      const createdItems: Array<{ id: number; type: string; title: string }> = [];
+
+      const createWorkItem = async (
+        type: string,
+        title: string,
+        description?: string,
+        acceptanceCriteria?: string,
+        technicalSpec?: string,
+        parentUrl?: string
+      ) => {
+        const combinedDescription = [
+          description,
+          technicalSpec ? `<hr><b>Technical Spec:</b><br>${technicalSpec}` : '',
+        ].filter(Boolean).join('\n');
+
+        const patchDoc: Array<{ op: 'add'; path: string; value: unknown }> = [
+          { op: 'add', path: '/fields/System.Title', value: title },
+        ];
+        if (combinedDescription) {
+          patchDoc.push({ op: 'add', path: '/fields/System.Description', value: combinedDescription });
+        }
+        if (acceptanceCriteria) {
+          patchDoc.push({ op: 'add', path: '/fields/Microsoft.VSTS.Common.AcceptanceCriteria', value: acceptanceCriteria });
+        }
+        if (parentUrl) {
+          patchDoc.push({
+            op: 'add',
+            path: '/relations/-',
+            value: { rel: 'System.LinkTypes.Hierarchy-Reverse', url: parentUrl },
+          });
+        }
+
+        return fetchJsonWithInit<{ id: number; _links: { self: { href: string } } }>(
+          `${baseUrl}/${encodeURIComponent(project.adoProjectName!)}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: azurePatchHeaders(conn.pat),
+            body: JSON.stringify(patchDoc),
+          }
+        );
+      };
+
+      let itemParentUrl = parentItemUrl;
+      if (req.body.feature) {
+        const feature = await createWorkItem(
+          req.body.feature.type,
+          req.body.feature.title,
+          req.body.feature.description,
+          undefined,
+          undefined,
+          parentItemUrl
+        );
+        createdItems.push({ id: feature.id, type: req.body.feature.type, title: req.body.feature.title });
+        itemParentUrl = feature._links.self.href;
+      }
+
+      for (const item of req.body.items ?? []) {
+        const created = await createWorkItem(
+          item.type,
+          item.title,
+          item.description,
+          item.acceptanceCriteria,
+          item.technicalSpec,
+          itemParentUrl
+        );
+        createdItems.push({ id: created.id, type: item.type, title: item.title });
+
+        for (const child of item.children ?? []) {
+          const createdChild = await createWorkItem(
+            child.type,
+            child.title,
+            child.description,
+            undefined,
+            child.technicalSpec,
+            created._links.self.href
+          );
+          createdItems.push({ id: createdChild.id, type: child.type, title: child.title });
+        }
+      }
+
+      return reply.status(201).send({ data: createdItems });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return reply.status(502).send({ error: 'remote_error', message });
+    }
+  });
+
 }

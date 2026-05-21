@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
+  AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink, GitBranch,
   Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -84,6 +84,23 @@ interface RefineResult {
   acceptanceCriteria?: string;
 }
 
+interface SplitResultItem {
+  type: string;
+  title: string;
+  description?: string;
+  acceptanceCriteria?: string;
+  technicalSpec?: string;
+  estimatedHours?: number;
+  children?: Array<{ type: string; title: string; description?: string; technicalSpec?: string }>;
+}
+
+interface SplitResult {
+  feature?: { type: string; title: string; description?: string };
+  items: SplitResultItem[];
+  parentId: string;
+  parentType: string;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function typeIcon(type: string, size = 14) {
@@ -149,7 +166,7 @@ function WorkItemDetailModal({
   onUpdated: () => void;
 }) {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'refine'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'refine' | 'split'>('details');
   const [commentText, setCommentText] = useState('');
   const [refinePrompt, setRefinePrompt] = useState('');
   const [refineMessages, setRefineMessages] = useState<ChatMessage[]>([]);
@@ -157,8 +174,24 @@ function WorkItemDetailModal({
   const [refining, setRefining] = useState(false);
   const [applying, setApplying] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [recordings, setRecordings] = useState<Array<{ id: string; title?: string; processedAt?: string; duration?: number }>>([]);
+  const [selectedRecordingId, setSelectedRecordingId] = useState('');
+  const [recordingsMcpId, setRecordingsMcpId] = useState('');
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsFolder, setRecordingsFolder] = useState('');
+  const [splitMode, setSplitMode] = useState<'tasks' | 'split-stories' | 'feature-wrap' | 'stories-from-feature' | 'stories-with-tasks'>('tasks');
+  const [splitInstructions, setSplitInstructions] = useState('');
+  const [splitGenerating, setSplitGenerating] = useState(false);
+  const [splitLogs, setSplitLogs] = useState<string[]>([]);
+  const [splitResult, setSplitResult] = useState<SplitResult | null>(null);
+  const [splitEditedItems, setSplitEditedItems] = useState<SplitResultItem[]>([]);
+  const [splitEditedFeature, setSplitEditedFeature] = useState<SplitResult['feature'] | null>(null);
+  const [splitCreating, setSplitCreating] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const splitLogsEndRef = useRef<HTMLDivElement>(null);
+
+  const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
   const { data: commentsData, isLoading: commentsLoading, refetch: refetchComments } = useQuery({
     queryKey: ['wi-comments', projectId, item.id],
@@ -193,6 +226,10 @@ function WorkItemDetailModal({
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [refineMessages]);
+
+  useEffect(() => {
+    if (splitLogsEndRef.current) splitLogsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [splitLogs]);
 
   async function refineWithAI() {
     if (!refinePrompt.trim() || refining) return;
@@ -265,6 +302,89 @@ function WorkItemDetailModal({
       toast.error(getErrorMessage(e));
     } finally {
       setApplying(false);
+    }
+  }
+
+  async function generateSplit() {
+    if (splitGenerating) return;
+    setSplitGenerating(true);
+    setSplitLogs([]);
+    setSplitResult(null);
+    setSplitEditedItems([]);
+    setSplitEditedFeature(null);
+
+    const token = localStorage.getItem('nexus_auth_token');
+    try {
+      const response = await fetch(`/api/projects/${projectId}/work-items/${item.id}/decompose-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          mode: splitMode,
+          agentId: selectedAgentId || undefined,
+          recordingId: selectedRecordingId || undefined,
+          instructions: splitInstructions || undefined,
+        }),
+      });
+
+      if (!response.ok || !response.body) throw new Error(await response.text().catch(() => 'Stream failed'));
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          let eventType = 'message';
+          let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+          if (!data) continue;
+          const parsed = JSON.parse(data) as SplitResult & { message?: string };
+          if (eventType === 'log' && parsed.message) {
+            setSplitLogs((prev) => [...prev, parsed.message!]);
+          }
+          if (eventType === 'result') {
+            setSplitResult(parsed);
+            setSplitEditedItems(parsed.items ?? []);
+            setSplitEditedFeature(parsed.feature ?? null);
+          }
+          if (eventType === 'error') throw new Error(parsed.message ?? 'Decomposition failed');
+        }
+      }
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+      setSplitLogs((prev) => [...prev, `Error: ${getErrorMessage(e)}`]);
+    } finally {
+      setSplitGenerating(false);
+    }
+  }
+
+  async function createSplitItems() {
+    if (!splitResult || splitCreating) return;
+    setSplitCreating(true);
+    try {
+      await api.post(`/api/projects/${projectId}/work-items/${item.id}/decompose-create`, {
+        feature: splitEditedFeature ?? undefined,
+        items: splitEditedItems,
+      });
+      toast.success(`Created ${splitEditedItems.length} item(s) in Azure DevOps ✔`);
+      void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+      onUpdated();
+      onClose();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setSplitCreating(false);
     }
   }
 
@@ -344,6 +464,12 @@ function WorkItemDetailModal({
             className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-3 text-sm font-medium transition ${activeTab === 'refine' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'}`}
           >
             <Sparkles size={14} /> AI Refine
+          </button>
+          <button
+            onClick={() => setActiveTab('split')}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-3 text-sm font-medium transition ${activeTab === 'split' ? 'border-violet-600 text-violet-600 dark:border-violet-400 dark:text-violet-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'}`}
+          >
+            <GitBranch size={14} /> Split
           </button>
         </div>
 
@@ -627,6 +753,185 @@ function WorkItemDetailModal({
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Split tab ── */}
+          {activeTab === 'split' && (
+            <div className="flex h-full min-h-0 overflow-hidden">
+              {/* Left: controls + log */}
+              <div className="flex w-2/5 flex-col border-r border-gray-200 dark:border-gray-800">
+                {/* Header */}
+                <div className="border-b border-gray-200 p-4 dark:border-gray-800">
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="rounded-xl bg-violet-100 p-2 dark:bg-violet-900/30">
+                      <GitBranch size={16} className="text-violet-600 dark:text-violet-400" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Split / Decompose</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Break this item into smaller pieces</p>
+                    </div>
+                    {agents.length > 0 && (
+                      <select
+                        value={selectedAgentId}
+                        onChange={(e) => setSelectedAgentId(e.target.value)}
+                        className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        <option value="">Direct AI</option>
+                        {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  {/* Mode selector */}
+                  <select
+                    value={splitMode}
+                    onChange={(e) => setSplitMode(e.target.value as typeof splitMode)}
+                    className="mb-3 w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 focus:border-violet-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800/60 dark:text-white"
+                  >
+                    <option value="tasks">→ Create Tasks (User Story → Tasks)</option>
+                    <option value="split-stories">→ Split into User Stories</option>
+                    <option value="feature-wrap">→ Wrap in Feature + User Stories</option>
+                    <option value="stories-from-feature">→ Stories from Feature</option>
+                    <option value="stories-with-tasks">→ Stories + Tasks from Feature</option>
+                  </select>
+                  {/* Recording selector if available */}
+                  {recordings.length > 0 && (
+                    <select
+                      value={selectedRecordingId}
+                      onChange={(e) => setSelectedRecordingId(e.target.value)}
+                      className="mb-3 w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2 text-sm text-gray-900 focus:border-violet-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800/60 dark:text-white"
+                    >
+                      <option value="">No recording context</option>
+                      {recordings.map((rec) => (
+                        <option key={rec.id} value={rec.id}>
+                          {rec.title ?? rec.id}{rec.processedAt ? ` (${new Date(rec.processedAt).toLocaleDateString()})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {/* Instructions */}
+                  <textarea
+                    value={splitInstructions}
+                    onChange={(e) => setSplitInstructions(e.target.value)}
+                    rows={3}
+                    placeholder="Optional: additional instructions (e.g. focus on auth module, use TypeScript, max 3 tasks…)"
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-violet-400 focus:bg-white focus:outline-none dark:border-gray-700 dark:bg-gray-800/60 dark:text-white dark:placeholder-gray-500"
+                  />
+                  <button
+                    onClick={() => void generateSplit()}
+                    disabled={splitGenerating}
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {splitGenerating ? <><Loader2 size={14} className="animate-spin" /> Generating…</> : <><Sparkles size={14} /> Generate</>}
+                  </button>
+                </div>
+                {/* Log */}
+                <div className="flex-1 space-y-1 overflow-y-auto p-4">
+                  {splitLogs.length === 0 && !splitGenerating && (
+                    <p className="text-xs italic text-gray-400">Logs will appear here once you generate.</p>
+                  )}
+                  {splitLogs.map((log, i) => (
+                    <p key={i} className="text-xs italic text-gray-500 dark:text-gray-400">{log}</p>
+                  ))}
+                  <div ref={splitLogsEndRef} />
+                </div>
+              </div>
+
+              {/* Right: preview + create */}
+              <div className="flex w-3/5 flex-col overflow-hidden">
+                <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3 dark:border-gray-800">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">
+                    Generated Items {splitEditedItems.length > 0 && `(${splitEditedItems.length})`}
+                  </h3>
+                  {splitResult && (
+                    <button
+                      onClick={() => void createSplitItems()}
+                      disabled={splitCreating || splitEditedItems.length === 0}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {splitCreating ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                      Create in ADO
+                    </button>
+                  )}
+                </div>
+                <div className="flex-1 space-y-3 overflow-y-auto p-5">
+                  {!splitResult && !splitGenerating && (
+                    <div className="flex h-full items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800">
+                      <p className="text-sm text-gray-400">Generated items will appear here</p>
+                    </div>
+                  )}
+                  {/* Feature wrapper (if applicable) */}
+                  {splitEditedFeature && (
+                    <div className="rounded-xl border-2 border-violet-200 bg-violet-50 p-3 dark:border-violet-900/40 dark:bg-violet-900/10">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Feature</span>
+                      </div>
+                      <input
+                        value={splitEditedFeature.title}
+                        onChange={(e) => setSplitEditedFeature({ ...splitEditedFeature, title: e.target.value })}
+                        className="w-full rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 focus:border-violet-400 focus:outline-none dark:border-violet-800 dark:bg-gray-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  {/* Items */}
+                  {splitEditedItems.map((it, idx) => (
+                    <div key={idx} className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+                      <div className="flex items-center gap-2 bg-gray-50 p-3 dark:bg-gray-800/50">
+                        <span className={`text-xs font-bold uppercase tracking-wider ${it.type === 'Task' ? 'text-yellow-600 dark:text-yellow-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                          {it.type}
+                        </span>
+                        {it.estimatedHours && (
+                          <span className="ml-auto text-xs text-gray-400">{it.estimatedHours}h</span>
+                        )}
+                      </div>
+                      <div className="p-3">
+                        <input
+                          value={it.title}
+                          onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, title: e.target.value } : x))}
+                          className="mb-2 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                        />
+                        {it.description && (
+                          <div
+                            className="prose prose-sm max-w-none line-clamp-2 text-xs text-gray-600 dark:text-gray-400"
+                            dangerouslySetInnerHTML={{ __html: it.description }}
+                          />
+                        )}
+                        {it.technicalSpec && (
+                          <p className="mt-1 line-clamp-1 text-xs italic text-indigo-600 dark:text-indigo-400">
+                            🔧 {it.technicalSpec}
+                          </p>
+                        )}
+                        {it.acceptanceCriteria && (
+                          <p className="mt-1 line-clamp-1 text-xs text-green-600 dark:text-green-400">
+                            ✓ {it.acceptanceCriteria}
+                          </p>
+                        )}
+                        {/* Children */}
+                        {it.children && it.children.length > 0 && (
+                          <div className="ml-3 mt-3 space-y-2 border-l-2 border-yellow-200 pl-3 dark:border-yellow-900/40">
+                            {it.children.map((child, ci) => (
+                              <div key={ci} className="rounded-lg border border-yellow-100 bg-yellow-50/50 p-2 dark:border-yellow-900/30 dark:bg-yellow-900/5">
+                                <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-yellow-600 dark:text-yellow-400">Task</span>
+                                <input
+                                  value={child.title}
+                                  onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? {
+                                    ...x,
+                                    children: x.children?.map((c, j) => j === ci ? { ...c, title: e.target.value } : c),
+                                  } : x))}
+                                  className="w-full rounded border border-yellow-200 bg-white px-2 py-1.5 text-xs text-gray-800 focus:border-yellow-400 focus:outline-none dark:border-yellow-800/40 dark:bg-gray-800 dark:text-white"
+                                />
+                                {child.technicalSpec && (
+                                  <p className="mt-1 line-clamp-1 text-xs italic text-indigo-500">🔧 {child.technicalSpec}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
