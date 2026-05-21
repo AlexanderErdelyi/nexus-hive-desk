@@ -160,8 +160,8 @@ export async function glossaryRoutes(app: FastifyInstance) {
     try {
       const result = await aiProvider.generateGlossary({
         samples: samples.map((s) => ({ source: s.source, target: s.target, context: s.note ?? undefined })),
-        sourceLanguage: project.sourceLanguage,
-        targetLanguage: project.targetLanguage,
+        sourceLanguage: project.sourceLanguage ?? 'en',
+        targetLanguage: project.targetLanguage ?? 'de',
         existingTerms,
       });
       return { data: result.suggestions, meta: { count: result.suggestions.length } };
@@ -201,8 +201,8 @@ export async function glossaryRoutes(app: FastifyInstance) {
     try {
       const result = await aiProvider.suggestGlossaryFromPrompt({
         prompt,
-        sourceLanguage: project.sourceLanguage,
-        targetLanguage: project.targetLanguage,
+        sourceLanguage: project.sourceLanguage ?? 'en',
+        targetLanguage: project.targetLanguage ?? 'de',
         existingTerms,
       });
       return { data: result.suggestions, meta: { count: result.suggestions.length } };

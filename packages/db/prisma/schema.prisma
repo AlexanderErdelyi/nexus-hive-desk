@@ -84,6 +84,7 @@ model Project {
   name            String
   description     String?
   customerId      String?
+  capabilities    String               @default("translation") // comma-sep: "translation,user-stories,documentation"
   // DevOps access config (for Work Items, CI, etc.)
   connectionId    String?              // pinned CustomerConnection for ADO/GitHub access
   adoProjectName  String?              // pinned ADO project (within the connection's org)
@@ -91,8 +92,8 @@ model Project {
   // Legacy single-repo fields (kept for backward compat)
   adoRepoName     String?
   defaultBranch   String?
-  sourceLanguage  String               @default("en")
-  targetLanguage  String               @default("de")
+  sourceLanguage  String?
+  targetLanguage  String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   customer          Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)

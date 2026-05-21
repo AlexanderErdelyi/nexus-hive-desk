@@ -307,6 +307,30 @@ export function RemoteFileBrowser({
     }
   }
 
+  const [scanning, setScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<FileEntry[] | null>(null);
+
+  async function scanForXliff() {
+    if (!selectedConn || !selectedRepo) return;
+    setScanning(true);
+    setScanResults(null);
+    try {
+      const projPart = selectedADOProject ? encodeURIComponent(selectedADOProject.name) : '_';
+      const repoRef = selectedRepo.id && selectedRepo.id !== selectedRepo.name
+        ? selectedRepo.id
+        : encodeURIComponent(selectedRepo.name);
+      const params = selectedBranch ? `?branch=${encodeURIComponent(selectedBranch)}` : '';
+      const res = await api.get<{ data: FileEntry[] }>(
+        `/api/remote/connections/${selectedConn.id}/azure/projects/${projPart}/repos/${repoRef}/xliff-scan${params}`
+      );
+      setScanResults(res.data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setScanning(false);
+    }
+  }
+
   // ─── Navigation helpers ─────────────────────────────────────────────────────
   function goBack() {
     if (step === 'files') {
@@ -479,57 +503,115 @@ export function RemoteFileBrowser({
 
               {/* File browser */}
               {step === 'files' && (
-                <ul className="space-y-0.5">
-                  {currentPath !== '/' && (
-                    <li>
+                <>
+                  {/* Smart scan banner */}
+                  {scanResults === null ? (
+                    <div className="mb-2 flex items-center justify-between rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 dark:border-indigo-900/40 dark:bg-indigo-900/20">
+                      <span className="text-xs text-indigo-700 dark:text-indigo-300">Scan entire repo for all XLIFF files at once</span>
                       <button
-                        onClick={() => {
-                          const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
-                          browsePath(selectedBranch, parent);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+                        onClick={scanForXliff}
+                        disabled={scanning}
+                        className="flex items-center gap-1.5 rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                       >
-                        <span className="text-sm text-gray-400">..</span>
+                        {scanning ? <Loader2 size={12} className="animate-spin" /> : <FileCode2 size={12} />}
+                        {scanning ? 'Scanning…' : 'Scan for XLIFF'}
                       </button>
-                    </li>
+                    </div>
+                  ) : (
+                    <div className="mb-2 flex items-center justify-between rounded-lg border border-green-100 bg-green-50 px-3 py-2 dark:border-green-900/40 dark:bg-green-900/20">
+                      <span className="text-xs text-green-700 dark:text-green-300">
+                        Found {scanResults.length} XLIFF file{scanResults.length !== 1 ? 's' : ''} in repo
+                      </span>
+                      <button
+                        onClick={() => setScanResults(null)}
+                        className="text-xs text-green-600 underline hover:text-green-800 dark:text-green-400"
+                      >
+                        Browse folders
+                      </button>
+                    </div>
                   )}
-                  {files.map((f) => {
-                    const isXliff = f.type === 'file' && (f.name.endsWith('.xlf') || f.name.endsWith('.xliff'));
-                    return (
-                      <li key={f.path}>
-                        <button
-                          disabled={f.type === 'file' && !isXliff || importing}
-                          onClick={() => {
-                            if (f.type === 'directory') browsePath(selectedBranch, f.path);
-                            else if (isXliff) importFile(f);
-                          }}
-                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors
-                            ${f.type === 'directory' ? 'hover:bg-gray-50 dark:hover:bg-gray-800' : ''}
-                            ${isXliff ? 'hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}
-                            ${f.type === 'file' && !isXliff ? 'opacity-40 cursor-not-allowed' : ''}
-                          `}
-                        >
-                          {importing && isXliff ? (
-                            <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
-                          ) : f.type === 'directory' ? (
-                            <Folder size={15} className="shrink-0 text-amber-500" />
-                          ) : (
-                            <FileCode2 size={15} className={`shrink-0 ${isXliff ? 'text-indigo-500' : 'text-gray-300'}`} />
-                          )}
-                          <span className={`text-sm ${isXliff ? 'font-medium text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'}`}>
-                            {f.name}
-                          </span>
-                          {isXliff && (
-                            <span className="ml-auto text-xs text-indigo-400">click to import</span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {files.length === 0 && (
-                    <p className="py-6 text-center text-sm text-gray-400">Empty folder</p>
+
+                  {/* Scan results */}
+                  {scanResults !== null ? (
+                    <ul className="space-y-0.5">
+                      {scanResults.length === 0 && (
+                        <p className="py-6 text-center text-sm text-gray-400">No XLIFF files found in this repo</p>
+                      )}
+                      {scanResults.map((f) => (
+                        <li key={f.path}>
+                          <button
+                            disabled={importing}
+                            onClick={() => importFile(f)}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                          >
+                            {importing ? (
+                              <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
+                            ) : (
+                              <FileCode2 size={15} className="shrink-0 text-indigo-500" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{f.name}</p>
+                              <p className="truncate font-mono text-xs text-gray-400">{f.path}</p>
+                            </div>
+                            <span className="ml-auto text-xs text-indigo-400">import</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {currentPath !== '/' && (
+                        <li>
+                          <button
+                            onClick={() => {
+                              const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
+                              browsePath(selectedBranch, parent);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+                          >
+                            <span className="text-sm text-gray-400">..</span>
+                          </button>
+                        </li>
+                      )}
+                      {files.map((f) => {
+                        const isXliff = f.type === 'file' && (f.name.endsWith('.xlf') || f.name.endsWith('.xliff'));
+                        return (
+                          <li key={f.path}>
+                            <button
+                              disabled={f.type === 'file' && !isXliff || importing}
+                              onClick={() => {
+                                if (f.type === 'directory') browsePath(selectedBranch, f.path);
+                                else if (isXliff) importFile(f);
+                              }}
+                              className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors
+                                ${f.type === 'directory' ? 'hover:bg-gray-50 dark:hover:bg-gray-800' : ''}
+                                ${isXliff ? 'hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}
+                                ${f.type === 'file' && !isXliff ? 'opacity-40 cursor-not-allowed' : ''}
+                              `}
+                            >
+                              {importing && isXliff ? (
+                                <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
+                              ) : f.type === 'directory' ? (
+                                <Folder size={15} className="shrink-0 text-amber-500" />
+                              ) : (
+                                <FileCode2 size={15} className={`shrink-0 ${isXliff ? 'text-indigo-500' : 'text-gray-300'}`} />
+                              )}
+                              <span className={`text-sm ${isXliff ? 'font-medium text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'}`}>
+                                {f.name}
+                              </span>
+                              {isXliff && (
+                                <span className="ml-auto text-xs text-indigo-400">click to import</span>
+                              )}
+                            </button>
+                          </li>
+                        );
+                      })}
+                      {files.length === 0 && (
+                        <p className="py-6 text-center text-sm text-gray-400">Empty folder</p>
+                      )}
+                    </ul>
                   )}
-                </ul>
+                </>
               )}
             </>
           )}

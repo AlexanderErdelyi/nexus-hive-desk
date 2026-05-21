@@ -172,6 +172,48 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
+  // ─── Azure DevOps: Scan repo for XLIFF files ──────────────────────────────
+  app.get<{
+    Params: { connId: string; project: string; repoId: string };
+    Querystring: { branch?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/xliff-scan',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { branch } = req.query;
+
+        // Full recursive tree — returns all items in the repo
+        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?recursionLevel=full&api-version=7.1`;
+        if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
+
+        const data = await fetchJson(url, azureHeaders(conn.pat));
+
+        const xliffFiles = (data.value ?? [])
+          .filter((item: { path: string; isFolder: boolean }) => {
+            if (item.isFolder) return false;
+            const lower = item.path.toLowerCase();
+            return lower.endsWith('.xlf') || lower.endsWith('.xliff');
+          })
+          .map((item: { path: string }) => ({
+            path: item.path,
+            name: item.path.split('/').pop() ?? item.path,
+            type: 'file' as const,
+          }));
+
+        return { data: xliffFiles };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
   // ─── Azure DevOps: Get file content ───────────────────────────────────────
   app.get<{
     Params: { connId: string; project: string; repoId: string };

@@ -33,13 +33,14 @@ interface Project {
   description?: string;
   customerId?: string | null;
   customer?: Customer | null;
+  capabilities?: string | null;
   connectionId?: string | null;
   adoProjectName?: string | null;
   adoAccessScope?: string;
   adoRepoName?: string | null;
   defaultBranch?: string | null;
-  sourceLanguage: string;
-  targetLanguage: string;
+  sourceLanguage?: string | null;
+  targetLanguage?: string | null;
   xliffFiles: Array<{
     id: string;
     filename: string;
@@ -71,6 +72,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
   const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
   const [view, setView] = useState<ProjectView>('hub');
+  const [savingCaps, setSavingCaps] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -187,16 +189,21 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   // ─── Hub view ───────────────────────────────────────────────────────────────
   if (view === 'hub') {
+    const caps = (project.capabilities ?? 'translation').split(',').map((c) => c.trim());
+    const hasTranslation = caps.includes('translation');
+    const hasUserStories = caps.includes('user-stories');
+    const hasDocs = caps.includes('documentation');
+
     const cards = [
       {
         key: 'translations' as ProjectView,
-        icon: <FileCode2 size={28} className="text-indigo-500" />,
+        icon: <FileCode2 size={28} className={hasTranslation ? 'text-indigo-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Translations',
         description: 'Upload, load and edit XLIFF translation files. Use AI to auto-translate and commit back to your repo.',
-        badge: project.xliffFiles.length > 0
+        badge: !hasTranslation ? 'Not enabled' : project.xliffFiles.length > 0
           ? `${project.xliffFiles.length} file${project.xliffFiles.length > 1 ? 's' : ''}`
           : 'No files yet',
-        badgeColor: project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        badgeColor: !hasTranslation ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
         dataTour: 'tab-translations',
       },
@@ -204,28 +211,28 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         key: 'setup' as ProjectView,
         icon: <Settings2 size={28} className="text-amber-500" />,
         title: 'Setup',
-        description: 'Configure remote repository, glossary, and project connections to Azure DevOps or GitHub.',
+        description: 'Configure remote repository, glossary, capabilities, and project connections to Azure DevOps or GitHub.',
         badge: hasRemoteConfig ? 'Configured' : 'Not configured',
         badgeColor: hasRemoteConfig ? 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
       },
       {
         key: 'work-items' as ProjectView,
-        icon: <ClipboardList size={28} className="text-sky-500" />,
+        icon: <ClipboardList size={28} className={hasUserStories ? 'text-sky-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Work Items',
         description: 'Browse, create and manage Azure DevOps work items. Use AI agents and skills to generate user stories, bugs and tasks.',
-        badge: project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
-        badgeColor: project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        badge: !hasUserStories ? 'Not enabled' : project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
+        badgeColor: !hasUserStories ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
         dataTour: 'tab-workitems',
       },
       {
         key: 'documentation' as ProjectView,
-        icon: <BookOpen size={28} className="text-emerald-500" />,
+        icon: <BookOpen size={28} className={hasDocs ? 'text-emerald-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Documentation',
         description: 'Create and manage project documentation. Sync with wikis and generate docs from your codebase.',
-        badge: 'Wiki.js ready',
-        badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
+        badge: !hasDocs ? 'Not enabled' : 'Wiki.js ready',
+        badgeColor: !hasDocs ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
         available: true,
         comingSoon: false,
         dataTour: 'tab-wiki',
@@ -522,6 +529,57 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               Manage Glossary <ArrowRight size={14} />
             </a>
           </div>
+
+          {/* Capabilities */}
+          {(() => {
+            const currentCaps = (project.capabilities ?? 'translation').split(',').map((c) => c.trim()).filter(Boolean);
+            const allCaps = [
+              { id: 'translation', label: 'Translation', description: 'XLIFF file management and AI translation' },
+              { id: 'user-stories', label: 'Work Items', description: 'Azure DevOps work item management' },
+              { id: 'documentation', label: 'Documentation', description: 'Wiki and documentation generation' },
+            ];
+            async function saveCaps(caps: string[]) {
+              setSavingCaps(true);
+              try {
+                await api.patch(`/api/projects/${projectId}`, { capabilities: caps.join(',') });
+                qc.invalidateQueries({ queryKey: ['project', projectId] });
+                toast.success('Capabilities updated');
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : 'Failed to save');
+              } finally {
+                setSavingCaps(false);
+              }
+            }
+            function toggleCap(capId: string) {
+              const next = currentCaps.includes(capId)
+                ? currentCaps.filter((c) => c !== capId)
+                : [...currentCaps, capId];
+              saveCaps(next);
+            }
+            return (
+              <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+                <h3 className="mb-1 font-semibold text-gray-900 dark:text-white">Capabilities</h3>
+                <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">Enable or disable features for this project. Disabled capabilities are hidden from the hub.</p>
+                <div className="space-y-3">
+                  {allCaps.map((cap) => (
+                    <label key={cap.id} className="flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 dark:border-gray-600"
+                        checked={currentCaps.includes(cap.id)}
+                        onChange={() => toggleCap(cap.id)}
+                        disabled={savingCaps}
+                      />
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">{cap.label}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">{cap.description}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Members — full width */}
           <div className="lg:col-span-2">

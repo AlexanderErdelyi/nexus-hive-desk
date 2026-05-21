@@ -28,7 +28,7 @@ async function translateTranslations(options: {
   if (!project) throw new Error('Project not found');
 
   const glossaryEntries = await prisma.glossaryEntry.findMany({
-    where: { projectId, sourceLanguage: project.sourceLanguage, targetLanguage: project.targetLanguage },
+    where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
   });
   const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -44,8 +44,8 @@ async function translateTranslations(options: {
     const batch = translations.slice(i, i + BATCH_SIZE);
     const response = await provider.translate({
       units: batch.map((t) => ({ id: t.id, source: t.source })),
-      sourceLanguage: project.sourceLanguage,
-      targetLanguage: project.targetLanguage,
+      sourceLanguage: project.sourceLanguage ?? 'en',
+      targetLanguage: project.targetLanguage ?? 'de',
       glossary,
     });
     allResults.push(...response.results.map((r) => ({ id: r.id, suggestedTarget: r.translatedText })));
@@ -141,7 +141,7 @@ export async function aiRoutes(app: FastifyInstance) {
       if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
 
       const glossaryEntries = await prisma.glossaryEntry.findMany({
-        where: { projectId, sourceLanguage: project.sourceLanguage, targetLanguage: project.targetLanguage },
+        where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
       });
       const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -161,8 +161,8 @@ export async function aiRoutes(app: FastifyInstance) {
             target: t.target,
             context: t.note ?? undefined,
           })),
-          sourceLanguage: project.sourceLanguage,
-          targetLanguage: project.targetLanguage,
+          sourceLanguage: project.sourceLanguage ?? 'en',
+          targetLanguage: project.targetLanguage ?? 'de',
           glossary,
           additionalContext,
         });

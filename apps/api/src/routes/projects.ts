@@ -55,16 +55,16 @@ export async function projectRoutes(app: FastifyInstance) {
     return { data: project };
   });
 
-  app.post<{ Body: { name: string; description?: string; customerId?: string; sourceLanguage: string; targetLanguage: string } }>(
+  app.post<{ Body: { name: string; description?: string; customerId?: string; sourceLanguage?: string; targetLanguage?: string; capabilities?: string } }>(
     '/',
     async (req, reply) => {
-      const { name, description, customerId, sourceLanguage = 'en', targetLanguage = 'de' } = req.body;
+      const { name, description, customerId, sourceLanguage, targetLanguage, capabilities = 'translation' } = req.body;
       if (!name) {
         return reply.status(400).send({ error: 'validation', message: 'name is required' });
       }
 
       const project = await prisma.project.create({
-        data: { name, description, customerId, sourceLanguage, targetLanguage },
+        data: { name, description, customerId, sourceLanguage, targetLanguage, capabilities },
       });
 
       return reply.status(201).send({ data: project });
@@ -326,7 +326,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
   app.patch<{
     Params: { id: string };
-    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string; targetLanguage?: string; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null };
+    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string | null; targetLanguage?: string | null; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null; capabilities?: string };
   }>('/:id', async (req, reply) => {
     const existing = await prisma.project.findUnique({ where: { id: req.params.id } });
     if (!existing) {

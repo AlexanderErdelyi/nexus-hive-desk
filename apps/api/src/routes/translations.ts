@@ -158,8 +158,8 @@ export async function translationRoutes(app: FastifyInstance) {
             const existing = await prisma.translationMemory.findFirst({
               where: {
                 source: r.source,
-                sourceLanguage: project.sourceLanguage,
-                targetLanguage: project.targetLanguage,
+                sourceLanguage: project.sourceLanguage ?? undefined,
+                targetLanguage: project.targetLanguage ?? undefined,
                 projectId: r.projectId,
               },
             });
@@ -173,8 +173,8 @@ export async function translationRoutes(app: FastifyInstance) {
                 data: {
                   source: r.source,
                   target: r.target,
-                  sourceLanguage: project.sourceLanguage,
-                  targetLanguage: project.targetLanguage,
+                  sourceLanguage: project.sourceLanguage ?? 'en',
+                  targetLanguage: project.targetLanguage ?? 'de',
                   projectId: r.projectId,
                 },
               });
