@@ -1,8 +1,8 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Bot, Play, Save, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { ArrowLeft, Bot, Play, Save, Clock, CheckCircle2, XCircle, Loader2, FlaskConical, Send, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -83,7 +83,7 @@ function statusIcon(status: string) {
   return <Clock size={14} />;
 }
 
-type Tab = 'edit' | 'runs';
+type Tab = 'edit' | 'runs' | 'test';
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -131,8 +131,9 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     );
   }
 
-  const tabs: { key: Tab; label: string }[] = [
+  const tabs: { key: Tab; label: string; icon?: React.ReactNode }[] = [
     { key: 'edit', label: 'Edit' },
+    { key: 'test', label: 'Test', icon: <FlaskConical size={13} /> },
     { key: 'runs', label: `Run History${agent._count?.runs ? ` (${agent._count.runs})` : ''}` },
   ];
 
@@ -154,13 +155,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           <button
             key={t.key}
             onClick={() => setActiveTab(t.key)}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
               activeTab === t.key
                 ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
                 : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'
             }`}
           >
-            {t.label}
+            {t.icon}{t.label}
           </button>
         ))}
       </div>
@@ -174,6 +175,10 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         />
       )}
 
+      {activeTab === 'test' && (
+        <TestTab agent={agent} />
+      )}
+
       {activeTab === 'runs' && (
         <RunsTab
           agentId={agentId}
@@ -183,6 +188,162 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           onRefresh={() => void refetchRuns()}
         />
       )}
+    </div>
+  );
+}
+
+// ── Test Tab ────────────────────────────────────────────────────────────────────
+
+interface ChatMessage { role: 'user' | 'assistant'; content: string }
+
+function TestTab({ agent }: { agent: Agent }) {
+  const lsKey = `nexus_agent_test_${agent.id}`;
+  const [input, setInput] = useState(() => { try { return localStorage.getItem(lsKey) ?? ''; } catch { return ''; } });
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [streaming, setStreaming] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
+  const [lastTokens, setLastTokens] = useState<number | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, streamingText]);
+
+  function getErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : 'Request failed';
+  }
+
+  async function send() {
+    if (!input.trim() || streaming) return;
+    const userMsg = input.trim();
+    try { localStorage.setItem(lsKey, userMsg); } catch { /* ignore */ }
+    setInput('');
+    setLastTokens(null);
+    const newHistory: ChatMessage[] = [...messages, { role: 'user', content: userMsg }];
+    setMessages(newHistory);
+    setStreaming(true);
+    setStreamingText('');
+    const token = localStorage.getItem('nexus_auth_token');
+    try {
+      const res = await fetch(`/api/agents/${agent.id}/test-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ messages: newHistory }),
+      });
+      if (!res.ok || !res.body) throw new Error(await res.text().catch(() => 'Stream failed'));
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let full = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          let eventType = 'message'; let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+          if (!data) continue;
+          const parsed = JSON.parse(data) as { chunk?: string; estimatedTokens?: number; message?: string };
+          if (eventType === 'token' && parsed.chunk) { full += parsed.chunk; setStreamingText((p) => p + parsed.chunk!); }
+          if (eventType === 'done') setLastTokens(parsed.estimatedTokens ?? null);
+          if (eventType === 'error') throw new Error(parsed.message ?? 'Stream error');
+        }
+      }
+      setMessages((prev) => [...prev, { role: 'assistant', content: full }]);
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+      setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${getErrorMessage(e)}` }]);
+    } finally {
+      setStreaming(false);
+      setStreamingText('');
+    }
+  }
+
+  return (
+    <div className="flex h-[600px] flex-col rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+        <div className="flex items-center gap-2">
+          <FlaskConical size={15} className="text-indigo-500" />
+          <span className="text-sm font-semibold text-gray-800 dark:text-white">Test Agent</span>
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            {agent.model || 'default model'}
+          </span>
+        </div>
+        {messages.length > 0 && (
+          <button
+            onClick={() => { setMessages([]); setLastTokens(null); }}
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800"
+          >
+            <Trash2 size={11} /> Clear
+          </button>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        {messages.length === 0 && !streaming && (
+          <div className="flex h-full flex-col items-center justify-center text-center text-gray-400">
+            <FlaskConical size={32} className="mb-2 opacity-30" />
+            <p className="text-sm">Send a message to test this agent.</p>
+            <p className="mt-1 text-xs">Uses the agent&apos;s system prompt and attached skills. No side effects.</p>
+          </div>
+        )}
+        {messages.map((msg, idx) => (
+          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+              msg.role === 'user'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+            }`}>
+              {msg.content}
+            </div>
+          </div>
+        ))}
+        {streaming && (
+          <div className="flex justify-start">
+            <div className="max-w-[80%] rounded-2xl bg-gray-100 px-4 py-2.5 text-sm text-gray-800 dark:bg-gray-800 dark:text-gray-200">
+              {streamingText || <Loader2 size={14} className="animate-spin" />}
+              {streamingText && <span className="animate-pulse">▌</span>}
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Token count */}
+      {lastTokens !== null && (
+        <div className="border-t border-gray-100 px-4 py-1.5 text-right text-xs text-gray-400 dark:border-gray-800">
+          ~{lastTokens} tokens used in last response
+        </div>
+      )}
+
+      {/* Input */}
+      <div className="border-t border-gray-200 p-3 dark:border-gray-700">
+        <div className="flex gap-2">
+          <textarea
+            rows={2}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
+            placeholder="Message the agent… (Enter to send, Shift+Enter for newline)"
+            disabled={streaming}
+            className="flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+          />
+          <button
+            onClick={() => void send()}
+            disabled={!input.trim() || streaming}
+            className="self-end rounded-xl bg-indigo-600 p-2.5 text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {streaming ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
