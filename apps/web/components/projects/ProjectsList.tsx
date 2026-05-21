@@ -73,7 +73,7 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
   const customers = customersData?.data ?? [];
 
   return (
-    <div>
+    <div data-tour="project-tabs">
       <div className="mb-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Customer:</label>
@@ -90,6 +90,7 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
           </select>
         </div>
         <button
+          data-tour="create-project-btn"
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
         >

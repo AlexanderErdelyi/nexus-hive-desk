@@ -7,6 +7,8 @@ import { Providers } from './providers';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { UserMenu } from '@/components/auth/UserMenu';
+import { GuidedTour } from '@/components/tour/GuidedTour';
+import { TourButton } from '@/components/tour/TourButton';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -29,19 +31,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="text-lg font-semibold text-gray-900 dark:text-white">NexusHiveDesk</span>
               </div>
               <span className="text-gray-300 dark:text-gray-700">|</span>
-              <Link href="/projects" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
+              <Link
+                href="/projects"
+                data-tour="nav-projects"
+                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+              >
                 Projects
               </Link>
               <Link href="/customers" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
                 Customers
               </Link>
-              <Link href="/agents" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
+              <Link
+                href="/agents"
+                data-tour="nav-agents"
+                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+              >
                 Agents
               </Link>
-              <Link href="/settings" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
+              <Link
+                href="/settings"
+                data-tour="nav-settings"
+                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+              >
                 Settings
               </Link>
               <div className="ml-auto flex items-center gap-3">
+                <TourButton />
                 <UserMenu />
                 <ThemeToggle />
               </div>
@@ -49,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main className="mx-auto max-w-7xl px-6 py-8">
               <AuthGuard>{children}</AuthGuard>
             </main>
+            <GuidedTour />
           </div>
         </Providers>
         <Toaster richColors position="top-right" theme="system" />

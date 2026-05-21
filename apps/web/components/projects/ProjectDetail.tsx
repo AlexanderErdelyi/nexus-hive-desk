@@ -198,6 +198,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           : 'No files yet',
         badgeColor: project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
+        dataTour: 'tab-translations',
       },
       {
         key: 'setup' as ProjectView,
@@ -216,6 +217,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         badge: project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
         badgeColor: project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
+        dataTour: 'tab-workitems',
       },
       {
         key: 'documentation' as ProjectView,
@@ -226,6 +228,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
         available: true,
         comingSoon: false,
+        dataTour: 'tab-wiki',
       },
     ];
 
@@ -236,6 +239,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {cards.map((card) => (
             <button
               key={card.key}
+              data-tour={card.dataTour}
               onClick={() => card.available && setView(card.key)}
               disabled={!card.available}
               className={`group relative flex flex-col rounded-xl border bg-white p-6 text-left transition-all dark:bg-gray-900
@@ -271,7 +275,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             <span className="flex items-center gap-1">
               <GitCommit size={13} />
               {effectiveRemoteConfig.adoProjectName} / {effectiveRemoteConfig.adoRepoName}
-              <span className="rounded bg-gray-100 px-1.5 dark:bg-gray-800">{effectiveRemoteConfig.defaultBranch}</span>
+              <span data-tour="branch-selector" className="rounded bg-gray-100 px-1.5 dark:bg-gray-800">{effectiveRemoteConfig.defaultBranch}</span>
             </span>
           )}
         </div>
