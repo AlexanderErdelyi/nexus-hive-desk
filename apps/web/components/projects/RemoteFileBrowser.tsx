@@ -78,7 +78,11 @@ export function RemoteFileBrowser({
       setSelectedConn(conn);
       await browsePathWithContext(conn, preADOProject!, preRepo!, preBranch!, '/');
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load pre-configured repo');
+      const msg = e instanceof Error ? e.message : 'Failed to load pre-configured repo';
+      const hint = msg.includes('not exist') || msg.includes('404')
+        ? `${msg} — Check the ADO Project Name in your project settings (it must match the project that owns this repo).`
+        : msg;
+      toast.error(hint);
       loadConnections();
     } finally {
       setLoading(false);
@@ -192,9 +196,13 @@ export function RemoteFileBrowser({
     setCurrentPath(path);
     try {
       const projPart = selectedADOProject ? encodeURIComponent(selectedADOProject.name) : '_';
+      // Prefer repo GUID (id) over name — GUIDs work across ADO projects and avoid name mismatch issues
+      const repoRef = selectedRepo?.id && selectedRepo.id !== selectedRepo.name
+        ? selectedRepo.id
+        : encodeURIComponent(selectedRepo!.name);
       const params = new URLSearchParams({ branch, path });
       const res = await api.get<{ data: FileEntry[] }>(
-        `/api/remote/connections/${selectedConn!.id}/azure/projects/${projPart}/repos/${encodeURIComponent(selectedRepo!.name)}/files?${params}`
+        `/api/remote/connections/${selectedConn!.id}/azure/projects/${projPart}/repos/${repoRef}/files?${params}`
       );
       setFiles(res.data);
       setSelectedBranch(branch);
@@ -212,9 +220,12 @@ export function RemoteFileBrowser({
     setImporting(true);
     try {
       const projPart = selectedADOProject ? encodeURIComponent(selectedADOProject.name) : '_';
+      const repoRef = selectedRepo.id && selectedRepo.id !== selectedRepo.name
+        ? selectedRepo.id
+        : encodeURIComponent(selectedRepo.name);
       const params = new URLSearchParams({ branch: selectedBranch, path: entry.path });
       const contentRes = await api.get<{ data: { content: string } }>(
-        `/api/remote/connections/${selectedConn.id}/azure/projects/${projPart}/repos/${encodeURIComponent(selectedRepo.name)}/file-content?${params}`
+        `/api/remote/connections/${selectedConn.id}/azure/projects/${projPart}/repos/${repoRef}/file-content?${params}`
       );
 
       // Upload as a file using the existing XLIFF upload endpoint
