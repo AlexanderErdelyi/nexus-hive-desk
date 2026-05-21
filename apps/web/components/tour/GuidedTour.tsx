@@ -101,6 +101,23 @@ export function GuidedTour() {
     return () => mo.disconnect();
   }, [isMounted, currentStep]);
 
+  // Force-remove lingering Joyride overlays when the tour stops
+  useEffect(() => {
+    if (isTourActive) return;
+    // Small delay so Joyride has a chance to do its own cleanup first
+    const t = setTimeout(() => {
+      document
+        .querySelectorAll(
+          '.react-joyride__overlay, .__floater, .__floater__arrow, .react-joyride__spotlight'
+        )
+        .forEach((el) => el.remove());
+      // Restore pointer-events in case they were locked
+      document.body.style.pointerEvents = '';
+      document.body.style.overflow = '';
+    }, 100);
+    return () => clearTimeout(t);
+  }, [isTourActive]);
+
   const handleEvent = useCallback((data: EventData, _controls: Controls) => {
     const { action, index, status, type } = data;
 
@@ -125,7 +142,7 @@ export function GuidedTour() {
       setTimeout(() => {
         pendingNav.current = false;
         setCurrentStep(nextIndex);
-      }, 400);
+      }, 600); // increased from 400 to give the page time to mount
     } else {
       setCurrentStep(nextIndex);
     }
@@ -134,8 +151,7 @@ export function GuidedTour() {
   if (!isMounted) return null;
 
   // Keep Joyride mounted with run={false} rather than unmounting abruptly.
-  // Unmounting while active leaves the overlay <div> stuck in the DOM,
-  // blocking all pointer events on the page until refresh.
+  // The overlay cleanup useEffect above handles any residual DOM nodes.
   return (
     <Joyride
       continuous
@@ -149,6 +165,7 @@ export function GuidedTour() {
         arrowColor: '#ffffff',
         overlayColor: 'rgba(15, 23, 42, 0.55)',
         primaryColor: '#4f46e5',
+        scrollOffset: 80,
         zIndex: 9999,
       }}
     />

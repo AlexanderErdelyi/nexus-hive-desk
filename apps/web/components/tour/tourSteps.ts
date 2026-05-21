@@ -52,8 +52,8 @@ export const tourSteps: TourStep[] = [
   },
   // ── 6. XLIFF Translations ─────────────────────────────────────────────────────
   {
-    target: '[data-tour="nav-projects"]',
-    placement: 'right',
+    target: 'body',
+    placement: 'center',
     title: '🌍 XLIFF Translations',
     content:
       'Open a project and go to the Translations tab. Upload your .xlf/.xliff file — NexusHiveDesk extracts all translation units into a searchable, filterable table with filters for state, object type, and more.',
