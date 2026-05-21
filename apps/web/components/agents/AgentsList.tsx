@@ -78,10 +78,11 @@ function exportAgentAsInstructions(agent: Agent) {
 
 function parseInstructionsMd(content: string): Partial<Agent> | null {
   try {
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    const text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
     if (!fmMatch) return null;
     const fm = fmMatch[1];
-    const body = content.slice(fmMatch[0].length).trim();
+    const body = text.slice(fmMatch[0].length).trim();
     const get = (key: string) => { const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim().replace(/^["']|["']$/g, '') : undefined; };
     const toolsMatch = fm.match(/^tools:\s*\[([^\]]*)\]/m);
     const tools: string[] = toolsMatch?.[1] ? toolsMatch[1].split(',').map(t => t.trim()).filter(Boolean) : [];
@@ -130,8 +131,9 @@ function parseSkillsJson(content: string): Partial<Skill>[] {
 
 function parseSkillInstructionsMd(content: string): Partial<Skill> | null {
   try {
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    const body = fmMatch ? content.slice(fmMatch[0].length).trim() : content.trim();
+    const text = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
+    const body = fmMatch ? text.slice(fmMatch[0].length).trim() : text.trim();
     const fm = fmMatch?.[1] ?? '';
     const get = (key: string) => { const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim().replace(/^["']|["']$/g, '') : undefined; };
     const rawType = get('type') ?? 'prompt';
