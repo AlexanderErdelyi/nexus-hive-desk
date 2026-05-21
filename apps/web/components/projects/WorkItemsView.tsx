@@ -2215,6 +2215,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'backlog'>('list');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandLevel, setExpandLevel] = useState(0);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['work-items', projectId, typeFilter, stateFilter, viewMode],
@@ -2254,10 +2255,11 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
 
   const backlogTree = buildTree(filtered);
 
-  // Initialise expanded state when tree changes (expand first 2 levels)
+  // Initialise expanded state when tree first loads (start collapsed)
   useEffect(() => {
-    if (viewMode === 'backlog' && backlogTree.length > 0) {
-      setExpandedIds(new Set(collectIds(backlogTree, 0, 1)));
+    if (viewMode === 'backlog') {
+      setExpandLevel(0);
+      setExpandedIds(new Set());
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, viewMode]);
@@ -2269,8 +2271,19 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
       return next;
     });
 
-  const expandAll = () => setExpandedIds(new Set(collectIds(backlogTree)));
-  const collapseAll = () => setExpandedIds(new Set());
+  // Cycle: 0=collapsed → 1=Epic+Feature → 2=+UserStory → 3=all → 0
+  const EXPAND_LEVELS = [
+    { label: 'Expand', maxDepth: -1 },          // level 0: collapsed → next click goes to 1
+    { label: '+ User Story', maxDepth: 0 },     // level 1: epic/feature visible
+    { label: '+ Task', maxDepth: 1 },           // level 2: user story visible
+    { label: 'Collapse', maxDepth: Infinity },  // level 3: all visible
+  ] as const;
+
+  const cycleExpand = () => {
+    const next = (expandLevel + 1) % 4;
+    setExpandLevel(next);
+    setExpandedIds(next === 0 ? new Set() : new Set(collectIds(backlogTree, 0, EXPAND_LEVELS[next].maxDepth)));
+  };
 
   return (
     <div>
@@ -2391,16 +2404,16 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             <div className="flex items-center gap-2 border-b border-gray-100 dark:border-gray-800 px-3 py-2">
               <span className="flex-1 text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide">Title</span>
               <button
-                onClick={expandAll}
+                onClick={cycleExpand}
+                title={expandLevel === 0 ? 'Expand Epic & Feature level' : expandLevel === 3 ? 'Collapse all' : EXPAND_LEVELS[expandLevel + 1]?.label ?? ''}
                 className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
               >
-                <ChevronDown size={11} /> Expand all
-              </button>
-              <button
-                onClick={collapseAll}
-                className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-              >
-                <ChevronRight size={11} /> Collapse all
+                {expandLevel === 0
+                  ? <><ChevronRight size={11} /> Expand</>
+                  : expandLevel === 3
+                    ? <><ChevronRight size={11} className="rotate-90" /> Collapse</>
+                    : <><ChevronDown size={11} /> {EXPAND_LEVELS[expandLevel].label}</>
+                }
               </button>
               <span className="text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide pr-1">State</span>
             </div>
