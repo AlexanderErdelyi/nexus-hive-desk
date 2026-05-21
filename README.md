@@ -1,8 +1,8 @@
 # NexusHiveDesk
 
-> AI-powered platform for Business Central translations, documentation generation, and project knowledge management
+> AI-powered platform for Business Central translations, documentation generation, Azure DevOps work item management, and project knowledge management
 
-NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translation — but has evolved into a full AI-powered workspace connecting Business Central projects to Azure DevOps, GitHub, Wiki.js, and more. It helps developers, consultants, and teams manage translations, generate documentation, maintain glossaries, and automate knowledge work — all from a single interface.
+NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translation — but has evolved into a full AI-powered workspace connecting Business Central projects to Azure DevOps, GitHub, Wiki.js, and more. It helps developers, consultants, and teams manage translations, generate documentation, manage work items, maintain glossaries, and automate knowledge work — all from a single interface.
 
 ---
 
@@ -12,8 +12,6 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 - Upload XLIFF translation files (`.xlf`) for BC projects
 - View all translation units with source, target, state, and BC metadata (object type, object name, field name)
 - Resizable columns, dark mode support, full-text search
-
-### 🔍 Search & Filter
 - Filter by object type (Table, Codeunit, Page, Report, …), translation state, and more
 - Drag & drop a BC source folder → auto-detect object names and build smart filters
 
@@ -41,6 +39,23 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 
 ---
 
+### 📋 Azure DevOps Work Item Management
+- View, search, and filter work items (User Stories, Tasks, Bugs, Features) across ADO projects
+- **Work Item Detail Modal** with tabbed view:
+  - Overview — editable title, description (AI-refined), acceptance criteria, state, priority
+  - Comments — view all comments, add new comments
+  - AI Refinement — refine the description/AC with AI using context from repos, Teams recordings, or manual instructions; choose model, agent, and skills per refinement
+  - Split / Decompose — AI-powered splitting of User Stories into Tasks (with technical spec, acceptance criteria), or Features into User Stories, with expandable per-item cards and per-item AI chat for fine-tuning before pushing to ADO
+- **AI Create Work Item** — generate work item from context (manual text, Teams recording, repo files) with AI-suggested title, description, AC, and priority
+- **Branch → Work Item → PR workflow** when committing translation changes:
+  - Create a new branch with one click
+  - Search existing ADO work items (by ID or title) to link to the branch
+  - Create a new work item (manual or **AI-suggested** title/description) if none exists
+  - Open a Pull Request directly from the commit modal — title auto-filled from the work item
+  - PR status badge (`Open` / `Merged` / `Closed`) shown on each XLIFF file
+
+---
+
 ### 📄 Documentation Generation (Wiki)
 - Generate structured wiki pages from multiple source types:
   - **Manual text** — describe a topic and let AI draft the page
@@ -50,7 +65,7 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 - Publish directly to **Wiki.js** or **Azure DevOps Wiki** via MCP
 - Full **HTML** (styled, Nobilis Green wiki style) or **Markdown** output
 - AI configuration per generation:
-  - **Model picker** — choose from 30+ models (see below)
+  - **Model picker** — choose from 30+ models (flat grouped dropdown, same as agents)
   - **Agent** — attach a project-specific AI agent with custom system prompt
   - **Skills** — inject prompt skills for domain-specific content
 
@@ -64,22 +79,38 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 ### 🤝 Azure DevOps & GitHub Integration
 - Connect ADO organizations: browse repos, work items, wikis
 - Browse repository file tree (drill down into folders)
-- Use work items as source content for documentation generation
-- **Branch → Work Item → PR workflow** when committing translation changes:
-  - Commit to a new branch with one click
-  - Search existing ADO work items (by ID or title) to link to the branch
-  - Create a new work item (manual or **AI-suggested** title/description) if none exists
-  - Open a Pull Request directly from the commit modal — title auto-filled from the work item
-  - PR status badge (`Open` / `Merged` / `Closed`) shown on each XLIFF file
-  - GitHub repos: commit + PR flow (no work item step)
+- Use work items as source content for documentation generation or AI refinement
+- GitHub repos: commit + PR flow (no work item step)
 
 ### 🧩 Skills & Agents
-- **Skills** — reusable prompt fragments that can be injected into any AI generation
-  - Types: `prompt` (system prompt injection), `wiki-style` (HTML/Markdown formatting)
-  - Built-in: Nobilis Green Wiki HTML style
-- **Agents** — project-specific AI agents with a model, system prompt, and attached skills
-  - Agent model overrides the global model picker
-  - Agents are scoped per project
+
+#### Skills
+Reusable fragments that can be injected into any AI generation (documentation, agent calls, refinement):
+
+| Type | Description | VS Code equivalent |
+|------|-------------|-------------------|
+| **Prompt** | System prompt injection / reusable prompt template | `.github/prompts/*.prompt.md` |
+| **Instructions** | Always-injected scoped context (can use `applyTo` glob) | `.instructions.md` / `copilot-instructions.md` |
+| **Skill** | Reusable skill definition with structured content | `.github/skills/*.skill.md` |
+| **Code** | Script/code-based skill (placeholder for future execution) | — |
+
+- **Import from VS Code** — drag in `.md` (`.prompt.md`, `.skill.md`, `.instructions.md`, `.agent.md`) or `.json` skill/agent files; frontmatter parsed automatically (name, description, type)
+- **Skill detail modal** — full-screen view and edit overlay; read-only for built-in skills
+- Built-in: `WikiHtmlStyleNobilisGreen` (HTML styling for Wiki.js)
+
+#### Agents
+Project-specific AI agents with a model, system prompt, skills, and MCP connections:
+- **Model selector** — flat grouped dropdown with 30+ models (same catalogue as documentation)
+- **System prompt** — large resizable textarea
+- Agents override the global model for all AI operations
+- **Import from VS Code** — `.agent.md` / `.instructions.md` with YAML frontmatter (name, description, tools, model)
+- **Export** — download agent back as `.instructions.md` for use in VS Code
+
+---
+
+### 🗺️ Interactive Tour
+- Built-in guided tour walks through every section: Translation, Glossary, Documentation, Work Items, Agents & Skills, MCP Connections, Settings
+- Triggered on first load or manually from the header
 
 ---
 
@@ -87,26 +118,27 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 
 NexusHiveDesk uses **GitHub Models** (`models.github.ai`) as the default AI provider. No separate API key is needed — just a GitHub personal access token.
 
+Agents and the documentation page share the same flat grouped model selector:
+
 | Provider | Models | Best for |
 |----------|--------|----------|
-| **OpenAI GPT-4** | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` | Translation, review, structured output |
-| **OpenAI GPT-5** ⚡ | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-chat` | Rich documentation, advanced reasoning |
-| **OpenAI o-series** ⚡ | `o3`, `o3-mini`, `o4-mini` | Complex reasoning, technical docs |
-| **Meta Llama 4** | `llama-4-scout`, `llama-4-maverick` | Fast, cost-efficient generation |
-| **Microsoft Phi-4** | `phi-4`, `phi-4-mini` | Lightweight tasks |
-| **DeepSeek** | `deepseek-v3`, `deepseek-r1` ⚡ | Code-heavy documentation |
-| **Cohere** | `command-r`, `command-r-plus` | Long-context retrieval |
-| **AI21 Jamba** | `jamba-1.6-mini`, `jamba-1.6-large` | Long documents |
+| **OpenAI GPT-4** | `gpt-4o-mini`, `gpt-4o`, `gpt-4.1-nano`, `gpt-4.1-mini`, `gpt-4.1` | Translation, review, structured output |
+| **OpenAI GPT-5** ⚡ | `gpt-5-nano`, `gpt-5-mini`, `gpt-5` | Rich documentation, advanced reasoning |
+| **OpenAI o-series** ⚡ | `o4-mini`, `o3-mini`, `o3` | Complex reasoning, technical docs |
+| **Meta Llama 4** | `llama-4-scout`, `llama-4-maverick`, `llama-3.3-70b` | Fast, cost-efficient, multilingual |
+| **DeepSeek** | `deepseek-r1-0528` ⚡, `deepseek-v3-0324` | Code-heavy documentation, BC logic |
+| **Microsoft Phi-4** | `phi-4`, `phi-4-mini` | Lightweight tasks, math + coding |
+| **Cohere / AI21** | `command-a`, `jamba-1.5-large` | Long-context retrieval / RAG |
+| **Anthropic Claude** | `haiku-4-5`, `sonnet-4-5`, `opus-4-5` | Writing quality, agents |
+| **GitHub Copilot** | `claude-sonnet-4.5`, `gpt-4o`, `o3`, `o4-mini` | Copilot-native agent use |
+| **Ollama (local)** | `llama3`, `mistral`, `mixtral`, `phi3`, `gemma2`, … | Offline / private deployments |
 
-> ⚡ = Reasoning model (gpt-5, o-series, DeepSeek R1). These models do internal "thinking" before responding — no temperature or response_format control, but higher quality.
+> ⚡ = Reasoning model. No temperature control, higher quality output.
 
 ### Claude (Anthropic)
-Claude is not in the GitHub Models catalog. To use Claude, set one of:
+Set one of these env vars to enable Claude models directly (without GitHub Models):
 - `ANTHROPIC_API_KEY` — direct Anthropic API
-- `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai) free tier (also supports Claude)
-
-### Custom model
-Enter any model ID manually for custom deployments.
+- `OPENROUTER_API_KEY` — [OpenRouter](https://openrouter.ai) (also supports Claude)
 
 ---
 
@@ -208,16 +240,27 @@ Open **http://localhost:3000**
 5. Optionally configure an **Agent** or **Skills** for domain-specific content
 6. Choose a model, review the generated page, and **publish** to your wiki
 
+## Quick Start — Work Item Management
+
+1. **Connect Azure DevOps** in your project settings
+2. Go to the **Work Items** tab — browse and filter by type, state, assignee
+3. Click a work item to open the detail modal
+4. Use **AI Refinement** to improve descriptions / acceptance criteria with context
+5. Use **Split / Decompose** to break User Stories into Tasks (with technical specs)
+6. Push split items directly to ADO with one click
+
 ---
 
 ## Roadmap
 
-- [ ] Azure DevOps / GitHub — auto-create branches & PRs for translation changes
+- [x] Azure DevOps / GitHub — auto-create branches & PRs for translation changes
+- [x] Import/export Skills and Agents from VS Code (`.md`, `.json`)
 - [ ] Multi-user workspace with role-based access per project
 - [ ] CI/CD pipeline integration for translation validation
 - [ ] More MCP connectors (Confluence, Notion, SharePoint)
 - [ ] Custom Skills marketplace (import/export skill packs)
 - [ ] Translation memory across projects
+- [ ] Azure OpenAI deployment support (private model hosting)
 
 ---
 

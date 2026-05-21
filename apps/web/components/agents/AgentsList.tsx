@@ -31,7 +31,7 @@ interface Skill {
   id: string;
   name: string;
   description?: string;
-  type: 'prompt' | 'instructions' | 'code';
+  type: 'prompt' | 'instructions' | 'skill' | 'code';
   builtIn: boolean;
   promptTemplate?: string;
   createdAt: string;
@@ -124,7 +124,7 @@ function parseSkillsJson(content: string): Partial<Skill>[] {
     return arr.map((s: Record<string, unknown>) => ({
       name: String(s.name ?? 'Imported Skill'),
       description: s.description ? String(s.description) : undefined,
-      type: (['prompt', 'instructions', 'code'].includes(String(s.type)) ? String(s.type) : 'prompt') as Skill['type'],
+      type: (['prompt', 'instructions', 'skill', 'code'].includes(String(s.type)) ? String(s.type) : 'prompt') as Skill['type'],
       promptTemplate: s.promptTemplate ? String(s.promptTemplate) : s.content ? String(s.content) : undefined,
     }));
   } catch { return []; }
@@ -141,7 +141,7 @@ function parseSkillInstructionsMd(content: string): Partial<Skill> | null {
     return {
       name: get('name') ?? 'Imported Skill',
       description: get('description'),
-      type: (['prompt', 'instructions', 'code'].includes(rawType) ? rawType : 'prompt') as Skill['type'],
+      type: (['prompt', 'instructions', 'skill', 'code'].includes(rawType) ? rawType : 'prompt') as Skill['type'],
       promptTemplate: body || undefined,
     };
   } catch { return null; }
@@ -714,6 +714,7 @@ function SkillsTab() {
               >
                 <option value="prompt">Prompt</option>
                 <option value="instructions">Instructions</option>
+                <option value="skill">Skill</option>
                 <option value="code">Code</option>
               </select>
             </div>
@@ -809,6 +810,7 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     instructions: 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    skill: 'bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
   };
 
@@ -892,6 +894,7 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
               >
                 <option value="prompt">Prompt</option>
                 <option value="instructions">Instructions</option>
+                <option value="skill">Skill</option>
                 <option value="code">Code</option>
               </select>
             </div>
@@ -946,6 +949,7 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     instructions: 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    skill: 'bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
   };
 
