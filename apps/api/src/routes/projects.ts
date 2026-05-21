@@ -39,6 +39,8 @@ export async function projectRoutes(app: FastifyInstance) {
             remotePath: true,
             remoteBranch: true,
             remoteRepo: true,
+            remotePrId: true,
+            remotePrUrl: true,
           },
         },
         repositories: { orderBy: { createdAt: 'asc' } },
@@ -183,7 +185,7 @@ export async function projectRoutes(app: FastifyInstance) {
   // Update remote source info on a file
   app.patch<{
     Params: { id: string; fileId: string };
-    Body: { remoteConnectionId?: string; remotePath?: string; remoteBranch?: string; remoteRepo?: string };
+    Body: { remoteConnectionId?: string; remotePath?: string; remoteBranch?: string; remoteRepo?: string; remotePrId?: string | null; remotePrUrl?: string | null };
   }>('/:id/xliff/:fileId/remote', async (req, reply) => {
     const file = await prisma.xliffFile.update({
       where: { id: req.params.fileId },
@@ -192,6 +194,8 @@ export async function projectRoutes(app: FastifyInstance) {
         remotePath: req.body.remotePath,
         remoteBranch: req.body.remoteBranch,
         remoteRepo: req.body.remoteRepo,
+        ...(req.body.remotePrId !== undefined ? { remotePrId: req.body.remotePrId } : {}),
+        ...(req.body.remotePrUrl !== undefined ? { remotePrUrl: req.body.remotePrUrl } : {}),
       },
     });
     return { data: file };

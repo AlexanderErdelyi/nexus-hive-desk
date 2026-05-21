@@ -584,4 +584,304 @@ export async function remoteRoutes(app: FastifyInstance) {
       }
     }
   );
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Azure DevOps: Work Items
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ─── ADO: Search work items ───────────────────────────────────────────────
+  app.get<{
+    Params: { connId: string; project: string };
+    Querystring: { q?: string; top?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/work-items/search',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const q = req.query.q ?? '';
+        const top = Math.min(parseInt(req.query.top ?? '20', 10), 50);
+        const project = req.params.project;
+
+        const whereClause = q.trim()
+          ? `[System.TeamProject] = '${project}' AND ([System.Title] CONTAINS '${q.replace(/'/g, "''")}' OR [System.Id] = '${parseInt(q, 10) || 0}')`
+          : `[System.TeamProject] = '${project}'`;
+
+        const wiql = {
+          query: `SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType] FROM WorkItems WHERE ${whereClause} ORDER BY [System.ChangedDate] DESC`,
+        };
+
+        const wiqlRes = await fetchJsonWithInit<{ workItems?: Array<{ id: number; url: string }> }>(
+          `${baseUrl}/${encodeURIComponent(project)}/_apis/wit/wiql?$top=${top}&api-version=7.1`,
+          { method: 'POST', headers: azureHeaders(conn.pat), body: JSON.stringify(wiql) }
+        );
+
+        const ids = (wiqlRes.workItems ?? []).slice(0, top).map((w) => w.id);
+        if (ids.length === 0) return { data: [] };
+
+        const batchRes = await fetchJson<{ value: Array<{ id: number; fields: Record<string, string> }> }>(
+          `${baseUrl}/_apis/wit/workitems?ids=${ids.join(',')}&fields=System.Id,System.Title,System.State,System.WorkItemType&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const items = (batchRes.value ?? []).map((wi) => ({
+          id: wi.id,
+          title: wi.fields['System.Title'],
+          state: wi.fields['System.State'],
+          type: wi.fields['System.WorkItemType'],
+        }));
+
+        return { data: items };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Create work item ─────────────────────────────────────────────────
+  app.post<{
+    Params: { connId: string; project: string; type: string };
+    Body: { title: string; description?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/work-items/:type',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { title, description } = req.body;
+        const patch = [
+          { op: 'add', path: '/fields/System.Title', value: title },
+          ...(description ? [{ op: 'add', path: '/fields/System.Description', value: description }] : []),
+        ];
+
+        const result = await fetchJsonWithInit<{ id: number; fields: Record<string, string> }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/wit/workitems/$${encodeURIComponent(req.params.type)}?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Basic ${Buffer.from(`:${conn.pat}`).toString('base64')}`,
+              'Content-Type': 'application/json-patch+json',
+            },
+            body: JSON.stringify(patch),
+          }
+        );
+
+        return reply.status(201).send({
+          data: {
+            id: result.id,
+            title: result.fields['System.Title'],
+            state: result.fields['System.State'],
+            type: result.fields['System.WorkItemType'],
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Azure DevOps: Pull Requests
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ─── ADO: Create Pull Request ─────────────────────────────────────────────
+  app.post<{
+    Params: { connId: string; project: string; repoId: string };
+    Body: {
+      title: string;
+      description?: string;
+      sourceBranch: string;
+      targetBranch: string;
+      workItemIds?: number[];
+    };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { title, description, sourceBranch, targetBranch, workItemIds } = req.body;
+
+        const body: Record<string, unknown> = {
+          title,
+          description: description ?? '',
+          sourceRefName: `refs/heads/${sourceBranch}`,
+          targetRefName: `refs/heads/${targetBranch}`,
+        };
+
+        if (workItemIds && workItemIds.length > 0) {
+          body.workItemRefs = workItemIds.map((id) => ({
+            id: String(id),
+            url: `${baseUrl}/_apis/wit/workitems/${id}`,
+          }));
+        }
+
+        const result = await fetchJsonWithInit<{
+          pullRequestId: number;
+          title: string;
+          status: string;
+          _links?: { web?: { href?: string } };
+        }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullrequests?api-version=7.1`,
+          { method: 'POST', headers: azureHeaders(conn.pat), body: JSON.stringify(body) }
+        );
+
+        return reply.status(201).send({
+          data: {
+            prId: result.pullRequestId,
+            title: result.title,
+            status: result.status,
+            webUrl: result._links?.web?.href,
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Get Pull Request status ─────────────────────────────────────────
+  app.get<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const result = await fetchJson<{
+          pullRequestId: number;
+          title: string;
+          status: string;
+          createdBy?: { displayName?: string };
+          creationDate?: string;
+          closedDate?: string;
+          _links?: { web?: { href?: string } };
+        }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullrequests/${encodeURIComponent(req.params.prId)}?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        return {
+          data: {
+            prId: result.pullRequestId,
+            title: result.title,
+            status: result.status, // active | completed | abandoned
+            createdBy: result.createdBy?.displayName,
+            createdAt: result.creationDate,
+            closedAt: result.closedDate,
+            webUrl: result._links?.web?.href,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GitHub: Pull Requests
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ─── GitHub: Create Pull Request ──────────────────────────────────────────
+  app.post<{
+    Params: { connId: string; owner: string; repo: string };
+    Body: { title: string; description?: string; sourceBranch: string; targetBranch: string };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/pull-requests',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const { title, description, sourceBranch, targetBranch } = req.body;
+        const result = await fetchJsonWithInit<{
+          number: number;
+          title: string;
+          state: string;
+          html_url: string;
+        }>(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls`,
+          {
+            method: 'POST',
+            headers: githubHeaders(conn.pat),
+            body: JSON.stringify({ title, body: description ?? '', head: sourceBranch, base: targetBranch }),
+          }
+        );
+
+        return reply.status(201).send({
+          data: { prId: result.number, title: result.title, status: result.state, webUrl: result.html_url },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── GitHub: Get Pull Request status ──────────────────────────────────────
+  app.get<{
+    Params: { connId: string; owner: string; repo: string; prId: string };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const result = await fetchJson<{
+          number: number;
+          title: string;
+          state: string;
+          merged: boolean;
+          html_url: string;
+          user?: { login: string };
+          created_at: string;
+          closed_at?: string;
+        }>(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}`,
+          githubHeaders(conn.pat)
+        );
+
+        return {
+          data: {
+            prId: result.number,
+            title: result.title,
+            status: result.merged ? 'completed' : result.state, // map to same shape as ADO
+            createdBy: result.user?.login,
+            createdAt: result.created_at,
+            closedAt: result.closed_at,
+            webUrl: result.html_url,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
 }

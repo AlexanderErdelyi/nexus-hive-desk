@@ -146,6 +146,8 @@ model XliffFile {
   remotePath       String?       // full path in repo e.g. "Translations/App.de-DE.xlf"
   remoteBranch     String?       // branch name
   remoteRepo       String?       // repo identifier: "org/project/repo" (AzDO) or "owner/repo" (GitHub)
+  remotePrId       String?       // PR number/id after a PR is created
+  remotePrUrl      String?       // Web URL to the PR
   project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   translations     Translation[]
 }
