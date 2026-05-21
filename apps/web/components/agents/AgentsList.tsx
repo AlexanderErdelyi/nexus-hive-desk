@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil, Upload } from 'lucide-react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil, Upload, ChevronDown } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -112,6 +112,35 @@ function parseAgentsJson(content: string): Partial<Agent>[] {
       triggerType: a.triggerType ? String(a.triggerType) : 'manual',
     }));
   } catch { return []; }
+}
+
+function parseSkillsJson(content: string): Partial<Skill>[] {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    return arr.map((s: Record<string, unknown>) => ({
+      name: String(s.name ?? 'Imported Skill'),
+      description: s.description ? String(s.description) : undefined,
+      type: (['prompt', 'code', 'mcp-tool'].includes(String(s.type)) ? String(s.type) : 'prompt') as Skill['type'],
+      promptTemplate: s.promptTemplate ? String(s.promptTemplate) : s.content ? String(s.content) : undefined,
+    }));
+  } catch { return []; }
+}
+
+function parseSkillInstructionsMd(content: string): Partial<Skill> | null {
+  try {
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    const body = fmMatch ? content.slice(fmMatch[0].length).trim() : content.trim();
+    const fm = fmMatch?.[1] ?? '';
+    const get = (key: string) => { const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm')); return m ? m[1].trim().replace(/^["']|["']$/g, '') : undefined; };
+    const rawType = get('type') ?? 'prompt';
+    return {
+      name: get('name') ?? 'Imported Skill',
+      description: get('description'),
+      type: (['prompt', 'code', 'mcp-tool'].includes(rawType) ? rawType : 'prompt') as Skill['type'],
+      promptTemplate: body || undefined,
+    };
+  } catch { return null; }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -547,6 +576,8 @@ function SkillsTab() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showAIPanel, setShowAIPanel] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({ name: '', description: '', type: 'prompt' as string, promptTemplate: '' });
 
   const { data, isLoading } = useQuery({
@@ -599,11 +630,44 @@ function SkillsTab() {
     toast.success('Form pre-filled by AI — review and save');
   }
 
+  async function handleImportSkillFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    setImporting(true);
+    let imported = 0; let failed = 0;
+    for (const file of files) {
+      const text = await file.text();
+      const skills: Partial<Skill>[] = file.name.endsWith('.json')
+        ? parseSkillsJson(text)
+        : file.name.endsWith('.md') ? [parseSkillInstructionsMd(text) as Partial<Skill>].filter(Boolean) : [];
+      for (const skill of skills) {
+        if (!skill?.name) { failed++; continue; }
+        try {
+          await api.post('/api/skills', { type: 'prompt', ...skill });
+          imported++;
+        } catch { failed++; }
+      }
+    }
+    qc.invalidateQueries({ queryKey: ['skills'] });
+    setImporting(false);
+    if (imported > 0) toast.success(`Imported ${imported} skill${imported > 1 ? 's' : ''}`);
+    if (failed > 0) toast.error(`${failed} item${failed > 1 ? 's' : ''} could not be imported`);
+    if (importFileRef.current) importFileRef.current.value = '';
+  }
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Skills</h2>
         <div className="flex gap-2">
+          <input ref={importFileRef} type="file" accept=".md,.json" multiple className="hidden" onChange={handleImportSkillFile} />
+          <button
+            onClick={() => importFileRef.current?.click()}
+            disabled={importing}
+            className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800"
+          >
+            {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Import
+          </button>
           <button
             onClick={() => seedMutation.mutate()}
             disabled={seedMutation.isPending}
@@ -744,6 +808,7 @@ function SkillsTab() {
 }
 
 function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () => void; canDelete: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
@@ -751,23 +816,49 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
   };
 
   return (
-    <div className={cardClass}>
+    <div className={`${cardClass} flex flex-col`}>
+      {/* Header */}
       <div className="flex items-start justify-between">
         <div className="min-w-0 flex-1">
           <span className="block truncate font-semibold text-gray-900 dark:text-white">{skill.name}</span>
           {skill.description && (
-            <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">{skill.description}</p>
+            <p className="mt-1 line-clamp-2 text-sm text-gray-500 dark:text-gray-400">{skill.description}</p>
           )}
         </div>
-        {canDelete && (
-          <button
-            onClick={onDelete}
-            className="ml-2 flex-shrink-0 text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
-          >
-            <Trash2 size={15} />
-          </button>
-        )}
+        <div className="ml-2 flex shrink-0 items-center gap-1">
+          {skill.promptTemplate && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              title={expanded ? 'Collapse' : 'View content'}
+              className="text-gray-400 hover:text-indigo-500 dark:text-gray-600 dark:hover:text-indigo-400"
+            >
+              <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={onDelete}
+              className="text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Expanded content */}
+      {expanded && skill.promptTemplate && (
+        <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/50">
+          <p className="mb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            {skill.type === 'code' ? 'Code' : 'Prompt Template'}
+          </p>
+          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-xs text-gray-700 dark:text-gray-300 font-mono leading-relaxed">
+            {skill.promptTemplate}
+          </pre>
+        </div>
+      )}
+
+      {/* Footer */}
       <div className="mt-3 flex items-center gap-2">
         <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${typeColors[skill.type] ?? ''}`}>
           {skill.type}
@@ -776,6 +867,14 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
           <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
             <Shield size={10} /> built-in
           </span>
+        )}
+        {skill.promptTemplate && !expanded && (
+          <button
+            onClick={() => setExpanded(true)}
+            className="ml-auto text-xs text-indigo-500 hover:text-indigo-700 dark:text-indigo-400"
+          >
+            View content →
+          </button>
         )}
       </div>
       <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(skill.createdAt)}</div>
