@@ -471,7 +471,7 @@ function AgentsTab() {
             <div className="sm:col-span-2">
               <label className={labelClass}>System Prompt</label>
               <textarea
-                className={`${inputClass} min-h-[160px] font-mono text-xs`}
+                className={`${inputClass} min-h-[320px] resize-y font-mono text-xs`}
                 value={form.systemPrompt}
                 onChange={(e) => setForm((f) => ({ ...f, systemPrompt: e.target.value }))}
                 placeholder="You are a helpful agent. Your role is to..."
