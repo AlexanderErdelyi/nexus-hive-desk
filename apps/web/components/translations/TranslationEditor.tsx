@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, RotateCcw, Save, Search, Sparkles, Upload, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, RotateCcw, Save, Search, Sparkles, Upload, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import type { TranslationState } from '@nexus/types';
 import { api } from '@/lib/api';
 import { cn, getStateColor, getStateLabel } from '@/lib/utils';
+import { CommitModal } from '@/components/projects/CommitModal';
 
 interface Translation {
   id: string;
@@ -26,6 +27,12 @@ interface XliffFileInfo {
   filename: string;
   sourceLanguage: string;
   targetLanguage: string;
+  remoteConnectionId?: string;
+  remotePath?: string;
+  remoteBranch?: string;
+  remoteRepo?: string;
+  remotePrId?: string | null;
+  remotePrUrl?: string | null;
 }
 
 interface XliffNoteMeta {
@@ -290,6 +297,7 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
   const [reviewContext, setReviewContext] = useState('');
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [aiReviewing, setAiReviewing] = useState(false);
+  const [showCommitModal, setShowCommitModal] = useState(false);
 
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
@@ -500,6 +508,7 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
   }, []);
 
   return (
+    <>
     <div {...getRootProps()} onClick={undefined}>
       <input {...getInputProps()} />
 
@@ -536,6 +545,14 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
             >
               <Download size={14} /> Download XLIFF
             </a>
+          )}
+          {currentFile?.remoteRepo && (
+            <button
+              onClick={() => setShowCommitModal(true)}
+              className="flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
+            >
+              <GitCommit size={14} /> Commit to Remote
+            </button>
           )}
           {selected.size > 0 && (
             <button
@@ -936,5 +953,39 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
         )}
       </div>
     </div>
+
+    {showCommitModal && currentFile?.remoteRepo && (
+      (() => {
+        const repoParts = currentFile.remoteRepo.split('/');
+        const isAdo = repoParts.length >= 3;
+        const adoProject = isAdo ? repoParts[repoParts.length - 2] : '';
+        const repoId = repoParts[repoParts.length - 1];
+        const githubOwner = !isAdo ? repoParts[0] : undefined;
+        const githubRepo = !isAdo ? repoParts[1] : undefined;
+        return (
+          <CommitModal
+            projectId={projectId}
+            file={{
+              id: currentFile.id,
+              filename: currentFile.filename,
+              remoteConnectionId: currentFile.remoteConnectionId,
+              remotePath: currentFile.remotePath,
+              remoteBranch: currentFile.remoteBranch,
+              remoteRepo: currentFile.remoteRepo,
+              remotePrId: currentFile.remotePrId ?? null,
+              remotePrUrl: currentFile.remotePrUrl ?? null,
+            }}
+            adoProject={adoProject}
+            repoId={repoId}
+            isAdo={isAdo}
+            githubOwner={githubOwner}
+            githubRepo={githubRepo}
+            onDone={() => { setShowCommitModal(false); }}
+            onClose={() => setShowCommitModal(false)}
+          />
+        );
+      })()
+    )}
+    </>
   );
 }
