@@ -462,6 +462,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           <RemoteFileBrowser
             projectId={projectId}
             customerId={project.customerId}
+            configuredRepos={project.repositories ?? []}
             preConnId={effectiveRemoteConfig.connectionId ?? undefined}
             preADOProject={effectiveRemoteConfig.adoProjectName ?? undefined}
             preRepo={effectiveRemoteConfig.adoRepoName ?? undefined}
