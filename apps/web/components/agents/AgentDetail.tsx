@@ -15,7 +15,7 @@ interface Skill {
   id: string;
   name: string;
   description?: string;
-  type: 'prompt' | 'code' | 'mcp-tool';
+  type: 'prompt' | 'instructions' | 'code';
   builtIn: boolean;
 }
 
@@ -294,12 +294,10 @@ function EditTab({
             </select>
           </div>
           <ModelSelector
-            provider={form.modelProvider}
             model={form.model}
             inputClass={inputClass}
             labelClass={labelClass}
-            onProviderChange={(v) => setForm({ ...form, modelProvider: v })}
-            onModelChange={(v) => setForm({ ...form, model: v })}
+            onModelChange={(m, p) => setForm({ ...form, model: m, modelProvider: p })}
           />
           <div className="sm:col-span-2">
             <label className={labelClass}>System Prompt</label>

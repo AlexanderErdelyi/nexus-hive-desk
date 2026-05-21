@@ -31,7 +31,7 @@ interface Skill {
   id: string;
   name: string;
   description?: string;
-  type: 'prompt' | 'code' | 'mcp-tool';
+  type: 'prompt' | 'instructions' | 'code';
   builtIn: boolean;
   promptTemplate?: string;
   createdAt: string;
@@ -124,7 +124,7 @@ function parseSkillsJson(content: string): Partial<Skill>[] {
     return arr.map((s: Record<string, unknown>) => ({
       name: String(s.name ?? 'Imported Skill'),
       description: s.description ? String(s.description) : undefined,
-      type: (['prompt', 'code', 'mcp-tool'].includes(String(s.type)) ? String(s.type) : 'prompt') as Skill['type'],
+      type: (['prompt', 'instructions', 'code'].includes(String(s.type)) ? String(s.type) : 'prompt') as Skill['type'],
       promptTemplate: s.promptTemplate ? String(s.promptTemplate) : s.content ? String(s.content) : undefined,
     }));
   } catch { return []; }
@@ -141,7 +141,7 @@ function parseSkillInstructionsMd(content: string): Partial<Skill> | null {
     return {
       name: get('name') ?? 'Imported Skill',
       description: get('description'),
-      type: (['prompt', 'code', 'mcp-tool'].includes(rawType) ? rawType : 'prompt') as Skill['type'],
+      type: (['prompt', 'instructions', 'code'].includes(rawType) ? rawType : 'prompt') as Skill['type'],
       promptTemplate: body || undefined,
     };
   } catch { return null; }
@@ -423,12 +423,10 @@ function AgentsTab() {
               </select>
             </div>
             <ModelSelector
-              provider={form.modelProvider}
               model={form.model}
               inputClass={inputClass}
               labelClass={labelClass}
-              onProviderChange={(v) => setForm((f) => ({ ...f, modelProvider: v }))}
-              onModelChange={(v) => setForm((f) => ({ ...f, model: v }))}
+              onModelChange={(m, p) => setForm((f) => ({ ...f, model: m, modelProvider: p }))}
             />
             <div className="sm:col-span-2">
               <label className={labelClass}>Description <span className="text-gray-400 font-normal text-xs">"Use when: ..." with trigger phrases</span></label>
@@ -715,8 +713,8 @@ function SkillsTab() {
                 onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
               >
                 <option value="prompt">Prompt</option>
+                <option value="instructions">Instructions</option>
                 <option value="code">Code</option>
-                <option value="mcp-tool">MCP Tool</option>
               </select>
             </div>
             <div className="sm:col-span-2">
@@ -810,8 +808,8 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
 
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    instructions: 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-    'mcp-tool': 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   };
 
   async function save() {
@@ -893,8 +891,8 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
                 className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               >
                 <option value="prompt">Prompt</option>
+                <option value="instructions">Instructions</option>
                 <option value="code">Code</option>
-                <option value="mcp-tool">MCP Tool</option>
               </select>
             </div>
           )}
@@ -947,8 +945,8 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
 
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    instructions: 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-    'mcp-tool': 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   };
 
   return (
