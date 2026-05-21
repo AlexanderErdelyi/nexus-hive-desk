@@ -234,6 +234,22 @@ function WorkItemDetailModal({
     if (splitLogsEndRef.current) splitLogsEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [splitLogs]);
 
+  // Load recordings when agent with Teams MCP is selected
+  useEffect(() => {
+    setRecordings([]);
+    setSelectedRecordingId('');
+    setRecordingsMcpId('');
+    if (!selectedAgent) return;
+    const teamsMcp = selectedAgent.mcpConnections?.find((m) => m.mcpConnection.type === 'teams_recorder');
+    if (!teamsMcp) return;
+    setRecordingsMcpId(teamsMcp.mcpConnection.id);
+    setRecordingsLoading(true);
+    api.get(`/api/mcp-connections/${teamsMcp.mcpConnection.id}/recordings`)
+      .then((res: any) => setRecordings(Array.isArray(res?.data) ? res.data : []))
+      .catch(() => {})
+      .finally(() => setRecordingsLoading(false));
+  }, [selectedAgentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function refineWithAI() {
     if (!refinePrompt.trim() || refining) return;
     const msg = refinePrompt;
