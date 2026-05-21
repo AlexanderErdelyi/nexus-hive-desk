@@ -13,7 +13,7 @@ if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 
-const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom', 'teams_recorder'] as const;
+const VALID_TYPES = ['wiki_js', 'azure_devops_wiki', 'github', 'azure_devops', 'custom', 'teams_recorder', 'sharepoint'] as const;
 
 function stripCredentials(conn: any) {
   const { encryptedCredential, credentialIv, credentialTag, ...safe } = conn;
@@ -68,6 +68,45 @@ function getWikiJsConfig(connection: {
   const pythonPath = typeof caps.pythonPath === 'string' && caps.pythonPath.trim() ? caps.pythonPath.trim() : 'python';
 
   return { wikiUrl, scriptPath, pythonPath, invalidUrl };
+}
+
+// ─── SharePoint helpers ───────────────────────────────────────────────────
+async function getSharePointToken(connection: {
+  capabilities?: string | null;
+  encryptedCredential?: string | null;
+  credentialIv?: string | null;
+  credentialTag?: string | null;
+}): Promise<string> {
+  const caps = parseCapabilities(connection.capabilities);
+  const tenantId = typeof caps.tenantId === 'string' ? caps.tenantId : '';
+  const clientId = typeof caps.clientId === 'string' ? caps.clientId : '';
+  if (!tenantId || !clientId) {
+    throw new Error('SharePoint tenantId and clientId must be configured in the connection capabilities');
+  }
+  if (!connection.encryptedCredential || !connection.credentialIv || !connection.credentialTag) {
+    throw new Error('SharePoint client secret not configured (set the Credential field to your Client Secret)');
+  }
+  const clientSecret = decryptToken(connection.encryptedCredential, connection.credentialIv, connection.credentialTag);
+  const params = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+  });
+  const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to get SharePoint token: HTTP ${res.status} — ${errText}`);
+  }
+  const data = await res.json() as { access_token?: string; error?: string; error_description?: string };
+  if (!data.access_token) {
+    throw new Error(data.error_description ?? data.error ?? 'No access token returned from Azure AD');
+  }
+  return data.access_token;
 }
 
 type WikiJsSource = 'mcp' | 'direct';
@@ -767,6 +806,23 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         } catch (mcpErr) {
           const mcpMsg = mcpErr instanceof Error ? mcpErr.message : 'MCP failed';
           return { data: { status: 'ok', message: `${directMsg} | MCP unavailable: ${mcpMsg}` } };
+        }
+      }
+
+      if (connection.type === 'sharepoint') {
+        try {
+          const token = await getSharePointToken(connection);
+          const sitesRes = await fetch('https://graph.microsoft.com/v1.0/sites?search=*', {
+            headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          });
+          if (!sitesRes.ok) {
+            const errText = await sitesRes.text();
+            return { data: { status: 'error', message: `Microsoft Graph API returned ${sitesRes.status}: ${errText}` } };
+          }
+          const sitesData = await sitesRes.json() as { value?: unknown[] };
+          return { data: { status: 'ok', message: `Connected to SharePoint — ${sitesData.value?.length ?? 0} site(s) found` } };
+        } catch (err) {
+          return { data: { status: 'error', message: err instanceof Error ? err.message : 'SharePoint connection failed' } };
         }
       }
 
@@ -1536,6 +1592,183 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.status(502).send({ error: 'mcp_error', message });
+    }
+  });
+
+  // ─── SharePoint: List sites ───────────────────────────────────────────────
+  app.get<{ Params: { id: string } }>('/:id/sharepoint/sites', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    if (connection.type !== 'sharepoint') return reply.status(400).send({ error: 'invalid_type', message: 'Only sharepoint connections support this endpoint' });
+
+    try {
+      const token = await getSharePointToken(connection);
+      const res = await fetch('https://graph.microsoft.com/v1.0/sites?search=*', {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return reply.status(502).send({ error: 'graph_error', message: `Graph API returned ${res.status}: ${errText}` });
+      }
+      const data = await res.json() as { value?: Array<{ id: string; displayName?: string; name?: string; webUrl?: string }> };
+      return { data: (data.value ?? []).map((s) => ({ id: s.id, name: s.displayName ?? s.name ?? s.id, webUrl: s.webUrl })) };
+    } catch (err) {
+      return reply.status(502).send({ error: 'sharepoint_error', message: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  });
+
+  // ─── SharePoint: List pages in a site ─────────────────────────────────────
+  app.get<{ Params: { id: string; siteId: string } }>('/:id/sharepoint/sites/:siteId/pages', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    if (connection.type !== 'sharepoint') return reply.status(400).send({ error: 'invalid_type', message: 'Only sharepoint connections support this endpoint' });
+
+    try {
+      const token = await getSharePointToken(connection);
+      const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${encodeURIComponent(req.params.siteId)}/pages`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return reply.status(502).send({ error: 'graph_error', message: `Graph API returned ${res.status}: ${errText}` });
+      }
+      const data = await res.json() as { value?: Array<{ id: string; title?: string; name?: string; webUrl?: string; lastModifiedDateTime?: string }> };
+      return { data: (data.value ?? []).map((p) => ({ id: p.id, title: p.title ?? p.name ?? p.id, webUrl: p.webUrl, lastModifiedDateTime: p.lastModifiedDateTime })) };
+    } catch (err) {
+      return reply.status(502).send({ error: 'sharepoint_error', message: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  });
+
+  // ─── SharePoint: Get a specific page ──────────────────────────────────────
+  app.get<{ Params: { id: string; siteId: string; pageId: string } }>('/:id/sharepoint/sites/:siteId/pages/:pageId', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    if (connection.type !== 'sharepoint') return reply.status(400).send({ error: 'invalid_type', message: 'Only sharepoint connections support this endpoint' });
+
+    try {
+      const token = await getSharePointToken(connection);
+      const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${encodeURIComponent(req.params.siteId)}/pages/${encodeURIComponent(req.params.pageId)}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return reply.status(502).send({ error: 'graph_error', message: `Graph API returned ${res.status}: ${errText}` });
+      }
+      const data = await res.json() as Record<string, unknown>;
+      return { data };
+    } catch (err) {
+      return reply.status(502).send({ error: 'sharepoint_error', message: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  });
+
+  // ─── SharePoint: Create a page ────────────────────────────────────────────
+  app.post<{
+    Params: { id: string; siteId: string };
+    Body: { title: string; content: string };
+  }>('/:id/sharepoint/sites/:siteId/pages', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    if (connection.type !== 'sharepoint') return reply.status(400).send({ error: 'invalid_type', message: 'Only sharepoint connections support this endpoint' });
+
+    const { title, content } = req.body;
+    if (!title?.trim()) return reply.status(400).send({ error: 'validation', message: 'title is required' });
+
+    try {
+      const token = await getSharePointToken(connection);
+      const body = {
+        '@odata.type': '#microsoft.graph.sitePage',
+        name: `${title.trim().replace(/[^a-z0-9_-]/gi, '-').toLowerCase()}.aspx`,
+        title: title.trim(),
+        promotionKind: 'page',
+        showComments: false,
+        showRecommendedPages: false,
+        titleArea: {
+          enableGradientEffect: true,
+          imageWebUrl: '',
+          layout: 'plain',
+          showAuthor: false,
+          showPublishedDate: false,
+          showTextBlockAboveTitle: false,
+          textAboveTitle: '',
+          textAlignment: 'left',
+          title: title.trim(),
+          '@odata.type': '#microsoft.graph.titleArea',
+        },
+        canvasLayout: {
+          horizontalSections: [{
+            '@odata.type': '#microsoft.graph.horizontalSection',
+            layout: 'oneColumn',
+            id: '1',
+            emphasis: 'none',
+            columns: [{
+              '@odata.type': '#microsoft.graph.horizontalSectionColumn',
+              id: '1',
+              width: 12,
+              webparts: [{ '@odata.type': '#microsoft.graph.textWebPart', innerHtml: content ?? '' }],
+            }],
+          }],
+        },
+      };
+      const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${encodeURIComponent(req.params.siteId)}/pages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return reply.status(502).send({ error: 'graph_error', message: `Graph API returned ${res.status}: ${errText}` });
+      }
+      const data = await res.json() as { id?: string; title?: string; webUrl?: string };
+      return reply.status(201).send({ data });
+    } catch (err) {
+      return reply.status(502).send({ error: 'sharepoint_error', message: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  });
+
+  // ─── SharePoint: Update a page ────────────────────────────────────────────
+  app.patch<{
+    Params: { id: string; siteId: string; pageId: string };
+    Body: { title?: string; content: string };
+  }>('/:id/sharepoint/sites/:siteId/pages/:pageId', async (req, reply) => {
+    const connection = await prisma.mCPConnection.findUnique({ where: { id: req.params.id } });
+    if (!connection) return reply.status(404).send({ error: 'not_found', message: 'MCP connection not found' });
+    if (connection.type !== 'sharepoint') return reply.status(400).send({ error: 'invalid_type', message: 'Only sharepoint connections support this endpoint' });
+
+    const { title, content } = req.body;
+    if (!content?.trim()) return reply.status(400).send({ error: 'validation', message: 'content is required' });
+
+    try {
+      const token = await getSharePointToken(connection);
+      const body: Record<string, unknown> = {
+        canvasLayout: {
+          horizontalSections: [{
+            '@odata.type': '#microsoft.graph.horizontalSection',
+            layout: 'oneColumn',
+            id: '1',
+            emphasis: 'none',
+            columns: [{
+              '@odata.type': '#microsoft.graph.horizontalSectionColumn',
+              id: '1',
+              width: 12,
+              webparts: [{ '@odata.type': '#microsoft.graph.textWebPart', innerHtml: content }],
+            }],
+          }],
+        },
+      };
+      if (title?.trim()) body.title = title.trim();
+      const res = await fetch(`https://graph.microsoft.com/v1.0/sites/${encodeURIComponent(req.params.siteId)}/pages/${encodeURIComponent(req.params.pageId)}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        return reply.status(502).send({ error: 'graph_error', message: `Graph API returned ${res.status}: ${errText}` });
+      }
+      const data = await res.json() as Record<string, unknown>;
+      return { data };
+    } catch (err) {
+      return reply.status(502).send({ error: 'sharepoint_error', message: err instanceof Error ? err.message : 'Unknown error' });
     }
   });
 }

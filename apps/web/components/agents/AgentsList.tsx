@@ -1171,6 +1171,8 @@ function McpTab() {
     wikiUrl: '',
     scriptPath: '',
     pythonPath: '',
+    tenantId: '',
+    clientId: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -1188,10 +1190,12 @@ function McpTab() {
     wikiUrl: '',
     scriptPath: '',
     pythonPath: '',
+    tenantId: '',
+    clientId: '',
   };
 
   function buildPayload(input: typeof form) {
-    const { recordingsFolder, wikiUrl, scriptPath, pythonPath, ...rest } = input;
+    const { recordingsFolder, wikiUrl, scriptPath, pythonPath, tenantId, clientId, ...rest } = input;
     const caps: Record<string, string> = {};
     if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
     if (input.type === 'wiki_js') {
@@ -1199,8 +1203,12 @@ function McpTab() {
       if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
       if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
     }
+    if (input.type === 'sharepoint') {
+      if (tenantId.trim()) caps.tenantId = tenantId.trim();
+      if (clientId.trim()) caps.clientId = clientId.trim();
+    }
     // For typed connections always send capabilities (even empty {}) so old stale values get overwritten
-    const shouldSendCaps = input.type === 'wiki_js' || input.type === 'teams_recorder';
+    const shouldSendCaps = input.type === 'wiki_js' || input.type === 'teams_recorder' || input.type === 'sharepoint';
     const capabilities = (Object.keys(caps).length > 0 || shouldSendCaps) ? JSON.stringify(caps) : undefined;
     return { ...rest, ...(capabilities !== undefined ? { capabilities } : {}) };
   }
@@ -1264,6 +1272,8 @@ function McpTab() {
       wikiUrl: String(caps.wikiUrl ?? ''),
       scriptPath: String(caps.scriptPath ?? ''),
       pythonPath: String(caps.pythonPath ?? ''),
+      tenantId: String(caps.tenantId ?? ''),
+      clientId: String(caps.clientId ?? ''),
     });
     setEditingId(c.id);
     setShowCreate(true);
@@ -1281,6 +1291,8 @@ function McpTab() {
       wikiUrl: String(data.wikiUrl ?? ''),
       scriptPath: String(data.scriptPath ?? ''),
       pythonPath: String(data.pythonPath ?? ''),
+      tenantId: String(data.tenantId ?? ''),
+      clientId: String(data.clientId ?? ''),
     });
     setEditingId(null);
     setShowAIPanel(false);
@@ -1350,10 +1362,12 @@ function McpTab() {
                 <option value="azure_devops_wiki">Azure DevOps Wiki</option>
                 <option value="github">GitHub</option>
                 <option value="azure_devops">Azure DevOps</option>
+                <option value="sharepoint">SharePoint Online</option>
                 <option value="teams_recorder">Teams Recorder (Local MCP)</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
+            {form.type !== 'sharepoint' && (
             <div>
               <label className={labelClass}>{form.type === 'wiki_js' ? 'Wiki.js URL *' : 'Base URL *'}</label>
               <input
@@ -1377,7 +1391,7 @@ function McpTab() {
                 </p>
               )}
             </div>
-            <div>
+            )}            <div>
               <label className={labelClass}>Auth Type</label>
               <select
                 className={inputClass}
@@ -1391,21 +1405,54 @@ function McpTab() {
             </div>
             <div className="sm:col-span-2">
               <label className={labelClass}>
-                {form.type === 'teams_recorder' ? 'GitHub Token (GITHUB_TOKEN)' : 'Credential / Token'}
+                {form.type === 'teams_recorder' ? 'GitHub Token (GITHUB_TOKEN)' : form.type === 'sharepoint' ? 'Client Secret *' : 'Credential / Token'}
               </label>
               <input
                 className={inputClass}
                 type="password"
                 value={form.credential}
                 onChange={(e) => setForm((f) => ({ ...f, credential: e.target.value }))}
-                placeholder={form.type === 'teams_recorder' ? 'ghp_... (required for AI analysis)' : 'PAT or API key'}
+                placeholder={form.type === 'teams_recorder' ? 'ghp_... (required for AI analysis)' : form.type === 'sharepoint' ? 'Azure AD App Client Secret' : 'PAT or API key'}
               />
               {form.type === 'teams_recorder' && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   GitHub token with Copilot/models access. Required for AI analysis; list_recordings works without it.
                 </p>
               )}
+              {form.type === 'sharepoint' && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  The Client Secret for your Azure AD App Registration with SharePoint Sites.ReadWrite.All permission.
+                </p>
+              )}
             </div>
+            {form.type === 'sharepoint' && (
+              <>
+                <div>
+                  <label className={labelClass}>Tenant ID *</label>
+                  <input
+                    className={inputClass}
+                    value={form.tenantId}
+                    onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Your Azure AD Tenant (Directory) ID.
+                  </p>
+                </div>
+                <div>
+                  <label className={labelClass}>Client ID *</label>
+                  <input
+                    className={inputClass}
+                    value={form.clientId}
+                    onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    The Application (Client) ID of your Azure AD App Registration. Requires <code>Sites.ReadWrite.All</code> application permission.
+                  </p>
+                </div>
+              </>
+            )}
             {form.type === 'teams_recorder' && (
               <div className="sm:col-span-2">
                 <label className={labelClass}>Recordings Folder</label>
@@ -1457,7 +1504,7 @@ function McpTab() {
               }}
               disabled={
                 !form.name
-                || !form.baseUrl
+                || (form.type !== 'sharepoint' && !form.baseUrl)
                 || createMutation.isPending
                 || updateMutation.isPending
               }

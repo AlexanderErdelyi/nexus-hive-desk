@@ -313,6 +313,10 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [debugLogOpen, setDebugLogOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<Array<{ ts: number; op: string; source: string; ok: boolean; detail?: string }>>([]);
+  const [spConnId, setSpConnId] = useState('');
+  const [spSiteId, setSpSiteId] = useState('');
+  const [spPageId, setSpPageId] = useState('');
+  const [spPanelOpen, setSpPanelOpen] = useState(false);
   const aiLogRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const contentSectionRef = useRef<HTMLElement>(null);
@@ -345,6 +349,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections?type=wiki_js'),
   });
 
+  const sharePointConnectionsQuery = useQuery({
+    queryKey: ['mcp-connections', 'sharepoint'],
+    queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections?type=sharepoint'),
+  });
+
   const teamsConnectionsQuery = useQuery({
     queryKey: ['mcp-connections', 'teams-recorder'],
     queryFn: () => api.get<{ data: McpConnection[] }>('/api/mcp-connections?type=teams_recorder'),
@@ -369,6 +378,20 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     });
     return scoped.length > 0 ? scoped : connections;
   }, [teamsConnectionsQuery.data, customerId, projectId]);
+
+  const sharePointConnections = useMemo(() => {
+    const connections = sharePointConnectionsQuery.data?.data ?? [];
+    const scoped = connections.filter((connection) => {
+      if (connection.projectId && connection.projectId !== projectId) return false;
+      if (connection.customerId && connection.customerId !== customerId) return false;
+      return true;
+    });
+    return scoped.length > 0 ? scoped : connections;
+  }, [sharePointConnectionsQuery.data, customerId, projectId]);
+
+  const activeSpConnId = sharePointConnections.some((c) => c.id === spConnId)
+    ? spConnId
+    : (sharePointConnections[0]?.id ?? '');
 
   const activeMcpId = wikiConnections.some((connection) => connection.id === selectedMcpId)
     ? selectedMcpId
@@ -405,6 +428,18 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     queryKey: ['wiki-styles'],
     queryFn: () => api.get<{ data: Array<{ id: string; name: string; description?: string; builtIn: boolean }> }>('/api/skills/wiki-styles'),
     staleTime: 60_000,
+  });
+
+  const spSitesQuery = useQuery({
+    queryKey: ['sp-sites', activeSpConnId],
+    enabled: Boolean(activeSpConnId && spPanelOpen),
+    queryFn: () => api.get<{ data: Array<{ id: string; name: string; webUrl?: string }> }>(`/api/mcp-connections/${activeSpConnId}/sharepoint/sites`),
+  });
+
+  const spPagesQuery = useQuery({
+    queryKey: ['sp-pages', activeSpConnId, spSiteId],
+    enabled: Boolean(activeSpConnId && spSiteId),
+    queryFn: () => api.get<{ data: Array<{ id: string; title: string; webUrl?: string; lastModifiedDateTime?: string }> }>(`/api/mcp-connections/${activeSpConnId}/sharepoint/sites/${encodeURIComponent(spSiteId)}/pages`),
   });
 
   const agentsQuery = useQuery({
@@ -461,6 +496,8 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
   const selectedRepoEntries = useMemo(() => new Set(parseListInput(repoQueryInput)), [repoQueryInput]);
   const defaultExpandedPaths = useMemo(() => treeNodes.slice(0, 6).map((node) => node.path), [treeNodes]);
   const expandedSet = useMemo(() => new Set(expandedPaths ?? defaultExpandedPaths), [defaultExpandedPaths, expandedPaths]);
+  const spSites = spSitesQuery.data?.data ?? [];
+  const spPages = spPagesQuery.data?.data ?? [];
 
   useEffect(() => {
     if (connectionsQuery.error) toast.error(getErrorMessage(connectionsQuery.error));
@@ -554,6 +591,20 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
       toast.success('Work item loaded');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const publishToSharePointMutation = useMutation({
+    mutationFn: ({ title, content }: { title: string; content: string }) => {
+      if (spPageId) {
+        return api.patch<{ data: unknown }>(`/api/mcp-connections/${activeSpConnId}/sharepoint/sites/${encodeURIComponent(spSiteId)}/pages/${encodeURIComponent(spPageId)}`, { title, content });
+      }
+      return api.post<{ data: unknown }>(`/api/mcp-connections/${activeSpConnId}/sharepoint/sites/${encodeURIComponent(spSiteId)}/pages`, { title, content });
+    },
+    onSuccess: () => {
+      toast.success(spPageId ? 'SharePoint page updated' : 'SharePoint page created');
+      queryClient.invalidateQueries({ queryKey: ['sp-pages', activeSpConnId, spSiteId] });
+    },
+    onError: (error) => toast.error(`SharePoint: ${getErrorMessage(error)}`),
   });
 
   const testWriteMutation = useMutation({
@@ -991,13 +1042,13 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     return <div className="py-12 text-center text-gray-400 dark:text-gray-600">Loading documentation…</div>;
   }
 
-  if (wikiConnections.length === 0) {
+  if (wikiConnections.length === 0 && sharePointConnections.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-gray-200 bg-white p-10 text-center dark:border-gray-700 dark:bg-gray-900">
         <BookOpen size={40} className="mx-auto mb-4 text-emerald-400 dark:text-emerald-600" />
-        <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">No Wiki.js connection configured</h3>
+        <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">No documentation connection configured</h3>
         <p className="mx-auto max-w-md text-sm text-gray-500 dark:text-gray-400">
-          Create a Wiki.js MCP connection in Agents settings, then come back here to browse and edit documentation.
+          Create a Wiki.js or SharePoint MCP connection in Agents settings, then come back here to browse and edit documentation.
         </p>
         <Link
           href="/agents"
@@ -1013,9 +1064,11 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
+      {wikiConnections.length > 0 ? (
+      <>
+        <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex items-center gap-3">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Documentation</h2>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
               <Wifi size={12} /> Sync with Wiki
@@ -1990,6 +2043,92 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
           )}
         </section>
       </div>
+      </>) : (
+        <div className="rounded-2xl border border-dashed border-gray-200 bg-white p-8 text-center dark:border-gray-700 dark:bg-gray-900">
+          <BookOpen size={32} className="mx-auto mb-3 text-gray-400 dark:text-gray-600" />
+          <p className="text-sm text-gray-500 dark:text-gray-400">Wiki.js connection not configured — use the SharePoint panel below to publish documentation.</p>
+        </div>
+      )}
+
+      {/* SharePoint Publish Panel */}
+      {sharePointConnections.length > 0 && (
+        <div className="rounded-2xl border border-blue-100 bg-white dark:border-blue-900/30 dark:bg-gray-900">
+          <button
+            type="button"
+            onClick={() => setSpPanelOpen((v) => !v)}
+            className="flex w-full items-center justify-between rounded-2xl px-5 py-4 text-left"
+          >
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M11.5 2C8.46 2 6 4.46 6 7.5c0 1.33.47 2.55 1.24 3.5H3.5C2.67 11 2 11.67 2 12.5v7C2 20.33 2.67 21 3.5 21H11v-3.05A3.5 3.5 0 0 1 8.5 14.5 3.5 3.5 0 0 1 12 11c.17 0 .34.01.5.03V8h-.5C9.57 8 8 6.43 8 4.5S9.57 1 11.5 1 15 2.57 15 4.5v.09A5.48 5.48 0 0 1 16.5 4c.31 0 .61.03.9.07C17.1 3.47 16.9 2.9 16.6 2.4A5.45 5.45 0 0 0 11.5 0z"/><path d="M17 12.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm0 6.5c-2.69 0-8 1.34-8 4v1h16v-1c0-2.66-5.31-4-8-4z"/></svg>
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Publish to SharePoint</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Publish the current draft to a SharePoint Online site page</p>
+              </div>
+            </div>
+            {spPanelOpen ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+          </button>
+          {spPanelOpen && (
+            <div className="border-t border-blue-100 px-5 pb-5 pt-4 dark:border-blue-900/30">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {sharePointConnections.length > 1 && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Connection</label>
+                    <select
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                      value={activeSpConnId}
+                      onChange={(e) => { setSpConnId(e.target.value); setSpSiteId(''); setSpPageId(''); }}
+                    >
+                      {sharePointConnections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Site</label>
+                  <select
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    value={spSiteId}
+                    onChange={(e) => { setSpSiteId(e.target.value); setSpPageId(''); }}
+                    disabled={spSitesQuery.isFetching}
+                  >
+                    <option value="">{spSitesQuery.isFetching ? 'Loading sites…' : '— Select site —'}</option>
+                    {spSites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                {spSiteId && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">Update existing page (optional)</label>
+                    <select
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-blue-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                      value={spPageId}
+                      onChange={(e) => setSpPageId(e.target.value)}
+                      disabled={spPagesQuery.isFetching}
+                    >
+                      <option value="">{spPagesQuery.isFetching ? 'Loading pages…' : '— Create new page —'}</option>
+                      {spPages.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={!spSiteId || !draft.title || !draft.content || publishToSharePointMutation.isPending}
+                  onClick={() => publishToSharePointMutation.mutate({ title: draft.title, content: draft.content ?? '' })}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {publishToSharePointMutation.isPending ? <><Loader2 size={14} className="animate-spin" /> Publishing…</> : <><Wifi size={14} /> {spPageId ? 'Update Page' : 'Create Page'}</>}
+                </button>
+                {!draft.title && <p className="text-xs text-amber-600 dark:text-amber-400">Set a page title in the editor first.</p>}
+                {!spSiteId && !spSitesQuery.isFetching && spSites.length === 0 && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">No SharePoint sites found. Check your connection permissions.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
