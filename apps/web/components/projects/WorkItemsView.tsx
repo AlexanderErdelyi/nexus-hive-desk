@@ -304,6 +304,10 @@ function WorkItemDetailModal({
   const [refineStreamText, setRefineStreamText] = useState('');
   const [splitStreamText, setSplitStreamText] = useState('');
   const [portalReady, setPortalReady] = useState(false);
+  const [editDescription, setEditDescription] = useState(item.description ?? '');
+  const [editAcceptanceCriteria, setEditAcceptanceCriteria] = useState(item.acceptanceCriteria ?? '');
+  const [detailsSaving, setDetailsSaving] = useState(false);
+  const detailsDirty = editDescription !== (item.description ?? '') || editAcceptanceCriteria !== (item.acceptanceCriteria ?? '');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const splitLogsEndRef = useRef<HTMLDivElement>(null);
 
@@ -325,6 +329,23 @@ function WorkItemDetailModal({
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   });
+
+  async function saveDetails() {
+    if (!detailsDirty || detailsSaving) return;
+    setDetailsSaving(true);
+    try {
+      await api.patch(`/api/projects/${projectId}/work-items/${item.id}`, {
+        description: editDescription,
+        acceptanceCriteria: editAcceptanceCriteria,
+      });
+      toast.success('Work item updated ✔');
+      onUpdated();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setDetailsSaving(false);
+    }
+  }
 
   useEffect(() => {
     setPortalReady(true);
@@ -675,28 +696,43 @@ function WorkItemDetailModal({
           {activeTab === 'details' && (
             <div className="flex h-full min-h-0 overflow-hidden">
               {/* Main content */}
-              <div className="flex-1 space-y-6 overflow-y-auto p-6">
-                {item.description ? (
-                  <section>
-                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Description</h3>
-                    <div
-                      className="prose prose-sm max-w-none rounded-2xl bg-gray-50 p-5 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.description) }}
-                    />
-                  </section>
-                ) : (
-                  <div className="flex items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 py-12 text-center dark:border-gray-800">
-                    <p className="text-sm text-gray-400">No description</p>
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <div className="flex-1 space-y-5 overflow-y-auto p-6">
+                  <RichTextToggle
+                    label="Description"
+                    value={editDescription}
+                    onChange={setEditDescription}
+                    rows={6}
+                    placeholder="Add a description…"
+                  />
+                  <RichTextToggle
+                    label={<span className="text-green-600 dark:text-green-400">✓ Acceptance Criteria</span>}
+                    labelClass="text-green-600 dark:text-green-400"
+                    value={editAcceptanceCriteria}
+                    onChange={setEditAcceptanceCriteria}
+                    rows={5}
+                    placeholder="Add acceptance criteria…"
+                    fieldClass="border-green-100 bg-green-50/50 focus:border-green-400 dark:border-green-900/30"
+                  />
+                </div>
+                {detailsDirty && (
+                  <div className="flex items-center justify-end gap-2 border-t border-gray-200 bg-white px-6 py-3 dark:border-gray-800 dark:bg-gray-950">
+                    <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>
+                    <button
+                      onClick={() => { setEditDescription(item.description ?? ''); setEditAcceptanceCriteria(item.acceptanceCriteria ?? ''); }}
+                      className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={() => void saveDetails()}
+                      disabled={detailsSaving}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {detailsSaving ? <Loader2 size={11} className="animate-spin" /> : null}
+                      Save changes
+                    </button>
                   </div>
-                )}
-                {item.acceptanceCriteria && (
-                  <section>
-                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Acceptance Criteria</h3>
-                    <div
-                      className="prose prose-sm max-w-none rounded-2xl bg-blue-50 p-5 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.acceptanceCriteria) }}
-                    />
-                  </section>
                 )}
               </div>
               {/* Meta sidebar */}
