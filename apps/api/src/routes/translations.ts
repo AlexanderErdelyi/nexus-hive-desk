@@ -135,6 +135,54 @@ export async function translationRoutes(app: FastifyInstance) {
       )
     );
 
+    // Auto-populate translation memory for translated/final entries
+    const translatedResults = results.filter(
+      (r) => r.state === 'translated' || r.state === 'final' || r.state === 'signed-off'
+    );
+
+    if (translatedResults.length > 0) {
+      // Group by projectId so we can look up language pairs
+      const projectIds = [...new Set(translatedResults.map((r) => r.projectId))];
+      const projects = await prisma.project.findMany({
+        where: { id: { in: projectIds } },
+        select: { id: true, sourceLanguage: true, targetLanguage: true },
+      });
+      const projectMap = new Map(projects.map((p) => [p.id, p]));
+
+      await Promise.allSettled(
+        translatedResults
+          .filter((r) => r.target && r.source)
+          .map(async (r) => {
+            const project = projectMap.get(r.projectId);
+            if (!project) return;
+            const existing = await prisma.translationMemory.findFirst({
+              where: {
+                source: r.source,
+                sourceLanguage: project.sourceLanguage,
+                targetLanguage: project.targetLanguage,
+                projectId: r.projectId,
+              },
+            });
+            if (existing) {
+              return prisma.translationMemory.update({
+                where: { id: existing.id },
+                data: { target: r.target, usageCount: { increment: 1 }, updatedAt: new Date() },
+              });
+            } else {
+              return prisma.translationMemory.create({
+                data: {
+                  source: r.source,
+                  target: r.target,
+                  sourceLanguage: project.sourceLanguage,
+                  targetLanguage: project.targetLanguage,
+                  projectId: r.projectId,
+                },
+              });
+            }
+          })
+      );
+    }
+
     return { data: results };
   });
 }

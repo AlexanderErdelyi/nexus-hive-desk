@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, RotateCcw, Save, Search, Sparkles, Upload, X } from 'lucide-react';
 import Link from 'next/link';
@@ -298,6 +298,7 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [aiReviewing, setAiReviewing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
+  const [tmSuggestions, setTmSuggestions] = useState<Map<string, { target: string; score: number; projectId: string | null }>>(new Map());
 
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
@@ -342,6 +343,47 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
     },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
+
+  // Fetch TM suggestions whenever visible translations change
+  const translations = data?.data ?? [];
+
+  useEffect(() => {
+    if (!translations.length || !currentFile) return;
+    const untranslated = translations.filter((t) => !t.target || t.state === 'needs-translation' || t.state === 'new');
+    if (!untranslated.length) return;
+
+    const sources = [...new Set(untranslated.map((t) => t.source))];
+    api.post<{ data: Record<string, { target: string; score: number; projectId: string | null }> }>(
+      '/api/translation-memory/lookup',
+      {
+        sources,
+        sourceLanguage: currentFile.sourceLanguage,
+        targetLanguage: currentFile.targetLanguage,
+        projectId,
+      }
+    ).then((res) => {
+      const map = new Map<string, { target: string; score: number; projectId: string | null }>();
+      for (const t of untranslated) {
+        const hit = res.data[t.source];
+        if (hit) map.set(t.id, hit);
+      }
+      setTmSuggestions(map);
+    }).catch(() => { /* silently ignore TM errors */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translations.map((t) => t.id).join(','), currentFile?.id]);
+
+  function applyAllTmMatches() {
+    const exact = Array.from(tmSuggestions.entries()).filter(([, v]) => v.score === 1);
+    if (!exact.length) { toast.info('No exact TM matches to apply'); return; }
+    setEdits((prev) => {
+      const next = new Map(prev);
+      for (const [id, { target }] of exact) {
+        next.set(id, { target, state: 'translated' });
+      }
+      return next;
+    });
+    toast.success(`Applied ${exact.length} exact TM match${exact.length > 1 ? 'es' : ''}`);
+  }
 
   const aiTranslate = useCallback(
     async (ids: string[]) => {
@@ -429,7 +471,6 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
     noClick: true,
   });
 
-  const translations = data?.data ?? [];
   const total = data?.meta.total ?? 0;
   const totalPages = data?.meta.totalPages ?? 1;
   const hasEdits = edits.size > 0;
@@ -552,6 +593,19 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
               className="flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
             >
               <GitCommit size={14} /> Commit to Remote
+            </button>
+          )}
+          {/* TM apply button */}
+          {tmSuggestions.size > 0 && (
+            <button
+              onClick={applyAllTmMatches}
+              className="flex items-center gap-2 rounded-lg border border-teal-300 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100 dark:border-teal-700 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50"
+              title="Apply all exact (100%) translation memory matches"
+            >
+              <span className="text-xs font-bold">TM</span>
+              {Array.from(tmSuggestions.values()).filter((v) => v.score === 1).length > 0
+                ? `Apply exact (${Array.from(tmSuggestions.values()).filter((v) => v.score === 1).length})`
+                : `${tmSuggestions.size} fuzzy matches`}
             </button>
           )}
           {selected.size > 0 && (
@@ -913,6 +967,31 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
                           }
                         }}
                       />
+                      {tmSuggestions.has(translation.id) && !currentTarget && (
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className={cn(
+                            'rounded px-1.5 py-0.5 text-xs font-bold',
+                            tmSuggestions.get(translation.id)!.score === 1
+                              ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                          )}>
+                            TM {Math.round(tmSuggestions.get(translation.id)!.score * 100)}%
+                          </span>
+                          <span className="flex-1 truncate text-xs text-gray-500 dark:text-gray-400">
+                            {tmSuggestions.get(translation.id)!.target}
+                          </span>
+                          <button
+                            onClick={() => {
+                              const tm = tmSuggestions.get(translation.id)!;
+                              handleEdit(translation.id, 'target', tm.target);
+                              handleEdit(translation.id, 'state', 'translated');
+                            }}
+                            className="shrink-0 rounded bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-100 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/60"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      )}
                     </td>
 
                     <td className="align-top p-3">

@@ -13,6 +13,7 @@ import { glossaryRoutes } from './routes/glossary';
 import { projectRoutes } from './routes/projects';
 import { projectMemberRoutes } from './routes/project-members';
 import { remoteRoutes } from './routes/remote';
+import { translationMemoryRoutes } from './routes/translation-memory';
 import { translationRoutes } from './routes/translations';
 import { agentRoutes } from './routes/agents';
 import { skillRoutes } from './routes/skills';
@@ -71,6 +72,7 @@ async function bootstrap() {
   await app.register(projectRoutes, { prefix: '/api/projects' });
   await app.register(projectMemberRoutes, { prefix: '/api/projects' });
   await app.register(translationRoutes, { prefix: '/api/translations' });
+  await app.register(translationMemoryRoutes, { prefix: '/api/translation-memory' });
   await app.register(glossaryRoutes, { prefix: '/api/glossary' });
   await app.register(aiRoutes, { prefix: '/api/ai' });
   await app.register(remoteRoutes, { prefix: '/api/remote' });

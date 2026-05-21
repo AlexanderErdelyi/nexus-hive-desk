@@ -95,11 +95,12 @@ model Project {
   targetLanguage  String               @default("de")
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
-  customer        Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  xliffFiles      XliffFile[]
-  glossaryEntries GlossaryEntry[]
-  members         ProjectMember[]
-  repositories    ProjectRepository[]
+  customer          Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  xliffFiles        XliffFile[]
+  glossaryEntries   GlossaryEntry[]
+  translationMemory TranslationMemory[]
+  members           ProjectMember[]
+  repositories      ProjectRepository[]
 
   @@index([customerId])
 }
@@ -185,6 +186,23 @@ model GlossaryEntry {
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, sourceTerm, sourceLanguage, targetLanguage])
+}
+
+model TranslationMemory {
+  id             String   @id @default(cuid())
+  source         String
+  target         String
+  sourceLanguage String
+  targetLanguage String
+  projectId      String?
+  usageCount     Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([source, sourceLanguage, targetLanguage, projectId])
+  @@index([sourceLanguage, targetLanguage])
+  @@index([projectId])
 }
 
 // ─── AI Agents, Skills & MCP Connections ─────────────────────────────────────
