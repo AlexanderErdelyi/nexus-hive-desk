@@ -1,11 +1,12 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { EventData, Step as JoyrideStep, TooltipRenderProps } from 'react-joyride';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Controls, EventData, TooltipRenderProps } from 'react-joyride';
+import type { Step as JoyrideStep } from 'react-joyride';
 import { useTour } from './TourContext';
-import { type TourStep, tourSteps } from './tourSteps';
+import { tourSteps } from './tourSteps';
 
 const Joyride = dynamic(() => import('react-joyride').then((mod) => mod.Joyride), { ssr: false });
 
@@ -17,7 +18,7 @@ function TourTooltip({ backProps, index, isLastStep, primaryProps, size, skipPro
     >
       <div className="mb-4 flex items-center justify-between gap-3">
         <span className="text-xs text-gray-400">Step {index + 1} of {size}</span>
-        <div className="h-1.5 w-10 rounded-full bg-indigo-100 dark:bg-indigo-950/80">
+        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-indigo-100 dark:bg-indigo-950/80">
           <div
             className="h-full rounded-full bg-indigo-600 transition-all"
             style={{ width: `${((index + 1) / size) * 100}%` }}
@@ -25,8 +26,8 @@ function TourTooltip({ backProps, index, isLastStep, primaryProps, size, skipPro
         </div>
       </div>
 
-      {step.title ? <h3 className="mb-2 text-base font-bold text-gray-900 dark:text-white">{step.title}</h3> : null}
-      <div className="text-sm leading-relaxed text-gray-600 dark:text-gray-300">{step.content}</div>
+      {step.title ? <h3 className="mb-2 text-base font-bold text-gray-900 dark:text-white">{step.title as string}</h3> : null}
+      <div className="text-sm leading-relaxed text-gray-600 dark:text-gray-300">{step.content as string}</div>
 
       <div className="mt-5 flex gap-1">
         {Array.from({ length: size }).map((_, dotIndex) => (
@@ -43,7 +44,7 @@ function TourTooltip({ backProps, index, isLastStep, primaryProps, size, skipPro
           {...skipProps}
           className="rounded-xl px-3 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
         >
-          Skip
+          Skip tour
         </button>
         <div className="flex items-center gap-2">
           {index > 0 ? (
@@ -68,122 +69,83 @@ function TourTooltip({ backProps, index, isLastStep, primaryProps, size, skipPro
   );
 }
 
-function resolveStep(step: TourStep): JoyrideStep {
-  const resolvedStep =
-    typeof document === 'undefined' || typeof step.target !== 'string' || step.target === 'body' || document.querySelector(step.target)
-      ? step
-      : {
-          ...step,
-          target: 'body',
-          placement: 'center',
-          disableScrolling: true,
-        };
-
-  const { disableScrolling, navigate: _navigate, ...joyrideStep } = resolvedStep;
-  const normalizedStep = (disableScrolling ? { ...joyrideStep, skipScroll: true } : joyrideStep) as JoyrideStep;
-
-  return normalizedStep;
+// Build joyride steps — if target element not in DOM, fall back to body/center
+function resolveSteps(): JoyrideStep[] {
+  return tourSteps.map(({ navigate: _nav, ...step }) => {
+    const targetMissing =
+      typeof step.target === 'string' &&
+      step.target !== 'body' &&
+      typeof document !== 'undefined' &&
+      !document.querySelector(step.target as string);
+    if (targetMissing) {
+      return { ...step, target: 'body', placement: 'center' } as JoyrideStep;
+    }
+    return step as JoyrideStep;
+  });
 }
 
 export function GuidedTour() {
-  const pathname = usePathname();
   const router = useRouter();
   const [isMounted, setIsMounted] = useState(false);
-  const [domVersion, setDomVersion] = useState(0);
-  const timeoutRef = useRef<number | null>(null);
+  const [steps, setSteps] = useState<JoyrideStep[]>([]);
+  const pendingNav = useRef(false);
   const { currentStep, isTourActive, markTourDone, setCurrentStep, stopTour } = useTour();
 
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
+  useEffect(() => { setIsMounted(true); }, []);
 
   useEffect(() => {
-    if (!isMounted || !isTourActive) {
-      return;
-    }
+    if (!isMounted) return;
+    setSteps(resolveSteps());
+    const mo = new MutationObserver(() => setSteps(resolveSteps()));
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [isMounted, currentStep]);
 
-    const observer = new MutationObserver(() => {
-      setDomVersion((value) => value + 1);
-    });
+  const handleEvent = useCallback((data: EventData, _controls: Controls) => {
+    const { action, index, status, type } = data;
 
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-
-    return () => observer.disconnect();
-  }, [isMounted, isTourActive]);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  const steps = useMemo(() => tourSteps.map(resolveStep), [domVersion, pathname]);
-
-  const queueStepChange = (nextStepIndex: number) => {
-    const nextStep = tourSteps[nextStepIndex];
-
-    if (!nextStep) {
-      return;
-    }
-
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-    }
-
-    if (nextStep.navigate && nextStep.navigate !== pathname) {
-      router.push(nextStep.navigate);
-      timeoutRef.current = window.setTimeout(() => {
-        setCurrentStep(nextStepIndex);
-        timeoutRef.current = null;
-      }, 300);
-      return;
-    }
-
-    setCurrentStep(nextStepIndex);
-  };
-
-  const handleEvent = (data: EventData) => {
-    if (data.status === 'finished' || data.status === 'skipped') {
+    if (status === 'finished' || status === 'skipped') {
       markTourDone();
       stopTour();
       return;
     }
 
-    if (data.type !== 'step:after' && data.type !== 'error:target_not_found') {
-      return;
-    }
+    if (type !== 'step:after' && type !== 'error:target_not_found') return;
+    if (pendingNav.current) return;
 
-    if (data.action === 'next') {
-      queueStepChange(data.index + 1);
-      return;
-    }
+    const nextIndex = action === 'next' ? index + 1 : action === 'prev' ? Math.max(index - 1, 0) : null;
+    if (nextIndex === null) return;
 
-    if (data.action === 'prev') {
-      queueStepChange(Math.max(data.index - 1, 0));
-    }
-  };
+    const nextStep = tourSteps[nextIndex];
+    if (!nextStep) return;
 
-  if (!isMounted) {
-    return null;
-  }
+    if (nextStep.navigate) {
+      pendingNav.current = true;
+      router.push(nextStep.navigate);
+      setTimeout(() => {
+        pendingNav.current = false;
+        setCurrentStep(nextIndex);
+      }, 400);
+    } else {
+      setCurrentStep(nextIndex);
+    }
+  }, [markTourDone, router, setCurrentStep, stopTour]);
+
+  if (!isMounted || !isTourActive) return null;
 
   return (
     <Joyride
-      continuous
       onEvent={handleEvent}
       run={isTourActive}
       stepIndex={currentStep}
       steps={steps}
+      tooltipComponent={TourTooltip}
       options={{
         arrowColor: '#ffffff',
-        buttons: ['skip', 'back', 'primary'],
         overlayColor: 'rgba(15, 23, 42, 0.55)',
         primaryColor: '#4f46e5',
-        zIndex: 60,
+        zIndex: 9999,
       }}
-      tooltipComponent={TourTooltip}
     />
   );
 }
