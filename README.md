@@ -65,7 +65,13 @@ NexusHiveDesk started as a solution to the "last 10% problem" of XLIFF translati
 - Connect ADO organizations: browse repos, work items, wikis
 - Browse repository file tree (drill down into folders)
 - Use work items as source content for documentation generation
-- Planned: auto-create branches & PRs for translation/documentation changes
+- **Branch → Work Item → PR workflow** when committing translation changes:
+  - Commit to a new branch with one click
+  - Search existing ADO work items (by ID or title) to link to the branch
+  - Create a new work item (manual or **AI-suggested** title/description) if none exists
+  - Open a Pull Request directly from the commit modal — title auto-filled from the work item
+  - PR status badge (`Open` / `Merged` / `Closed`) shown on each XLIFF file
+  - GitHub repos: commit + PR flow (no work item step)
 
 ### 🧩 Skills & Agents
 - **Skills** — reusable prompt fragments that can be injected into any AI generation
