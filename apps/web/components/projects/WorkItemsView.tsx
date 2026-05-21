@@ -138,12 +138,55 @@ function priorityBadge(p?: number) {
   return <span className={`text-xs font-medium ${entry.cls}`}>{entry.label}</span>;
 }
 
-function markdownToHtml(content: string) {
-  return content
-    .replace(/\r\n/g, '\n')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/\n/g, '<br>');
+function markdownToHtml(content: string): string {
+  if (!content) return '';
+  // If it already looks like HTML, return as-is
+  if (/<\/?[a-z][\s\S]*>/i.test(content)) return content;
+
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const out: string[] = [];
+  let inUl = false, inOl = false;
+
+  const flushList = () => {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  };
+
+  const inline = (s: string) =>
+    s
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) { flushList(); out.push(''); continue; }
+
+    const h3 = trimmed.match(/^###\s+(.*)/);
+    const h2 = trimmed.match(/^##\s+(.*)/);
+    const h1 = trimmed.match(/^#\s+(.*)/);
+    const ul = trimmed.match(/^[-*]\s+(.*)/);
+    const ol = trimmed.match(/^\d+\.\s+(.*)/);
+
+    if (h3) { flushList(); out.push(`<h3>${inline(h3[1])}</h3>`); }
+    else if (h2) { flushList(); out.push(`<h2>${inline(h2[1])}</h2>`); }
+    else if (h1) { flushList(); out.push(`<h1>${inline(h1[1])}</h1>`); }
+    else if (ul) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul>'); inUl = true; }
+      out.push(`<li>${inline(ul[1])}</li>`);
+    } else if (ol) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol>'); inOl = true; }
+      out.push(`<li>${inline(ol[1])}</li>`);
+    } else {
+      flushList();
+      out.push(`<p>${inline(trimmed)}</p>`);
+    }
+  }
+  flushList();
+  return out.filter((l) => l !== '').join('\n');
 }
 
 function sleep(ms: number) {
@@ -312,7 +355,13 @@ function WorkItemDetailModal({
     if (!refineResult) return;
     setApplying(true);
     try {
-      await api.patch(`/api/projects/${projectId}/work-items/${item.id}`, refineResult);
+      // ADO stores description/acceptanceCriteria as HTML — convert markdown from AI if needed
+      const payload = {
+        ...refineResult,
+        description: refineResult.description ? markdownToHtml(refineResult.description) : refineResult.description,
+        acceptanceCriteria: refineResult.acceptanceCriteria ? markdownToHtml(refineResult.acceptanceCriteria) : refineResult.acceptanceCriteria,
+      };
+      await api.patch(`/api/projects/${projectId}/work-items/${item.id}`, payload);
       toast.success('Work item updated ✔');
       void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
       onUpdated();
@@ -505,7 +554,7 @@ function WorkItemDetailModal({
                     <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Description</h3>
                     <div
                       className="prose prose-sm max-w-none rounded-2xl bg-gray-50 p-5 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: item.description }}
+                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.description) }}
                     />
                   </section>
                 ) : (
@@ -518,7 +567,7 @@ function WorkItemDetailModal({
                     <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Acceptance Criteria</h3>
                     <div
                       className="prose prose-sm max-w-none rounded-2xl bg-blue-50 p-5 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: item.acceptanceCriteria }}
+                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.acceptanceCriteria) }}
                     />
                   </section>
                 )}
@@ -616,7 +665,7 @@ function WorkItemDetailModal({
                       </div>
                       <div
                         className="prose prose-sm max-w-none text-gray-700 dark:prose-invert dark:text-gray-300"
-                        dangerouslySetInnerHTML={{ __html: comment.text }}
+                        dangerouslySetInnerHTML={{ __html: markdownToHtml(comment.text) }}
                       />
                     </div>
                   ))}
@@ -870,7 +919,7 @@ function WorkItemDetailModal({
                         <p className="mb-1.5 text-xs font-semibold text-gray-400 dark:text-gray-600">Description</p>
                         <div
                           className="prose prose-sm max-w-none rounded-xl bg-gray-50 p-4 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
-                          dangerouslySetInnerHTML={{ __html: refineResult.description }}
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(refineResult.description) }}
                         />
                       </div>
                     )}
@@ -879,7 +928,7 @@ function WorkItemDetailModal({
                         <p className="mb-1.5 text-xs font-semibold text-gray-400 dark:text-gray-600">Acceptance Criteria</p>
                         <div
                           className="prose prose-sm max-w-none rounded-xl bg-blue-50 p-4 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
-                          dangerouslySetInnerHTML={{ __html: refineResult.acceptanceCriteria }}
+                          dangerouslySetInnerHTML={{ __html: markdownToHtml(refineResult.acceptanceCriteria) }}
                         />
                       </div>
                     )}
