@@ -301,6 +301,8 @@ function WorkItemDetailModal({
   const [splitExpandedIdx, setSplitExpandedIdx] = useState<number | null>(null);
   const [splitItemRefinePrompt, setSplitItemRefinePrompt] = useState('');
   const [splitItemRefining, setSplitItemRefining] = useState(false);
+  const [refineStreamText, setRefineStreamText] = useState('');
+  const [splitStreamText, setSplitStreamText] = useState('');
   const [portalReady, setPortalReady] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const splitLogsEndRef = useRef<HTMLDivElement>(null);
@@ -367,6 +369,7 @@ function WorkItemDetailModal({
     setRefinePrompt('');
     setRefining(true);
     setRefineResult(null);
+    setRefineStreamText('');
     setRefineMessages((prev) => [...prev, { role: 'user', content: msg, timestamp: new Date() }]);
 
     const token = localStorage.getItem('nexus_auth_token');
@@ -400,11 +403,13 @@ function WorkItemDetailModal({
             if (line.startsWith('data: ')) data += line.slice(6).trim();
           }
           if (!data) continue;
-          const parsed = JSON.parse(data) as RefineResult & { message?: string };
+          const parsed = JSON.parse(data) as RefineResult & { message?: string; chunk?: string };
+          if (eventType === 'token' && parsed.chunk) setRefineStreamText((prev) => prev + parsed.chunk!);
           if (eventType === 'log' && parsed.message) {
             setRefineMessages((prev) => [...prev, { role: 'log', content: parsed.message!, timestamp: new Date() }]);
           }
           if (eventType === 'result') {
+            setRefineStreamText('');
             setRefineResult(parsed);
             setRefineMessages((prev) => [...prev, { role: 'agent', content: 'Refinement ready — review the proposed changes on the right.', timestamp: new Date() }]);
           }
@@ -448,6 +453,7 @@ function WorkItemDetailModal({
     setSplitResult(null);
     setSplitEditedItems([]);
     setSplitEditedFeature(null);
+    setSplitStreamText('');
 
     const token = localStorage.getItem('nexus_auth_token');
     try {
@@ -485,11 +491,13 @@ function WorkItemDetailModal({
             if (line.startsWith('data: ')) data += line.slice(6).trim();
           }
           if (!data) continue;
-          const parsed = JSON.parse(data) as SplitResult & { message?: string };
+          const parsed = JSON.parse(data) as SplitResult & { message?: string; chunk?: string };
+          if (eventType === 'token' && parsed.chunk) setSplitStreamText((prev) => prev + parsed.chunk!);
           if (eventType === 'log' && parsed.message) {
             setSplitLogs((prev) => [...prev, parsed.message!]);
           }
           if (eventType === 'result') {
+            setSplitStreamText('');
             setSplitResult(parsed);
             setSplitEditedItems(parsed.items ?? []);
             setSplitEditedFeature(parsed.feature ?? null);
@@ -983,9 +991,16 @@ function WorkItemDetailModal({
                       )}
                     </div>
                   ))}
-                  {refining && (
+                  {refining && !refineStreamText && (
                     <div className="flex items-center gap-2 text-xs text-gray-400">
                       <Loader2 size={12} className="animate-spin" /> Refining…
+                    </div>
+                  )}
+                  {refineStreamText && refining && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2.5 text-sm text-gray-800 dark:bg-gray-800 dark:text-gray-200">
+                        <span className="whitespace-pre-wrap">{refineStreamText}</span><span className="animate-pulse">▌</span>
+                      </div>
                     </div>
                   )}
                   <div ref={chatEndRef} />
@@ -1143,6 +1158,12 @@ function WorkItemDetailModal({
                   {splitLogs.map((log, i) => (
                     <p key={i} className="text-xs italic text-gray-500 dark:text-gray-400">{log}</p>
                   ))}
+                  {splitStreamText && splitGenerating && (
+                    <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900/40 dark:bg-violet-900/10">
+                      <p className="mb-1 text-xs font-semibold text-violet-500">Generating…</p>
+                      <p className="whitespace-pre-wrap font-mono text-xs text-gray-600 dark:text-gray-400">{splitStreamText}<span className="animate-pulse">▌</span></p>
+                    </div>
+                  )}
                   <div ref={splitLogsEndRef} />
                 </div>
               </div>
@@ -1367,6 +1388,7 @@ function WorkItemForm({
   const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [recordingsFolder, setRecordingsFolder] = useState('');
   const [recordingsMcpId, setRecordingsMcpId] = useState('');
+  const [streamingText, setStreamingText] = useState('');
   const [portalReady, setPortalReady] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
 
@@ -1513,6 +1535,7 @@ function WorkItemForm({
 
   async function generateStreaming(agentId: string, description: string) {
     const token = localStorage.getItem('nexus_auth_token');
+    setStreamingText('');
     const response = await fetch(`/api/projects/${projectId}/work-items/generate-stream`, {
       method: 'POST',
       headers: {
@@ -1549,10 +1572,11 @@ function WorkItemForm({
         }
 
         if (!data) continue;
-        const parsed = JSON.parse(data) as GeneratedWorkItem & { message?: string };
+        const parsed = JSON.parse(data) as GeneratedWorkItem & { message?: string; chunk?: string };
 
+        if (eventType === 'token' && parsed.chunk) setStreamingText((prev) => prev + parsed.chunk!);
         if (eventType === 'log' && parsed.message) addChatMessage('log', parsed.message);
-        if (eventType === 'result') applyGenerated(parsed);
+        if (eventType === 'result') { setStreamingText(''); applyGenerated(parsed); }
         if (eventType === 'error') throw new Error(parsed.message ?? 'Streaming generation failed');
         if (eventType === 'done') return;
       }
@@ -1786,6 +1810,16 @@ function WorkItemForm({
                       </div>
                     );
                   })}
+                  {streamingText && aiLoading && (
+                    <div className="flex items-start gap-3">
+                      <div className="mt-1 rounded-xl bg-white/10 p-2 text-violet-200">
+                        <Bot size={14} />
+                      </div>
+                      <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-white/10 bg-slate-900/90 px-4 py-3 text-sm leading-relaxed text-slate-100 shadow-lg shadow-black/20">
+                        <div className="prose prose-sm prose-invert max-w-none whitespace-pre-wrap">{streamingText}<span className="animate-pulse">▌</span></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-5 border-t border-white/10 pt-4">
