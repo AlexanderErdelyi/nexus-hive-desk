@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { ModelSelector } from './ModelSelector';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -410,28 +411,6 @@ function AgentsTab() {
               />
             </div>
             <div>
-              <label className={labelClass}>Model Provider</label>
-              <select
-                className={inputClass}
-                value={form.modelProvider}
-                onChange={(e) => setForm((f) => ({ ...f, modelProvider: e.target.value }))}
-              >
-                <option value="github-models">GitHub Models</option>
-                <option value="openai">OpenAI</option>
-                <option value="azure-openai">Azure OpenAI</option>
-                <option value="ollama">Ollama</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>Model <span className="text-gray-400 font-normal text-xs">(specific, e.g. gpt-4o)</span></label>
-              <input
-                className={inputClass}
-                value={form.model}
-                onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-                placeholder="gpt-4o"
-              />
-            </div>
-            <div>
               <label className={labelClass}>Trigger Type</label>
               <select
                 className={inputClass}
@@ -443,6 +422,14 @@ function AgentsTab() {
                 <option value="event-driven">Event-driven</option>
               </select>
             </div>
+            <ModelSelector
+              provider={form.modelProvider}
+              model={form.model}
+              inputClass={inputClass}
+              labelClass={labelClass}
+              onProviderChange={(v) => setForm((f) => ({ ...f, modelProvider: v }))}
+              onModelChange={(v) => setForm((f) => ({ ...f, model: v }))}
+            />
             <div className="sm:col-span-2">
               <label className={labelClass}>Description <span className="text-gray-400 font-normal text-xs">"Use when: ..." with trigger phrases</span></label>
               <textarea

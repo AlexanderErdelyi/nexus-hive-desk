@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { ModelSelector } from './ModelSelector';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ interface Agent {
   name: string;
   description?: string;
   modelProvider: string;
+  model?: string;
   systemPrompt?: string;
   triggerType: string;
   createdAt: string;
@@ -202,6 +204,7 @@ function EditTab({
     name: agent.name,
     description: agent.description || '',
     modelProvider: agent.modelProvider,
+    model: agent.model || '',
     systemPrompt: agent.systemPrompt || '',
     triggerType: agent.triggerType,
   });
@@ -220,6 +223,7 @@ function EditTab({
       name: agent.name,
       description: agent.description || '',
       modelProvider: agent.modelProvider,
+      model: agent.model || '',
       systemPrompt: agent.systemPrompt || '',
       triggerType: agent.triggerType,
     });
@@ -278,27 +282,6 @@ function EditTab({
             />
           </div>
           <div>
-            <label className={labelClass}>Model Provider</label>
-            <select
-              className={inputClass}
-              value={form.modelProvider}
-              onChange={(e) => setForm({ ...form, modelProvider: e.target.value })}
-            >
-              <option value="github-models">GitHub Models</option>
-              <option value="openai">OpenAI</option>
-              <option value="azure-openai">Azure OpenAI</option>
-              <option value="ollama">Ollama</option>
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className={labelClass}>Description</label>
-            <input
-              className={inputClass}
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-            />
-          </div>
-          <div>
             <label className={labelClass}>Trigger Type</label>
             <select
               className={inputClass}
@@ -310,6 +293,14 @@ function EditTab({
               <option value="event-driven">Event-driven</option>
             </select>
           </div>
+          <ModelSelector
+            provider={form.modelProvider}
+            model={form.model}
+            inputClass={inputClass}
+            labelClass={labelClass}
+            onProviderChange={(v) => setForm({ ...form, modelProvider: v })}
+            onModelChange={(v) => setForm({ ...form, model: v })}
+          />
           <div className="sm:col-span-2">
             <label className={labelClass}>System Prompt</label>
             <textarea
