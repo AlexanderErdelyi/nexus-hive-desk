@@ -193,6 +193,71 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── RichTextToggle — Edit/Preview toggle for markdown/HTML textareas ──────────
+
+function RichTextToggle({
+  label,
+  value,
+  onChange,
+  rows = 4,
+  placeholder,
+  labelClass,
+  fieldClass,
+}: {
+  label: React.ReactNode;
+  value: string;
+  onChange: (v: string) => void;
+  rows?: number;
+  placeholder?: string;
+  labelClass?: string;
+  fieldClass?: string;
+}) {
+  const [preview, setPreview] = useState(false);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <label className={`text-xs font-semibold ${labelClass ?? 'text-gray-500 dark:text-gray-400'}`}>{label}</label>
+        <div className="inline-flex overflow-hidden rounded-md border border-gray-200 bg-white text-[11px] dark:border-gray-700 dark:bg-gray-900">
+          <button
+            type="button"
+            onClick={() => setPreview(false)}
+            className={`px-2.5 py-0.5 font-medium transition ${!preview ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreview(true)}
+            className={`px-2.5 py-0.5 font-medium transition ${preview ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+          >
+            Preview
+          </button>
+        </div>
+      </div>
+      {preview ? (
+        value ? (
+          <div
+            className={`prose prose-sm max-w-none rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900 dark:prose-invert ${fieldClass ?? ''}`}
+            dangerouslySetInnerHTML={{ __html: markdownToHtml(value) }}
+          />
+        ) : (
+          <div className="rounded-lg border border-dashed border-gray-200 p-3 text-xs italic text-gray-400 dark:border-gray-700">
+            Nothing to preview yet.
+          </div>
+        )
+      ) : (
+        <textarea
+          rows={rows}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={`w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white ${fieldClass ?? ''}`}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Work Item Detail Modal ────────────────────────────────────────────────────
 
 function WorkItemDetailModal({
@@ -1172,39 +1237,34 @@ function WorkItemDetailModal({
                           </div>
                           {/* Description */}
                           {it.description !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
-                              <textarea
-                                rows={4}
-                                value={it.description ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label="Description"
+                              value={it.description ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, description: v } : x))}
+                              rows={4}
+                            />
                           )}
                           {/* Technical Spec */}
                           {it.technicalSpec !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-indigo-500 dark:text-indigo-400">🔧 Technical Spec</label>
-                              <textarea
-                                rows={3}
-                                value={it.technicalSpec ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, technicalSpec: e.target.value } : x))}
-                                className="w-full rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-indigo-900/30 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label={<span className="text-indigo-500 dark:text-indigo-400">🔧 Technical Spec</span>}
+                              labelClass="text-indigo-500 dark:text-indigo-400"
+                              value={it.technicalSpec ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, technicalSpec: v } : x))}
+                              rows={3}
+                              fieldClass="border-indigo-100 bg-indigo-50/50 focus:border-indigo-400 dark:border-indigo-900/30"
+                            />
                           )}
                           {/* Acceptance Criteria */}
                           {it.acceptanceCriteria !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-green-600 dark:text-green-400">✓ Acceptance Criteria</label>
-                              <textarea
-                                rows={3}
-                                value={it.acceptanceCriteria ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, acceptanceCriteria: e.target.value } : x))}
-                                className="w-full rounded-lg border border-green-100 bg-green-50/50 px-3 py-2 text-xs text-gray-800 focus:border-green-400 focus:outline-none dark:border-green-900/30 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label={<span className="text-green-600 dark:text-green-400">✓ Acceptance Criteria</span>}
+                              labelClass="text-green-600 dark:text-green-400"
+                              value={it.acceptanceCriteria ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, acceptanceCriteria: v } : x))}
+                              rows={3}
+                              fieldClass="border-green-100 bg-green-50/50 focus:border-green-400 dark:border-green-900/30"
+                            />
                           )}
                           {/* Children tasks */}
                           {it.children && it.children.length > 0 && (

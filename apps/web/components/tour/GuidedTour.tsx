@@ -131,10 +131,15 @@ export function GuidedTour() {
     }
   }, [markTourDone, router, setCurrentStep, stopTour]);
 
-  if (!isMounted || !isTourActive) return null;
+  if (!isMounted) return null;
 
+  // Keep Joyride mounted with run={false} rather than unmounting abruptly.
+  // Unmounting while active leaves the overlay <div> stuck in the DOM,
+  // blocking all pointer events on the page until refresh.
   return (
     <Joyride
+      continuous
+      scrollToFirstStep
       onEvent={handleEvent}
       run={isTourActive}
       stepIndex={currentStep}
