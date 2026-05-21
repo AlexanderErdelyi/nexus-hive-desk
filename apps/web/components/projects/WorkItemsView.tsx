@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink, GitBranch,
-  Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Sparkles, Star, X, Zap,
+  Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -174,6 +174,9 @@ function WorkItemDetailModal({
   const [refining, setRefining] = useState(false);
   const [applying, setApplying] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [refineModel, setRefineModel] = useState('');
+  const [refineIncludeRepo, setRefineIncludeRepo] = useState(false);
+  const [refineContextOpen, setRefineContextOpen] = useState(false);
   const [recordings, setRecordings] = useState<Array<{ id: string; title?: string; processedAt?: string; duration?: number }>>([]);
   const [selectedRecordingId, setSelectedRecordingId] = useState('');
   const [recordingsMcpId, setRecordingsMcpId] = useState('');
@@ -247,7 +250,7 @@ function WorkItemDetailModal({
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ prompt: msg, agentId: selectedAgentId || undefined }),
+        body: JSON.stringify({ prompt: msg, agentId: selectedAgentId || undefined, recordingId: selectedRecordingId || undefined, model: refineModel || undefined, includeRepoContext: refineIncludeRepo || undefined }),
       });
 
       if (!response.ok || !response.body) throw new Error(await response.text().catch(() => 'Stream failed'));
@@ -611,26 +614,148 @@ function WorkItemDetailModal({
             <div className="flex h-full min-h-0 overflow-hidden">
               {/* Chat panel (left) */}
               <div className="flex w-1/2 flex-col border-r border-gray-200 dark:border-gray-800">
-                {/* Chat header */}
-                <div className="flex items-center gap-3 border-b border-gray-200 p-4 dark:border-gray-800">
-                  <div className="rounded-xl bg-violet-100 p-2 dark:bg-violet-900/30">
-                    <Sparkles size={16} className="text-violet-600 dark:text-violet-400" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">AI Refine</h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Improve this work item with AI</p>
-                  </div>
-                  {agents.length > 0 && (
-                    <select
-                      value={selectedAgentId}
-                      onChange={(e) => setSelectedAgentId(e.target.value)}
-                      className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+              {/* Chat header */}
+                <div className="border-b border-gray-200 dark:border-gray-800">
+                  <div className="flex items-center gap-3 p-4">
+                    <div className="rounded-xl bg-violet-100 p-2 dark:bg-violet-900/30">
+                      <Sparkles size={16} className="text-violet-600 dark:text-violet-400" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-sm font-semibold text-gray-900 dark:text-white">AI Refine</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Improve this work item with AI</p>
+                    </div>
+                    {agents.length > 0 && (
+                      <select
+                        value={selectedAgentId}
+                        onChange={(e) => setSelectedAgentId(e.target.value)}
+                        className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        <option value="">Direct AI</option>
+                        {agents.map((a) => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                      </select>
+                    )}
+                    <button
+                      onClick={() => setRefineContextOpen((o) => !o)}
+                      className={`flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs transition ${refineContextOpen ? 'border-indigo-300 bg-indigo-50 text-indigo-600 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400' : 'border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:border-gray-700 dark:text-gray-400'}`}
                     >
-                      <option value="">Direct AI</option>
-                      {agents.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
+                      <Settings2 size={12} /> Context
+                    </button>
+                  </div>
+
+                  {/* Collapsible context & settings */}
+                  {refineContextOpen && (
+                    <div className="space-y-3 border-t border-gray-100 bg-gray-50/70 p-4 dark:border-gray-800 dark:bg-gray-900/40">
+                      {/* Model picker */}
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">
+                          Model{selectedAgentId ? ' (agent may override)' : ''}
+                        </label>
+                        <select
+                          value={refineModel.startsWith('custom:') ? 'custom' : refineModel}
+                          onChange={(e) => { if (e.target.value === 'custom') setRefineModel('custom:'); else setRefineModel(e.target.value); }}
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                        >
+                          <option value="">Default (gpt-4o-mini)</option>
+                          <optgroup label="── OpenAI GPT-4.x ──">
+                            <option value="openai/gpt-4o-mini">gpt-4o-mini · fast, cheap</option>
+                            <option value="openai/gpt-4o">gpt-4o · balanced</option>
+                            <option value="openai/gpt-4.1-mini">gpt-4.1-mini · fast + capable</option>
+                            <option value="openai/gpt-4.1">gpt-4.1 · best overall ⭐</option>
+                          </optgroup>
+                          <optgroup label="── OpenAI GPT-5 ──">
+                            <option value="openai/gpt-5-mini">gpt-5-mini · lightweight</option>
+                            <option value="openai/gpt-5">gpt-5 · most capable ⚡</option>
+                          </optgroup>
+                          <optgroup label="── OpenAI Reasoning ──">
+                            <option value="openai/o4-mini">o4-mini · structured output</option>
+                            <option value="openai/o3">o3 · advanced reasoning</option>
+                          </optgroup>
+                          <optgroup label="── Meta Llama 4 ──">
+                            <option value="meta/llama-4-scout-17b-16e-instruct">Llama 4 Scout · 10M context</option>
+                            <option value="meta/llama-4-maverick-17b-128e-instruct-fp8">Llama 4 Maverick</option>
+                          </optgroup>
+                          <optgroup label="── DeepSeek ──">
+                            <option value="deepseek/deepseek-r1-0528">DeepSeek-R1 · reasoning</option>
+                            <option value="deepseek/deepseek-v3-0324">DeepSeek-V3 · coding</option>
+                          </optgroup>
+                          <optgroup label="── Anthropic Claude (needs ANTHROPIC_API_KEY) ──">
+                            <option value="claude-haiku-4-5">claude-haiku-4-5 · fast</option>
+                            <option value="claude-sonnet-4-5">claude-sonnet-4-5 · balanced</option>
+                            <option value="claude-opus-4-5">claude-opus-4-5 · best</option>
+                          </optgroup>
+                          <option value="custom">✏ Custom model ID…</option>
+                        </select>
+                        {refineModel.startsWith('custom:') && (
+                          <input
+                            type="text"
+                            className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2 font-mono text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                            placeholder="e.g. claude-sonnet-4-6"
+                            value={refineModel.slice(7)}
+                            onChange={(e) => setRefineModel(`custom:${e.target.value}`)}
+                          />
+                        )}
+                      </div>
+
+                      {/* Recording selector (only when agent has Teams MCP) */}
+                      {recordingsLoading && (
+                        <p className="flex items-center gap-1.5 text-xs text-gray-400"><Loader2 size={11} className="animate-spin" /> Loading recordings…</p>
+                      )}
+                      {recordings.length > 0 && (
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">Teams Recording</label>
+                          <select
+                            value={selectedRecordingId}
+                            onChange={(e) => setSelectedRecordingId(e.target.value)}
+                            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                          >
+                            <option value="">None (no recording)</option>
+                            {recordings.map((rec) => (
+                              <option key={rec.id} value={rec.id}>
+                                {rec.title ?? rec.id}{rec.processedAt ? ` · ${new Date(rec.processedAt).toLocaleDateString()}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {recordingsMcpId && recordings.length === 0 && !recordingsLoading && (
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-400">Recordings folder</label>
+                          <div className="flex gap-2">
+                            <input
+                              value={recordingsFolder}
+                              onChange={(e) => setRecordingsFolder(e.target.value)}
+                              placeholder="Path to recordings folder…"
+                              className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                            />
+                            <button
+                              onClick={() => {
+                                if (!recordingsMcpId || !recordingsFolder.trim()) return;
+                                setRecordingsLoading(true);
+                                api.patch(`/api/mcp-connections/${recordingsMcpId}`, { capabilities: JSON.stringify({ recordingsFolder: recordingsFolder.trim() }) })
+                                  .then(() => api.get(`/api/mcp-connections/${recordingsMcpId}/recordings`))
+                                  .then((res: any) => setRecordings(Array.isArray(res?.data) ? res.data : []))
+                                  .catch(() => {})
+                                  .finally(() => setRecordingsLoading(false));
+                              }}
+                              className="rounded-xl border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-400"
+                            >Scan</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Repo context toggle */}
+                      <label className="flex cursor-pointer items-center gap-2.5 text-xs text-gray-600 dark:text-gray-400">
+                        <input
+                          type="checkbox"
+                          checked={refineIncludeRepo}
+                          onChange={(e) => setRefineIncludeRepo(e.target.checked)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        Include repo context (file tree + XLIFF/AL files)
+                      </label>
+                    </div>
                   )}
                 </div>
 

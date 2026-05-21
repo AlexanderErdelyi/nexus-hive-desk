@@ -61,24 +61,65 @@ type AdoClassificationNode = {
   attributes?: { startDate?: string; finishDate?: string };
 };
 
+/** Strips known provider prefixes and resolves `custom:` prefix. */
+function resolveModelId(raw: string | undefined | null): string {
+  if (!raw) return process.env.AI_MODEL ?? 'gpt-4o-mini';
+  if (raw.startsWith('custom:')) return raw.slice(7).trim() || (process.env.AI_MODEL ?? 'gpt-4o-mini');
+  if (raw.startsWith('openai/')) return raw.slice(7);
+  return raw;
+}
+
 async function fetchModelJson<T = Record<string, unknown>>(
   token: string,
   model: string,
   messages: ChatModelMessage[],
   temperature = 0.7
 ): Promise<T> {
+  // Route Claude models via Anthropic or OpenRouter when keys are present
+  if (model.startsWith('claude-')) {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    const endpoint = anthropicKey
+      ? null // handled below
+      : openRouterKey
+        ? `https://openrouter.ai/api/v1/chat/completions`
+        : null;
+
+    if (anthropicKey) {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, max_tokens: 4096, system: messages[0]?.role === 'system' ? messages[0].content : undefined, messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content })) }),
+      });
+      if (!res.ok) throw new Error(`Anthropic API error: ${await res.text().catch(() => res.statusText)}`);
+      const data = await res.json() as { content?: Array<{ type: string; text?: string }> };
+      const text = data.content?.find((c) => c.type === 'text')?.text ?? '{}';
+      return JSON.parse(text) as T;
+    }
+    if (endpoint && openRouterKey) {
+      const orModel = model.startsWith('anthropic/') ? model : `anthropic/${model}`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${openRouterKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: orModel, messages, temperature }),
+      });
+      if (!res.ok) throw new Error(`OpenRouter API error: ${await res.text().catch(() => res.statusText)}`);
+      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const text = data.choices?.[0]?.message?.content ?? '{}';
+      return JSON.parse(text) as T;
+    }
+    throw new Error('Claude model selected but ANTHROPIC_API_KEY or OPENROUTER_API_KEY is not configured in .env');
+  }
+
+  // Default: GitHub Models
+  const isOpenAICompat = !model.includes('/') || model.startsWith('openai/') || model.startsWith('meta/') || model.startsWith('deepseek/') || model.startsWith('microsoft/') || model.startsWith('ai21') || model.startsWith('cohere/');
+  const body: Record<string, unknown> = { model, messages, temperature };
+  if (isOpenAICompat) body.response_format = { type: 'json_object' };
+
   const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      response_format: { type: 'json_object' },
-    }),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -1002,7 +1043,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
   // ─── AI refine stream ──────────────────────────────────────────────────────
   app.post<{
     Params: { id: string; wiId: string };
-    Body: { prompt: string; agentId?: string; recordingId?: string };
+    Body: { prompt: string; agentId?: string; recordingId?: string; model?: string; includeRepoContext?: boolean };
   }>('/:id/work-items/:wiId/refine-stream', async (req, reply) => {
     reply.hijack();
     reply.raw.statusCode = 200;
@@ -1018,7 +1059,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
     const endStream = () => { if (!reply.raw.writableEnded) reply.raw.end(); };
 
     try {
-      const { prompt, agentId, recordingId } = req.body;
+      const { prompt, agentId, recordingId, model: modelOverride, includeRepoContext = false } = req.body;
       if (!prompt?.trim()) throw new Error('prompt is required');
 
       const project = await prisma.project.findUnique({ where: { id: req.params.id } });
@@ -1027,10 +1068,8 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
       const conn = await prisma.customerConnection.findUnique({ where: { id: project.connectionId } });
       if (!conn || conn.type !== 'azure-devops') throw new Error('Azure DevOps connection not found');
 
-      const token = process.env.GITHUB_TOKEN;
-      if (!token) throw new Error('AI provider token not configured');
-
-      const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+      const token = process.env.GITHUB_TOKEN ?? '';
+      const model = resolveModelId(modelOverride);
       const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
 
       sendLog('Loading current work item...');
@@ -1109,7 +1148,47 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
         }
       }
 
-      sendLog('Generating refinement...');
+      // Repo context
+      let repoContext = '';
+      if (includeRepoContext) {
+        sendLog('Loading repository context...');
+        try {
+          const repos = await prisma.projectRepository.findMany({ where: { projectId: project.id } });
+          if (repos.length > 0) {
+            const parts: string[] = [];
+            for (const repo of repos.slice(0, 2)) {
+              const repoConn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+              if (!repoConn || repoConn.type !== 'azure-devops') continue;
+              const rBase = repoConn.baseUrl?.replace(/\/$/, '') ?? '';
+              const rProj = encodeURIComponent(repo.adoProjectName ?? project.adoProjectName ?? '');
+              const branch = repo.defaultBranch ?? 'main';
+              sendLog(`Scanning repo: ${repo.repoName}...`);
+              try {
+                const treeData = await fetchJsonWithInit<{ value?: Array<{ path: string; gitObjectType?: string }> }>(
+                  `${rBase}/${rProj}/_apis/git/repositories/${encodeURIComponent(repo.repoName)}/items?recursionLevel=Full&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`,
+                  { method: 'GET', headers: azureHeaders(repoConn.pat) }
+                );
+                const allFiles = (treeData.value ?? []).filter((i) => i.gitObjectType === 'blob').map((i) => i.path);
+                const alFiles = allFiles.filter((p) => /\.al$/i.test(p)).slice(0, 8);
+                const repoParts = [`Repository: ${repo.label ?? repo.repoName}`];
+                repoParts.push(`Files (excerpt):\n${allFiles.slice(0, 40).map((p) => `  ${p}`).join('\n')}`);
+                if (alFiles.length > 0) repoParts.push(`AL files:\n${alFiles.map((p) => `  ${p}`).join('\n')}`);
+                parts.push(repoParts.join('\n\n'));
+              } catch { /* skip repo on error */ }
+            }
+            if (parts.length > 0) {
+              repoContext = `## Repository Context\n\n${parts.join('\n\n---\n\n')}`;
+              sendLog('Repository context loaded ✓');
+            }
+          } else {
+            sendLog('No repositories configured for this project');
+          }
+        } catch (repoErr) {
+          sendLog(`Repo context unavailable: ${repoErr instanceof Error ? repoErr.message : 'unknown'}`);
+        }
+      }
+
+      sendLog(`Generating refinement with ${model}...`);
 
       const systemContent = [
         agentSystemPrompt || 'You are a skilled work item writer.',
@@ -1122,9 +1201,10 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
         '',
         `**Acceptance Criteria:**\n${currentAC || '(empty)'}`,
         mcpContext ? `\n${mcpContext}` : '',
+        repoContext ? `\n${repoContext}` : '',
         '',
         "Apply the user's instructions to improve this work item.",
-        mcpContext ? 'Use the Teams recording context as additional background information to enrich the content.' : '',
+        (mcpContext || repoContext) ? 'Use the provided context (recording, repo) as additional background to enrich the content.' : '',
         'Only change what the user asks. Keep unchanged content intact.',
         'Return ONLY valid JSON: { "title": "...", "description": "...", "acceptanceCriteria": "..." }',
       ].filter(Boolean).join('\n');
