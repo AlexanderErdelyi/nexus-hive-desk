@@ -1,8 +1,9 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil, Upload, ChevronDown } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { Bot, Wrench, Plug, Plus, Trash2, Play, Zap, Shield, Sparkles, Loader2, RefreshCw, Download, Tag, FlaskConical, Pencil, Upload, ChevronDown, X, BookOpen } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -807,8 +808,154 @@ function SkillsTab() {
   );
 }
 
+function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => void; onSaved: () => void }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({
+    name: skill.name,
+    description: skill.description ?? '',
+    type: skill.type,
+    promptTemplate: skill.promptTemplate ?? '',
+  });
+  const [saving, setSaving] = useState(false);
+  const readOnly = skill.builtIn;
+
+  const typeColors: Record<string, string> = {
+    prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    'mcp-tool': 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  };
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.patch(`/api/skills/${skill.id}`, form);
+      qc.invalidateQueries({ queryKey: ['skills'] });
+      toast.success('Skill saved');
+      onSaved();
+    } catch (e) { toast.error(getErrorMessage(e)); }
+    finally { setSaving(false); }
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 border-b border-gray-100 px-6 py-4 dark:border-gray-800">
+          <Wrench size={18} className="shrink-0 text-indigo-500" />
+          <div className="flex-1 min-w-0">
+            {readOnly ? (
+              <h2 className="truncate text-lg font-bold text-gray-900 dark:text-white">{skill.name}</h2>
+            ) : (
+              <input
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                className="w-full bg-transparent text-lg font-bold text-gray-900 focus:outline-none dark:text-white"
+              />
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${typeColors[form.type] ?? ''}`}>
+              {form.type}
+            </span>
+            {skill.builtIn && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                <Shield size={10} /> built-in
+              </span>
+            )}
+            <button onClick={onClose} className="rounded-full p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {/* Description */}
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Description</label>
+            {readOnly ? (
+              <p className="text-sm text-gray-700 dark:text-gray-300">{skill.description || <span className="italic text-gray-400">—</span>}</p>
+            ) : (
+              <input
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="What does this skill do?"
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+            )}
+          </div>
+
+          {/* Type selector (edit only) */}
+          {!readOnly && (
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Type</label>
+              <select
+                value={form.type}
+                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as Skill['type'] }))}
+                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="prompt">Prompt</option>
+                <option value="code">Code</option>
+                <option value="mcp-tool">MCP Tool</option>
+              </select>
+            </div>
+          )}
+
+          {/* Prompt template / code */}
+          <div className="flex-1">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">
+              {form.type === 'code' ? 'Code' : 'Prompt Template'}
+            </label>
+            {readOnly ? (
+              <pre className="min-h-[180px] rounded-xl border border-gray-100 bg-gray-50 p-4 font-mono text-sm leading-relaxed text-gray-700 whitespace-pre-wrap break-words dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+                {skill.promptTemplate || <span className="italic text-gray-400">No template defined.</span>}
+              </pre>
+            ) : (
+              <textarea
+                rows={12}
+                value={form.promptTemplate}
+                onChange={(e) => setForm((f) => ({ ...f, promptTemplate: e.target.value }))}
+                placeholder={form.type === 'code' ? 'Write your code here...' : 'Translate the following text to {{targetLanguage}}:\n\n{{sourceText}}'}
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 font-mono text-sm leading-relaxed text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        {!readOnly && (
+          <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4 dark:border-gray-800">
+            <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800">
+              Cancel
+            </button>
+            <button
+              onClick={save}
+              disabled={!form.name || saving}
+              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+              Save changes
+            </button>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () => void; canDelete: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     code: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400',
@@ -816,69 +963,62 @@ function SkillCard({ skill, onDelete, canDelete }: { skill: Skill; onDelete: () 
   };
 
   return (
-    <div className={`${cardClass} flex flex-col`}>
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div className="min-w-0 flex-1">
-          <span className="block truncate font-semibold text-gray-900 dark:text-white">{skill.name}</span>
-          {skill.description && (
-            <p className="mt-1 line-clamp-2 text-sm text-gray-500 dark:text-gray-400">{skill.description}</p>
-          )}
-        </div>
-        <div className="ml-2 flex shrink-0 items-center gap-1">
-          {skill.promptTemplate && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              title={expanded ? 'Collapse' : 'View content'}
-              className="text-gray-400 hover:text-indigo-500 dark:text-gray-600 dark:hover:text-indigo-400"
-            >
-              <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
-            </button>
-          )}
-          {canDelete && (
-            <button
-              onClick={onDelete}
-              className="text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
-            >
-              <Trash2 size={15} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Expanded content */}
-      {expanded && skill.promptTemplate && (
-        <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/50">
-          <p className="mb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            {skill.type === 'code' ? 'Code' : 'Prompt Template'}
-          </p>
-          <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-xs text-gray-700 dark:text-gray-300 font-mono leading-relaxed">
-            {skill.promptTemplate}
-          </pre>
-        </div>
+    <>
+      {modalOpen && (
+        <SkillModal
+          skill={skill}
+          onClose={() => setModalOpen(false)}
+          onSaved={() => setModalOpen(false)}
+        />
       )}
+      <div
+        className={`${cardClass} flex cursor-pointer flex-col`}
+        onClick={() => setModalOpen(true)}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div className="min-w-0 flex-1">
+            <span className="block truncate font-semibold text-gray-900 dark:text-white">{skill.name}</span>
+            {skill.description && (
+              <p className="mt-1 line-clamp-2 text-sm text-gray-500 dark:text-gray-400">{skill.description}</p>
+            )}
+          </div>
+          <div className="ml-2 flex shrink-0 items-center gap-1">
+            <button
+              title={skill.builtIn ? 'View skill' : 'Edit skill'}
+              className="text-gray-400 hover:text-indigo-500 dark:text-gray-600 dark:hover:text-indigo-400"
+              onClick={(e) => { e.stopPropagation(); setModalOpen(true); }}
+            >
+              {skill.builtIn ? <BookOpen size={14} /> : <Pencil size={14} />}
+            </button>
+            {canDelete && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                className="text-gray-400 hover:text-red-500 dark:text-gray-600 dark:hover:text-red-400"
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
+          </div>
+        </div>
 
-      {/* Footer */}
-      <div className="mt-3 flex items-center gap-2">
-        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${typeColors[skill.type] ?? ''}`}>
-          {skill.type}
-        </span>
-        {skill.builtIn && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-            <Shield size={10} /> built-in
+        {/* Footer */}
+        <div className="mt-3 flex items-center gap-2">
+          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${typeColors[skill.type] ?? ''}`}>
+            {skill.type}
           </span>
-        )}
-        {skill.promptTemplate && !expanded && (
-          <button
-            onClick={() => setExpanded(true)}
-            className="ml-auto text-xs text-indigo-500 hover:text-indigo-700 dark:text-indigo-400"
-          >
-            View content →
-          </button>
-        )}
+          {skill.builtIn && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+              <Shield size={10} /> built-in
+            </span>
+          )}
+          {skill.promptTemplate && (
+            <span className="ml-auto text-xs text-gray-400">has template</span>
+          )}
+        </div>
+        <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(skill.createdAt)}</div>
       </div>
-      <div className="mt-2 text-xs text-gray-400 dark:text-gray-600">{formatDate(skill.createdAt)}</div>
-    </div>
+    </>
   );
 }
 
