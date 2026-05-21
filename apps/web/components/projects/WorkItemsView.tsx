@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink, GitBranch,
-  Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
+  Filter, LayoutList, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,6 +28,7 @@ interface WorkItem {
   tags?: string | null;
   areaPath?: string | null;
   iterationPath?: string | null;
+  parentId?: number | null;
   createdDate?: string;
   changedDate?: string;
   url?: string;
@@ -137,6 +138,96 @@ function priorityBadge(p?: number) {
   if (!entry) return null;
   return <span className={`text-xs font-medium ${entry.cls}`}>{entry.label}</span>;
 }
+
+// ── Backlog tree helpers ──────────────────────────────────────────────────────
+
+const TYPE_ORDER: Record<string, number> = {
+  epic: 0, feature: 1, 'user story': 2, task: 3, bug: 4,
+};
+
+type BacklogNode = WorkItem & { children: BacklogNode[] };
+
+function buildTree(items: WorkItem[]): BacklogNode[] {
+  const map = new Map<number, BacklogNode>();
+  for (const item of items) map.set(item.id, { ...item, children: [] });
+
+  const roots: BacklogNode[] = [];
+  for (const node of map.values()) {
+    if (node.parentId && map.has(node.parentId)) {
+      map.get(node.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sort = (nodes: BacklogNode[]): BacklogNode[] => {
+    nodes.sort((a, b) => {
+      const ao = TYPE_ORDER[a.type.toLowerCase()] ?? 99;
+      const bo = TYPE_ORDER[b.type.toLowerCase()] ?? 99;
+      return ao !== bo ? ao - bo : a.id - b.id;
+    });
+    for (const n of nodes) sort(n.children);
+    return nodes;
+  };
+  return sort(roots);
+}
+
+function BacklogRow({
+  node, depth, onSelect, selectedId,
+}: {
+  node: BacklogNode; depth: number; onSelect: (item: WorkItem) => void; selectedId?: number;
+}) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const hasChildren = node.children.length > 0;
+  const indent = depth * 20 + 12;
+
+  return (
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelect(node)}
+        onKeyDown={(e) => e.key === 'Enter' && onSelect(node)}
+        style={{ paddingLeft: `${indent}px` }}
+        className={`flex items-center gap-2 py-2 pr-3 rounded-lg cursor-pointer group transition-colors
+          ${selectedId === node.id
+            ? 'bg-indigo-50 dark:bg-indigo-900/20 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
+            : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+          }`}
+      >
+        {hasChildren ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+            className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400"
+          >
+            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </button>
+        ) : (
+          <span className="shrink-0 w-4" />
+        )}
+        <span className="shrink-0">{typeIcon(node.type, 13)}</span>
+        <span className="flex-1 min-w-0 text-sm truncate text-gray-900 dark:text-white">{node.title}</span>
+        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-600">#{node.id}</span>
+        <span className="shrink-0">{stateChip(node.state)}</span>
+        {node.priority && <span className="shrink-0 hidden sm:block">{priorityBadge(node.priority)}</span>}
+        {node.assignedTo && (
+          <span className="shrink-0 hidden md:block text-xs text-gray-400 dark:text-gray-600 truncate max-w-[120px]">
+            {node.assignedTo}
+          </span>
+        )}
+        {hasChildren && (
+          <span className="shrink-0 text-xs text-gray-400 dark:text-gray-600 tabular-nums">
+            {node.children.length}
+          </span>
+        )}
+      </div>
+      {expanded && hasChildren && node.children.map((child) => (
+        <BacklogRow key={child.id} node={child} depth={depth + 1} onSelect={onSelect} selectedId={selectedId} />
+      ))}
+    </>
+  );
+}
+
 
 function markdownToHtml(content: string): string {
   if (!content) return '';
@@ -2098,12 +2189,13 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [search, setSearch] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'backlog'>('list');
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['work-items', projectId, typeFilter, stateFilter],
+    queryKey: ['work-items', projectId, typeFilter, stateFilter, viewMode],
     queryFn: () => {
-      const params = new URLSearchParams({ top: '100' });
-      if (typeFilter) params.set('type', typeFilter);
+      const params = new URLSearchParams({ top: viewMode === 'backlog' ? '200' : '100' });
+      if (viewMode !== 'backlog' && typeFilter) params.set('type', typeFilter);
       if (stateFilter) params.set('state', stateFilter);
       return api.get<{ data: WorkItem[]; meta: { total: number } }>(
         `/api/projects/${projectId}/work-items?${params}`
@@ -2135,6 +2227,8 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
     return wi.title.toLowerCase().includes(q) || String(wi.id).includes(q) || (wi.tags?.toLowerCase().includes(q) ?? false);
   });
 
+  const backlogTree = buildTree(filtered);
+
   return (
     <div>
       {/* ── List column ── */}
@@ -2153,7 +2247,8 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           <div className="flex items-center gap-1.5">
             <Filter size={13} className="shrink-0 text-gray-400" />
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+              disabled={viewMode === 'backlog'}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-40">
               <option value="">All types</option>
               {uniqueTypes.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
@@ -2167,6 +2262,29 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             className="rounded-xl border border-gray-200 bg-white p-2 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800">
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           </button>
+          {/* View mode toggle */}
+          <div className="flex rounded-xl border border-gray-200 bg-white overflow-hidden dark:border-gray-700 dark:bg-gray-900">
+            <button
+              onClick={() => setViewMode('list')}
+              title="List view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors
+                ${viewMode === 'list'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <LayoutList size={13} />
+            </button>
+            <button
+              onClick={() => setViewMode('backlog')}
+              title="Backlog view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors border-l border-gray-200 dark:border-gray-700
+                ${viewMode === 'backlog'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <GitBranch size={13} />
+            </button>
+          </div>
           <button
             onClick={() => { setShowCreateModal(true); setSelectedItem(null); }}
             className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 active:bg-indigo-800"
@@ -2175,7 +2293,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           </button>
         </div>
 
-        {/* Items list */}
+        {/* Items list / backlog */}
         {isLoading ? (
           <div className="flex items-center justify-center py-24 text-gray-400">
             <Loader2 size={28} className="animate-spin" />
@@ -2193,7 +2311,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
               {items.length === 0 ? 'No work items found. Create your first one!' : 'No items match the current filter.'}
             </p>
           </div>
-        ) : (
+        ) : viewMode === 'list' ? (
           <div className="space-y-1.5">
             {filtered.map((wi) => (
               <button
@@ -2222,6 +2340,26 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
                 </div>
               </button>
             ))}
+          </div>
+        ) : (
+          /* Backlog tree view */
+          <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
+            {/* Header row */}
+            <div className="grid grid-cols-[1fr_auto] items-center gap-2 border-b border-gray-100 dark:border-gray-800 px-3 py-2 text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide">
+              <span>Title</span>
+              <span className="pr-1">State / Priority</span>
+            </div>
+            <div className="divide-y divide-gray-50 dark:divide-gray-800/50 p-1">
+              {backlogTree.map((node) => (
+                <BacklogRow
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  onSelect={(wi) => { setSelectedItem(wi); setShowCreateModal(false); }}
+                  selectedId={selectedItem?.id}
+                />
+              ))}
+            </div>
           </div>
         )}
 

@@ -343,6 +343,7 @@ export async function workItemRoutes(app: FastifyInstance) {
         'Microsoft.VSTS.Common.Priority', 'System.Description',
         'Microsoft.VSTS.Common.AcceptanceCriteria',
         'System.Tags', 'System.AreaPath', 'System.IterationPath',
+        'System.Parent',
       ].join(',');
 
       const detailsUrl = `${baseUrl}/_apis/wit/workitems?ids=${ids.join(',')}&fields=${fields}&api-version=7.1`;
@@ -366,6 +367,7 @@ export async function workItemRoutes(app: FastifyInstance) {
           tags: f['System.Tags'] ?? null,
           areaPath: f['System.AreaPath'] ?? null,
           iterationPath: f['System.IterationPath'] ?? null,
+          parentId: (f['System.Parent'] as number | null | undefined) ?? null,
           createdDate: f['System.CreatedDate'],
           changedDate: f['System.ChangedDate'],
           url: `${conn.baseUrl?.replace(/\/$/, '')}/${encodeURIComponent(adoProject)}/_workitems/edit/${wi.id}`,
