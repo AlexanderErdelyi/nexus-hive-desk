@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookMarked, Check, ChevronLeft, ChevronRight, Download, Edit2, Globe, Plus,
-  Search, Trash2, Upload, X,
+  RefreshCw, Search, Trash2, Upload, X,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -165,6 +165,129 @@ function AddEntryModal({ projectId, onClose, onSaved }: { projectId: string; onC
   );
 }
 
+// ─── Populate modal ───────────────────────────────────────────────────────────
+
+function PopulateModal({ projectId, onClose, onDone }: { projectId: string; onClose: () => void; onDone: () => void }) {
+  const [scope, setScope] = useState<'project' | 'global'>('project');
+  const [states, setStates] = useState<string[]>(['translated', 'final']);
+  const [result, setResult] = useState<{ created: number; updated: number; skipped: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  function toggleState(s: string) {
+    setStates((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
+  }
+
+  async function run() {
+    if (!states.length) { toast.error('Select at least one state'); return; }
+    setLoading(true);
+    try {
+      const res = await api.post<{ created: number; updated: number; skipped: number }>(
+        '/api/translation-memory/populate',
+        { projectId, scope, states }
+      );
+      setResult(res);
+      onDone();
+    } catch { toast.error('Populate failed'); }
+    finally { setLoading(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-900">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Populate from Translations</h2>
+            <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
+              Harvest confirmed strings from this project into the TM library
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={18} /></button>
+        </div>
+
+        {result ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              {[
+                { label: 'Created', value: result.created, color: 'text-teal-600 dark:text-teal-400' },
+                { label: 'Updated', value: result.updated, color: 'text-indigo-600 dark:text-indigo-400' },
+                { label: 'Skipped', value: result.skipped, color: 'text-gray-500 dark:text-gray-400' },
+              ].map((s) => (
+                <div key={s.label} className="rounded-xl border border-gray-200 bg-gray-50 py-3 dark:border-gray-700 dark:bg-gray-800">
+                  <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
+                  <div className="text-xs text-gray-400 dark:text-gray-500">{s.label}</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-center text-xs text-gray-400 dark:text-gray-500">
+              TM populated successfully!
+            </p>
+            <div className="mt-2 flex justify-end">
+              <button onClick={onClose} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Include translation states</label>
+              <div className="flex flex-wrap gap-2">
+                {['translated', 'final', 'needs-review-translation'].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => toggleState(s)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      states.includes(s)
+                        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Store as</label>
+              <div className="flex gap-2">
+                {(['project', 'global'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setScope(s)}
+                    className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${
+                      scope === s
+                        ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300'
+                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800'
+                    }`}
+                  >
+                    {s === 'project' ? '🏷 Project-scoped' : '🌐 Global'}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-500">
+                {scope === 'project'
+                  ? 'Entries will only be suggested for this project.'
+                  : 'Entries will be suggested across all projects.'}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800">
+                Cancel
+              </button>
+              <button onClick={run} disabled={loading || !states.length} className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50">
+                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                {loading ? 'Populating…' : 'Populate TM'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function TranslationMemoryView({ projectId }: Props) {
@@ -176,6 +299,7 @@ export function TranslationMemoryView({ projectId }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [showPopulate, setShowPopulate] = useState(false);
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
   const [importing, setImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
@@ -313,6 +437,13 @@ export function TranslationMemoryView({ projectId }: Props) {
             Delete {selected.size}
           </button>
         )}
+
+        <button
+          onClick={() => setShowPopulate(true)}
+          className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100 dark:border-teal-800/40 dark:bg-teal-900/20 dark:text-teal-400 dark:hover:bg-teal-900/40"
+        >
+          <RefreshCw size={14} /> Populate from Translations
+        </button>
 
         <button
           onClick={() => setShowAdd(true)}
@@ -455,6 +586,14 @@ export function TranslationMemoryView({ projectId }: Props) {
           projectId={projectId}
           onClose={() => setShowAdd(false)}
           onSaved={() => qc.invalidateQueries({ queryKey: ['tm', projectId] })}
+        />
+      )}
+
+      {showPopulate && (
+        <PopulateModal
+          projectId={projectId}
+          onClose={() => setShowPopulate(false)}
+          onDone={() => qc.invalidateQueries({ queryKey: ['tm', projectId] })}
         />
       )}
 

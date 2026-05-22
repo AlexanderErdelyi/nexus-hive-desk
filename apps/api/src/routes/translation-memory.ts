@@ -171,6 +171,77 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
     return { data: entry };
   });
 
+  // POST /populate — harvest confirmed translations from the project into TM
+  app.post<{
+    Body: { projectId: string; scope?: 'project' | 'global'; states?: string[] };
+  }>('/populate', async (req, reply) => {
+    const { projectId, scope = 'project', states = ['translated', 'final'] } = req.body;
+    if (!projectId) return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
+
+    // Get all XLIFF files for this project (for language pair info)
+    const xliffFiles = await prisma.xliffFile.findMany({
+      where: { projectId },
+      select: { id: true, sourceLanguage: true, targetLanguage: true },
+    });
+
+    if (!xliffFiles.length) return { success: true, created: 0, updated: 0, skipped: 0 };
+
+    const fileMap = new Map(xliffFiles.map((f) => [f.id, f]));
+
+    // Fetch all qualifying translations for this project
+    const translations = await prisma.translation.findMany({
+      where: {
+        projectId,
+        state: { in: states },
+        target: { not: '' },
+      },
+      select: { xliffFileId: true, source: true, target: true },
+    });
+
+    let created = 0, updated = 0, skipped = 0;
+    const tmProjectId = scope === 'project' ? projectId : null;
+
+    for (const t of translations) {
+      const file = fileMap.get(t.xliffFileId);
+      if (!file) { skipped++; continue; }
+
+      const existing = await prisma.translationMemory.findFirst({
+        where: {
+          source: t.source,
+          sourceLanguage: file.sourceLanguage,
+          targetLanguage: file.targetLanguage,
+          projectId: tmProjectId,
+        },
+      });
+
+      if (existing) {
+        if (existing.target !== t.target) {
+          await prisma.translationMemory.update({
+            where: { id: existing.id },
+            data: { target: t.target, usageCount: { increment: 1 }, updatedAt: new Date() },
+          });
+          updated++;
+        } else {
+          skipped++;
+        }
+      } else {
+        await prisma.translationMemory.create({
+          data: {
+            source: t.source,
+            target: t.target,
+            sourceLanguage: file.sourceLanguage,
+            targetLanguage: file.targetLanguage,
+            projectId: tmProjectId,
+            usageCount: 1,
+          },
+        });
+        created++;
+      }
+    }
+
+    return { success: true, created, updated, skipped };
+  });
+
   // PATCH /:id — update target of a TM entry
   app.patch<{ Params: { id: string }; Body: { target: string } }>('/:id', async (req, reply) => {
     const { target } = req.body;
