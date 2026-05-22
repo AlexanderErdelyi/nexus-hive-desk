@@ -20,6 +20,7 @@ import { skillRoutes } from './routes/skills';
 import { mcpConnectionRoutes } from './routes/mcp-connections';
 import { userTokenRoutes } from './routes/user-tokens';
 import { workItemRoutes } from './routes/work-items';
+import { alHealthRoutes } from './routes/al-health';
 import { inviteRoutes } from './routes/invites';
 
 async function bootstrap() {
@@ -82,6 +83,7 @@ async function bootstrap() {
   await app.register(agentRoutes, { prefix: '/api/agents' });
   await app.register(userTokenRoutes, { prefix: '/api/user/tokens' });
   await app.register(workItemRoutes, { prefix: '/api/projects' });
+  await app.register(alHealthRoutes, { prefix: '/api/projects' });
   await app.register(inviteRoutes, { prefix: '/api' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
