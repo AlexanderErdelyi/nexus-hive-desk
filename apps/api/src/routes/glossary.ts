@@ -141,6 +141,7 @@ export async function glossaryRoutes(app: FastifyInstance) {
     const existingTerms = existing.map((e) => e.sourceTerm);
 
     // Sample translated strings (prefer ones with notes for BC context)
+    // Keep sample count small to stay within token limits (50 × ~80 tokens ≈ 4000 tokens)
     const samples = await prisma.translation.findMany({
       where: {
         projectId,
@@ -150,8 +151,11 @@ export async function glossaryRoutes(app: FastifyInstance) {
       },
       select: { source: true, target: true, note: true },
       orderBy: { note: 'asc' }, // grouped by object type = better context
-      take: 200,
+      take: 50,
     });
+
+    // Truncate long strings to keep the prompt within token budget
+    const truncate = (s: string, max = 120) => s.length > max ? s.slice(0, max) + '…' : s;
 
     const aiProvider = createProvider({
       type: provider ?? (process.env.AI_PROVIDER as AIProviderType) ?? 'github-models',
@@ -161,7 +165,7 @@ export async function glossaryRoutes(app: FastifyInstance) {
 
     try {
       const result = await aiProvider.generateGlossary({
-        samples: samples.map((s) => ({ source: s.source, target: s.target, context: s.note ?? undefined })),
+        samples: samples.map((s) => ({ source: truncate(s.source), target: truncate(s.target), context: s.note ? truncate(s.note, 80) : undefined })),
         sourceLanguage: project.sourceLanguage ?? 'en',
         targetLanguage: project.targetLanguage ?? 'de',
         existingTerms,
