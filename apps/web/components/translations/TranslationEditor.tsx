@@ -20,7 +20,9 @@ interface Translation {
   state: TranslationState;
   note?: string;
   developerNote?: string;
-  qualityIssues?: string[]; // populated by API when qualityIssuesOnly=true or always annotated
+  qualityIssues?: string[];
+  syncChangedAt?: string | null;
+  syncChangeType?: 'added' | 'source-changed' | 'removed' | null;
 }
 
 interface XliffFileInfo {
@@ -34,6 +36,7 @@ interface XliffFileInfo {
   remoteRepo?: string;
   remotePrId?: string | null;
   remotePrUrl?: string | null;
+  lastSyncAt?: string | null;
 }
 
 interface XliffNoteMeta {
@@ -279,12 +282,14 @@ function StateDropdown({ value, onChange }: { value: TranslationState; onChange:
   );
 }
 
-export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter }: { projectId: string; xliffFileId?: string; initialObjectFilter?: string }) {
+export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter, initialFilter }: { projectId: string; xliffFileId?: string; initialObjectFilter?: string; initialFilter?: string }) {
   const qc = useQueryClient();
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [searchIn, setSearchIn] = useState<'all' | 'source' | 'target' | 'objectName'>('all');
-  const [filterState, setFilterState] = useState<TranslationState | 'all' | 'untranslated' | 'quality-issues'>('untranslated');
+  const [filterState, setFilterState] = useState<TranslationState | 'all' | 'untranslated' | 'quality-issues' | 'since-last-sync'>(
+    (initialFilter as TranslationState | 'all' | 'untranslated' | 'quality-issues' | 'since-last-sync') ?? 'untranslated'
+  );
   const [objectType, setObjectType] = useState('');
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
@@ -330,9 +335,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
       ? { untranslatedOnly: 'true' }
       : filterState === 'quality-issues'
         ? { qualityIssuesOnly: 'true' }
-        : filterState !== 'all'
-          ? { state: filterState }
-          : {}),
+        : filterState === 'since-last-sync'
+          ? { changesOnly: 'true' }
+          : filterState !== 'all'
+            ? { state: filterState }
+            : {}),
     ...(search ? { search } : {}),
     ...(searchIn !== 'all' ? { searchIn } : {}),
     ...(objectType ? { objectType } : {}),
@@ -1090,6 +1097,23 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
             <AlertTriangle size={11} />
             Quality Issues
           </button>
+          {/* Since last sync filter — only show if file has been synced */}
+          {currentFile?.lastSyncAt && (
+            <button
+              onClick={() => { setFilterState('since-last-sync'); setPage(1); }}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                filterState === 'since-last-sync'
+                  ? 'bg-teal-600 text-white'
+                  : 'bg-teal-50 text-teal-700 hover:bg-teal-100 dark:bg-teal-900/20 dark:text-teal-400 dark:hover:bg-teal-900/40'
+              )}
+            >
+              🔄 Since last sync
+              <span className="ml-0.5 opacity-70 text-[10px]">
+                {new Date(currentFile.lastSyncAt).toLocaleDateString()}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Row 3: AL folder object chips (only when folder loaded) */}
@@ -1237,6 +1261,31 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
 
                     <td className="align-top p-3">
                       <p className="break-words whitespace-pre-wrap text-gray-800 dark:text-gray-200">{translation.source}</p>
+                      {/* Sync change badges */}
+                      {translation.syncChangeType && (
+                        <div className="mt-1 flex items-center gap-1.5">
+                          {translation.syncChangeType === 'added' && (
+                            <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">
+                              🆕 New from repo
+                            </span>
+                          )}
+                          {translation.syncChangeType === 'source-changed' && (
+                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                              ✏ Source updated
+                            </span>
+                          )}
+                          {translation.syncChangeType === 'removed' && (
+                            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                              🗑 Removed from repo
+                            </span>
+                          )}
+                          {translation.syncChangedAt && (
+                            <span className="text-[10px] text-gray-400 dark:text-gray-600">
+                              {new Date(translation.syncChangedAt).toLocaleDateString()}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {/* Quality issue badges */}
                       {qualityIssues.length > 0 && (
                         <div className="mt-1.5 flex flex-wrap gap-1">

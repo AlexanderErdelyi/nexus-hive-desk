@@ -35,6 +35,7 @@ export async function projectRoutes(app: FastifyInstance) {
             id: true,
             filename: true,
             uploadedAt: true,
+            lastSyncAt: true,
             sourceLanguage: true,
             targetLanguage: true,
             remoteConnectionId: true,
@@ -285,10 +286,11 @@ export async function projectRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'parse_error', message });
     }
 
-    // Merge: update originalXml, upsert units
+    // Merge: update originalXml + lastSyncAt, upsert units
+    const syncNow = new Date();
     await prisma.xliffFile.update({
       where: { id: file.id },
-      data: { originalXml: remoteXml },
+      data: { originalXml: remoteXml, lastSyncAt: syncNow },
     });
 
     const existing = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
@@ -311,13 +313,21 @@ export async function projectRoutes(app: FastifyInstance) {
             state: unit.state,
             note: unit.note,
             developerNote: unit.developerNote,
+            syncChangedAt: syncNow,
+            syncChangeType: 'added',
           },
         });
         added++;
       } else if (local.source !== unit.source) {
         await prisma.translation.update({
           where: { id: local.id },
-          data: { source: unit.source, note: unit.note, developerNote: unit.developerNote },
+          data: {
+            source: unit.source,
+            note: unit.note,
+            developerNote: unit.developerNote,
+            syncChangedAt: syncNow,
+            syncChangeType: 'source-changed',
+          },
         });
         updated++;
       }
@@ -326,10 +336,13 @@ export async function projectRoutes(app: FastifyInstance) {
     // Mark removed units
     const removed = existing.filter((t) => !remoteIds.has(t.unitId));
     for (const t of removed) {
-      await prisma.translation.update({ where: { id: t.id }, data: { state: 'needs-review' } });
+      await prisma.translation.update({
+        where: { id: t.id },
+        data: { state: 'needs-review', syncChangedAt: syncNow, syncChangeType: 'removed' },
+      });
     }
 
-    return { data: { added, updated, obsolete: removed.length, total: parsed.units.length } };
+    return { data: { added, updated, obsolete: removed.length, total: parsed.units.length, syncAt: syncNow.toISOString() } };
   });
   app.patch<{
     Params: { id: string };

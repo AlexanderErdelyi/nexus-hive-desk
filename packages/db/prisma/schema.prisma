@@ -162,6 +162,7 @@ model XliffFile {
   sourceLanguage   String
   targetLanguage   String
   uploadedAt       DateTime      @default(now())
+  lastSyncAt       DateTime?     // set after every sync-from-remote
   remoteConnectionId String?     // which connection fetched this file
   remotePath       String?       // full path in repo e.g. "Translations/App.de-DE.xlf"
   remoteBranch     String?       // branch name
@@ -173,22 +174,25 @@ model XliffFile {
 }
 
 model Translation {
-  id            String    @id @default(cuid())
-  xliffFileId   String
-  projectId     String
-  unitId        String
-  source        String
-  target        String    @default("")
-  state         String    @default("needs-translation")
-  note          String?
-  developerNote String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  xliffFile     XliffFile @relation(fields: [xliffFileId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  xliffFileId     String
+  projectId       String
+  unitId          String
+  source          String
+  target          String    @default("")
+  state           String    @default("needs-translation")
+  note            String?
+  developerNote   String?
+  syncChangedAt   DateTime? // set when this unit was added or its source changed during a repo sync
+  syncChangeType  String?   // 'added' | 'source-changed' | 'removed'
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  xliffFile       XliffFile @relation(fields: [xliffFileId], references: [id], onDelete: Cascade)
 
   @@unique([xliffFileId, unitId])
   @@index([projectId])
   @@index([state])
+  @@index([syncChangedAt])
 }
 
 model GlossaryEntry {

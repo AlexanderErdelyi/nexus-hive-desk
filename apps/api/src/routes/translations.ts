@@ -14,13 +14,14 @@ export async function translationRoutes(app: FastifyInstance) {
       searchIn?: string;      // 'all' | 'source' | 'target' | 'objectName'
       untranslatedOnly?: string;
       qualityIssuesOnly?: string; // 'true' → only return rows with detected quality issues
+      changesOnly?: string;       // 'true' → only rows changed/added in last sync (syncChangedAt IS NOT NULL)
       objectType?: string;
       objectFilters?: string; // comma-separated "{ObjectType} {ObjectName}" pairs from AL folder drop
       page?: string;
       pageSize?: string;
     };
   }>('/', async (req) => {
-    const { xliffFileId, projectId, state, search, searchIn = 'all', untranslatedOnly, qualityIssuesOnly, objectType, objectFilters, page = '1', pageSize = '50' } = req.query;
+    const { xliffFileId, projectId, state, search, searchIn = 'all', untranslatedOnly, qualityIssuesOnly, changesOnly, objectType, objectFilters, page = '1', pageSize = '50' } = req.query;
 
     const pageNum = Math.max(1, Number(page));
     const pageSizeNum = Math.min(200, Math.max(1, Number(pageSize)));
@@ -53,6 +54,9 @@ export async function translationRoutes(app: FastifyInstance) {
           ...(sameAsSourceIds.length > 0 ? [{ id: { in: sameAsSourceIds } }] : []),
         ],
       });
+    }
+    if (changesOnly === 'true') {
+      andClauses.push({ syncChangedAt: { not: null } });
     }
     if (objectType) {
       // note starts with "{ObjectType} " — e.g. "Table ", "Codeunit "

@@ -122,20 +122,31 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       if (!file.remoteConnectionId) return;
       setSyncingFile(file.id);
       try {
-        const res = await api.post<{ data: { added: number; updated: number; obsolete: number; total: number } }>(
+        const res = await api.post<{ data: { added: number; updated: number; obsolete: number; total: number; syncAt: string } }>(
           `/api/projects/${projectId}/xliff/${file.id}/sync-from-remote`,
           {}
         );
         qc.invalidateQueries({ queryKey: ['project', projectId] });
+        qc.invalidateQueries({ queryKey: ['project-files', projectId] });
         const { added, updated, obsolete } = res.data;
-        toast.success(`Synced — ${added} new, ${updated} updated, ${obsolete} obsolete`);
+        if (added > 0 || updated > 0) {
+          toast.success(`Synced — ${added} new, ${updated} source changes, ${obsolete} obsolete`, {
+            action: {
+              label: 'View changes',
+              onClick: () => router.push(`/projects/${projectId}/translations/${file.id}?filter=since-last-sync`),
+            },
+            duration: 8000,
+          });
+        } else {
+          toast.success(`Synced — no changes (${obsolete} obsolete)`);
+        }
       } catch (error) {
         toast.error(getErrorMessage(error));
       } finally {
         setSyncingFile(null);
       }
     },
-    [projectId, qc]
+    [projectId, qc, router]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
