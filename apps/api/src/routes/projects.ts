@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { getXliffStats, parseXliff, serializeXliff } from '@nexus/xliff';
 import type { TranslationState } from '@nexus/types';
+import { requireAuth } from '../lib/auth';
 
 export async function projectRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   app.get<{ Querystring: { customerId?: string } }>('/', async (req) => {
     const where: { customerId?: string | null } = {};
     if (req.query.customerId === 'none') {

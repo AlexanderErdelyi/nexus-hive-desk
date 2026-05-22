@@ -11,6 +11,7 @@ import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useProjectRole } from '@/lib/use-project-role';
 import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { CommitModal } from './CommitModal';
@@ -75,6 +76,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
   const [view, setView] = useState<ProjectView>('hub');
   const [savingCaps, setSavingCaps] = useState(false);
+
+  const { role: myRole, hasRole } = useProjectRole(projectId);
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
@@ -171,6 +174,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <div>
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{project.name}</h1>
+          {myRole && (
+            <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+              myRole === 'admin' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+              myRole === 'editor' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+              myRole === 'translator' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+              'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+            }`}>
+              {myRole}
+            </span>
+          )}
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
@@ -216,7 +229,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         description: 'Configure remote repository, glossary, capabilities, and project connections to Azure DevOps or GitHub.',
         badge: hasRemoteConfig ? 'Configured' : 'Not configured',
         badgeColor: hasRemoteConfig ? 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
-        available: true,
+        available: hasRole('editor'),
       },
       {
         key: 'work-items' as ProjectView,

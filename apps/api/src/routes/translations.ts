@@ -2,8 +2,10 @@ import type { Prisma } from '@nexus/db';
 import { prisma } from '@nexus/db';
 import type { TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../lib/auth';
 
 export async function translationRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   app.get<{
     Querystring: {
       xliffFileId?: string;

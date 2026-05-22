@@ -2,6 +2,7 @@ import { createProvider } from '@nexus/ai';
 import { prisma } from '@nexus/db';
 import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../lib/auth';
 
 const BATCH_SIZE = 20;
 const REVIEW_BATCH_SIZE = 10;
@@ -66,8 +67,9 @@ async function translateTranslations(options: {
 
   return { suggestions: allResults, translated: allResults.length };
 }
-
+
 export async function aiRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   app.post<{
     Body: { translationIds: string[]; projectId: string; provider?: AIProviderType; model?: string };
   }>('/translate', async (req, reply) => {

@@ -2,8 +2,10 @@ import { createProvider } from '@nexus/ai';
 import { prisma } from '@nexus/db';
 import type { AIProviderType } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../lib/auth';
 
 export async function glossaryRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   app.get<{ Querystring: { projectId: string; search?: string } }>('/', async (req, reply) => {
     const { projectId, search } = req.query;
     if (!projectId) {

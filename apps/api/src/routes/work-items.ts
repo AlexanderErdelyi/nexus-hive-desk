@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { requireAuth } from '../lib/auth';
 
 function azureHeaders(pat: string): Record<string, string> {
   return {
@@ -285,8 +286,9 @@ function replaceScreenshotPlaceholders(value: string | undefined, uploads: Scree
     upload.url ? content.replaceAll(`SCREENSHOT_PLACEHOLDER_${upload.index}`, upload.url) : content
   ), value);
 }
-
+
 export async function workItemRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List work items ───────────────────────────────────────────────────────
   app.get<{
     Params: { id: string };

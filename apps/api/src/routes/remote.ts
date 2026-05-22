@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { requireAuth } from '../lib/auth';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,8 +44,9 @@ async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promi
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
-
+
 export async function remoteRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── Azure DevOps: List projects in organization ──────────────────────────
   app.get<{ Params: { connId: string } }>(
     '/connections/:connId/azure/projects',

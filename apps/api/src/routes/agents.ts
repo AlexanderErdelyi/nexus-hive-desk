@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { executeAgentRun } from '../lib/agent-engine';
 import { fetchModelStream } from '../lib/stream-ai.js';
+import { requireAuth } from '../lib/auth';
 
 function stripMCPCredentials(agent: any) {
   if (!agent?.mcpConnections) return agent;
@@ -16,6 +17,7 @@ function stripMCPCredentials(agent: any) {
 }
 
 export async function agentRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List agents ──────────────────────────────────────────────────────────
   app.get<{ Querystring: { customerId?: string; projectId?: string } }>(
     '/',

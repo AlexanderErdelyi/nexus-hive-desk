@@ -1,5 +1,6 @@
 import { prisma } from '@nexus/db';
 import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../lib/auth';
 
 // ─── Simple similarity helper (normalised Levenshtein, 0–1) ──────────────────
 
@@ -31,6 +32,7 @@ const FUZZY_THRESHOLD = 0.75;
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 export async function translationMemoryRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
 
   // POST /lookup — find TM matches for a list of source strings
   app.post<{

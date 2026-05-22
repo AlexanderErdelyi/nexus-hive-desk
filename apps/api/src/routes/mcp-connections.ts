@@ -3,6 +3,7 @@ import { prisma } from '@nexus/db';
 import { encryptToken, decryptToken } from '../lib/crypto';
 import https from 'https';
 import axios from 'axios';
+import { requireAuth } from '../lib/auth';
 
 // Allow self-signed / internal CA certificates for on-premise services (Wiki.js, etc.)
 const tlsAgent = new https.Agent({ rejectUnauthorized: false });
@@ -573,8 +574,9 @@ function extractJsonObject(value: string) {
     throw new Error('AI response did not contain valid JSON');
   }
 }
-
+
 export async function mcpConnectionRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List MCP connections ─────────────────────────────────────────────────
   app.get<{ Querystring: { customerId?: string; projectId?: string; type?: string } }>(
     '/',

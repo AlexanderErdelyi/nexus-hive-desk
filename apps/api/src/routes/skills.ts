@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { fetchModelStream } from '../lib/stream-ai.js';
+import { requireAuth } from '../lib/auth';
 
 const VALID_TYPES = ['prompt', 'code', 'mcp-tool', 'wiki-style'] as const;
 
@@ -46,6 +47,7 @@ const BUILT_IN_SKILLS = [
 ] as const;
 
 export async function skillRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List skills (optional ?type= filter) ────────────────────────────────
   app.get<{ Querystring: { type?: string } }>('/', async (req) => {
     const typeFilter = req.query.type?.trim();

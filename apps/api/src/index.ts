@@ -20,6 +20,7 @@ import { skillRoutes } from './routes/skills';
 import { mcpConnectionRoutes } from './routes/mcp-connections';
 import { userTokenRoutes } from './routes/user-tokens';
 import { workItemRoutes } from './routes/work-items';
+import { inviteRoutes } from './routes/invites';
 
 async function bootstrap() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 }); // 10 MB body limit
@@ -81,6 +82,7 @@ async function bootstrap() {
   await app.register(agentRoutes, { prefix: '/api/agents' });
   await app.register(userTokenRoutes, { prefix: '/api/user/tokens' });
   await app.register(workItemRoutes, { prefix: '/api/projects' });
+  await app.register(inviteRoutes, { prefix: '/api' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 

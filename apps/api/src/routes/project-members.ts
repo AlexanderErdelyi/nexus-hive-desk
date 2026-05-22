@@ -37,10 +37,10 @@ export async function projectMemberRoutes(app: FastifyInstance) {
           .send({ error: 'validation', message: 'email is required' });
       }
 
-      if (!['admin', 'editor', 'viewer'].includes(role)) {
+      if (!['admin', 'editor', 'translator', 'viewer'].includes(role)) {
         return reply
           .status(400)
-          .send({ error: 'validation', message: 'role must be admin, editor, or viewer' });
+          .send({ error: 'validation', message: 'role must be admin, editor, translator, or viewer' });
       }
 
       // Verify the project exists and get its customerId
@@ -117,10 +117,10 @@ export async function projectMemberRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { role } = req.body;
 
-      if (!['admin', 'editor', 'viewer'].includes(role)) {
+      if (!['admin', 'editor', 'translator', 'viewer'].includes(role)) {
         return reply
           .status(400)
-          .send({ error: 'validation', message: 'role must be admin, editor, or viewer' });
+          .send({ error: 'validation', message: 'role must be admin, editor, translator, or viewer' });
       }
 
       const member = await prisma.projectMember.update({
