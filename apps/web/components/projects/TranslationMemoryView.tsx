@@ -167,122 +167,200 @@ function AddEntryModal({ projectId, onClose, onSaved }: { projectId: string; onC
 
 // ─── Populate modal ───────────────────────────────────────────────────────────
 
+type PopulateConflict = { key: string; source: string; sourceLanguage: string; targetLanguage: string; options: string[] };
+type PreviewResult = { dryRun: true; conflicts: PopulateConflict[]; willCreate: number; willUpdate: number; skipped: number };
+type ApplyResult = { success: true; created: number; updated: number; skipped: number };
+
 function PopulateModal({ projectId, onClose, onDone }: { projectId: string; onClose: () => void; onDone: () => void }) {
   const [scope, setScope] = useState<'project' | 'global'>('project');
   const [states, setStates] = useState<string[]>(['translated', 'final']);
-  const [result, setResult] = useState<{ created: number; updated: number; skipped: number } | null>(null);
+  const [step, setStep] = useState<'configure' | 'preview' | 'done'>('configure');
   const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [resolutions, setResolutions] = useState<Record<string, string>>({});
+  const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
 
   function toggleState(s: string) {
     setStates((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
   }
 
-  async function run() {
+  async function analyse() {
     if (!states.length) { toast.error('Select at least one state'); return; }
     setLoading(true);
     try {
-      const res = await api.post<{ created: number; updated: number; skipped: number }>(
-        '/api/translation-memory/populate',
-        { projectId, scope, states }
-      );
-      setResult(res);
-      onDone();
-    } catch { toast.error('Populate failed'); }
+      const res = await api.post<PreviewResult>('/api/translation-memory/populate', { projectId, scope, states, dryRun: true });
+      setPreview(res);
+      setResolutions({});
+      setStep('preview');
+    } catch { toast.error('Analysis failed — check server logs'); }
     finally { setLoading(false); }
   }
 
+  async function apply() {
+    if (!preview) return;
+    const unresolvedCount = preview.conflicts.filter((c) => !resolutions[c.key]).length;
+    if (unresolvedCount > 0) { toast.error(`Resolve all ${unresolvedCount} conflicts first`); return; }
+    setLoading(true);
+    try {
+      const res = await api.post<ApplyResult>('/api/translation-memory/populate', { projectId, scope, states, dryRun: false, resolutions });
+      setApplyResult(res);
+      setStep('done');
+      onDone();
+    } catch { toast.error('Apply failed — check server logs'); }
+    finally { setLoading(false); }
+  }
+
+  const unresolvedCount = preview ? preview.conflicts.filter((c) => !resolutions[c.key]).length : 0;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-900">
-        <div className="mb-4 flex items-center justify-between">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-gray-900 flex flex-col max-h-[90vh]">
+        {/* Header */}
+        <div className="flex items-start justify-between p-6 pb-4 shrink-0">
           <div>
             <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Populate from Translations</h2>
             <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">
-              Harvest confirmed strings from this project into the TM library
+              {step === 'configure' && 'Harvest confirmed strings from this project into the TM library'}
+              {step === 'preview' && `${(preview?.willCreate ?? 0) + (preview?.willUpdate ?? 0)} changes${preview?.conflicts.length ? ` · ${preview.conflicts.length} conflict${preview.conflicts.length > 1 ? 's' : ''} to resolve` : ' ready to apply'}`}
+              {step === 'done' && 'TM populated successfully'}
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"><X size={18} /></button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 shrink-0 ml-3"><X size={18} /></button>
         </div>
 
-        {result ? (
-          <div className="space-y-3">
-            <div className="grid grid-cols-3 gap-3 text-center">
-              {[
-                { label: 'Created', value: result.created, color: 'text-teal-600 dark:text-teal-400' },
-                { label: 'Updated', value: result.updated, color: 'text-indigo-600 dark:text-indigo-400' },
-                { label: 'Skipped', value: result.skipped, color: 'text-gray-500 dark:text-gray-400' },
-              ].map((s) => (
-                <div key={s.label} className="rounded-xl border border-gray-200 bg-gray-50 py-3 dark:border-gray-700 dark:bg-gray-800">
-                  <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
-                  <div className="text-xs text-gray-400 dark:text-gray-500">{s.label}</div>
+        {/* Body */}
+        <div className="overflow-y-auto px-6 pb-6 grow">
+
+          {/* ── Step 1: Configure ── */}
+          {step === 'configure' && (
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Include translation states</label>
+                <div className="flex flex-wrap gap-2">
+                  {['translated', 'final', 'needs-review-translation'].map((s) => (
+                    <button key={s} onClick={() => toggleState(s)}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${states.includes(s) ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}`}>
+                      {s}
+                    </button>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <p className="text-center text-xs text-gray-400 dark:text-gray-500">
-              TM populated successfully!
-            </p>
-            <div className="mt-2 flex justify-end">
-              <button onClick={onClose} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
-                Done
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Include translation states</label>
-              <div className="flex flex-wrap gap-2">
-                {['translated', 'final', 'needs-review-translation'].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => toggleState(s)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                      states.includes(s)
-                        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
-                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
+              </div>
+              <div>
+                <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Store as</label>
+                <div className="flex gap-2">
+                  {(['project', 'global'] as const).map((s) => (
+                    <button key={s} onClick={() => setScope(s)}
+                      className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${scope === s ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300' : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800'}`}>
+                      {s === 'project' ? '🏷 Project-scoped' : '🌐 Global'}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-500">
+                  {scope === 'project' ? 'Entries will only be suggested for this project.' : 'Entries will be suggested across all projects.'}
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800">Cancel</button>
+                <button onClick={analyse} disabled={loading || !states.length} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+                  <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                  {loading ? 'Analysing…' : 'Analyse'}
+                </button>
               </div>
             </div>
+          )}
 
-            <div>
-              <label className="mb-2 block text-xs font-medium text-gray-500 dark:text-gray-400">Store as</label>
-              <div className="flex gap-2">
-                {(['project', 'global'] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setScope(s)}
-                    className={`flex-1 rounded-lg border py-2 text-sm font-medium transition-colors ${
-                      scope === s
-                        ? 'border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300'
-                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800'
-                    }`}
-                  >
-                    {s === 'project' ? '🏷 Project-scoped' : '🌐 Global'}
-                  </button>
+          {/* ── Step 2: Preview + conflict resolution ── */}
+          {step === 'preview' && preview && (
+            <div className="space-y-4">
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-3 text-center">
+                {[
+                  { label: 'Will create', value: preview.willCreate, color: 'text-teal-600 dark:text-teal-400' },
+                  { label: 'Will update', value: preview.willUpdate, color: 'text-indigo-600 dark:text-indigo-400' },
+                  { label: 'Unchanged', value: preview.skipped, color: 'text-gray-400' },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-xl border border-gray-200 bg-gray-50 py-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className={`text-xl font-bold ${s.color}`}>{s.value.toLocaleString()}</div>
+                    <div className="text-xs text-gray-400 dark:text-gray-500">{s.label}</div>
+                  </div>
                 ))}
               </div>
-              <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-500">
-                {scope === 'project'
-                  ? 'Entries will only be suggested for this project.'
-                  : 'Entries will be suggested across all projects.'}
-              </p>
-            </div>
 
-            <div className="flex justify-end gap-2 pt-1">
-              <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800">
-                Cancel
-              </button>
-              <button onClick={run} disabled={loading || !states.length} className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50">
-                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-                {loading ? 'Populating…' : 'Populate TM'}
-              </button>
+              {/* Conflicts */}
+              {preview.conflicts.length > 0 && (
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                      ⚠ {preview.conflicts.length} conflict{preview.conflicts.length > 1 ? 's' : ''} — same source, different translations
+                    </span>
+                    {unresolvedCount > 0 && (
+                      <span className="text-xs text-gray-400">{unresolvedCount} unresolved</span>
+                    )}
+                  </div>
+                  <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800/30 dark:bg-amber-900/10">
+                    {preview.conflicts.map((conflict) => (
+                      <div key={conflict.key} className="space-y-1.5">
+                        <p className="text-xs font-medium text-gray-700 dark:text-gray-300 line-clamp-2" title={conflict.source}>
+                          <span className="mr-1.5 text-[10px] text-gray-400">{conflict.sourceLanguage}→{conflict.targetLanguage}</span>
+                          {conflict.source}
+                        </p>
+                        <div className="flex flex-col gap-1">
+                          {conflict.options.map((opt) => (
+                            <button
+                              key={opt}
+                              onClick={() => setResolutions((r) => ({ ...r, [conflict.key]: opt }))}
+                              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${resolutions[conflict.key] === opt ? 'border-teal-400 bg-teal-50 text-teal-800 dark:border-teal-600 dark:bg-teal-900/30 dark:text-teal-200' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'}`}
+                            >
+                              <span className={`shrink-0 h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center ${resolutions[conflict.key] === opt ? 'border-teal-500 bg-teal-500' : 'border-gray-300 dark:border-gray-600'}`}>
+                                {resolutions[conflict.key] === opt && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                              </span>
+                              <span className="flex-1 truncate">{opt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {preview.conflicts.length === 0 && (
+                <p className="text-center text-xs text-gray-400 dark:text-gray-500">✓ No conflicts — ready to apply</p>
+              )}
+
+              <div className="flex justify-between gap-2 pt-1">
+                <button onClick={() => setStep('configure')} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800">Back</button>
+                <button onClick={apply} disabled={loading || unresolvedCount > 0} className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50">
+                  <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                  {loading ? 'Applying…' : unresolvedCount > 0 ? `Resolve ${unresolvedCount} conflict${unresolvedCount > 1 ? 's' : ''}` : 'Apply to TM'}
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* ── Step 3: Done ── */}
+          {step === 'done' && applyResult && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                {[
+                  { label: 'Created', value: applyResult.created, color: 'text-teal-600 dark:text-teal-400' },
+                  { label: 'Updated', value: applyResult.updated, color: 'text-indigo-600 dark:text-indigo-400' },
+                  { label: 'Unchanged', value: applyResult.skipped, color: 'text-gray-400' },
+                ].map((s) => (
+                  <div key={s.label} className="rounded-xl border border-gray-200 bg-gray-50 py-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className={`text-2xl font-bold ${s.color}`}>{s.value.toLocaleString()}</div>
+                    <div className="text-xs text-gray-400 dark:text-gray-500">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-center text-xs text-gray-400 dark:text-gray-500">TM populated successfully!</p>
+              <div className="flex justify-end">
+                <button onClick={onClose} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Done</button>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );
