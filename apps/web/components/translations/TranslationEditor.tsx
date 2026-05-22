@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
+import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
@@ -20,6 +20,7 @@ interface Translation {
   state: TranslationState;
   note?: string;
   developerNote?: string;
+  qualityIssues?: string[]; // populated by API when qualityIssuesOnly=true or always annotated
 }
 
 interface XliffFileInfo {
@@ -283,7 +284,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
   const router = useRouter();
   const [search, setSearch] = useState('');
   const [searchIn, setSearchIn] = useState<'all' | 'source' | 'target' | 'objectName'>('all');
-  const [filterState, setFilterState] = useState<TranslationState | 'all' | 'untranslated'>('untranslated');
+  const [filterState, setFilterState] = useState<TranslationState | 'all' | 'untranslated' | 'quality-issues'>('untranslated');
   const [objectType, setObjectType] = useState('');
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
@@ -327,9 +328,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
     ...(xliffFileId ? { xliffFileId } : {}),
     ...(filterState === 'untranslated'
       ? { untranslatedOnly: 'true' }
-      : filterState !== 'all'
-        ? { state: filterState }
-        : {}),
+      : filterState === 'quality-issues'
+        ? { qualityIssuesOnly: 'true' }
+        : filterState !== 'all'
+          ? { state: filterState }
+          : {}),
     ...(search ? { search } : {}),
     ...(searchIn !== 'all' ? { searchIn } : {}),
     ...(objectType ? { objectType } : {}),
@@ -1074,6 +1077,19 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
               {state === 'untranslated' ? 'Untranslated' : state === 'all' ? 'All' : getStateLabel(state)}
             </button>
           ))}
+          {/* Quality Issues special filter */}
+          <button
+            onClick={() => { setFilterState('quality-issues'); setPage(1); }}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+              filterState === 'quality-issues'
+                ? 'bg-amber-500 text-white'
+                : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:hover:bg-amber-900/40'
+            )}
+          >
+            <AlertTriangle size={11} />
+            Quality Issues
+          </button>
         </div>
 
         {/* Row 3: AL folder object chips (only when folder loaded) */}
@@ -1161,6 +1177,17 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
                 const reviewResult = reviewResults.get(translation.id);
                 const meta = parseXliffNote(translation.note);
 
+                // Compute quality issues from current row data (client-side additions on top of server annotations)
+                const qualityIssues: string[] = translation.qualityIssues ? [...translation.qualityIssues] : [];
+                if (!qualityIssues.includes('ai-review') && currentState === 'needs-review-translation') qualityIssues.push('ai-review');
+                if (!qualityIssues.includes('same-as-source') && currentTarget && currentTarget === translation.source) qualityIssues.push('same-as-source');
+                const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
+                const srcPh = (translation.source.match(phRegex) ?? []).sort();
+                const tgtPh = (currentTarget.match(phRegex) ?? []).sort();
+                if (srcPh.length > 0 && (srcPh.length !== tgtPh.length || srcPh.join() !== tgtPh.join())) {
+                  if (!qualityIssues.includes('placeholder-mismatch')) qualityIssues.push('placeholder-mismatch');
+                }
+
                 return (
                   <tr
                     key={translation.id}
@@ -1210,6 +1237,43 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
 
                     <td className="align-top p-3">
                       <p className="break-words whitespace-pre-wrap text-gray-800 dark:text-gray-200">{translation.source}</p>
+                      {/* Quality issue badges */}
+                      {qualityIssues.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {qualityIssues.map((issue) => {
+                            const cfg: Record<string, { label: string; color: string }> = {
+                              'ai-review':            { label: '🤖 AI review', color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+                              'same-as-source':       { label: '≡ Same as source', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
+                              'placeholder-mismatch': { label: '⚠ Placeholder mismatch', color: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
+                              'length-anomaly':       { label: '📏 Length anomaly', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+                            };
+                            const c = cfg[issue] ?? { label: issue, color: 'bg-gray-100 text-gray-600' };
+                            return (
+                              <span key={issue} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${c.color}`}>
+                                {c.label}
+                              </span>
+                            );
+                          })}
+                          {/* Quick fix: approve AI review */}
+                          {qualityIssues.includes('ai-review') && (
+                            <button
+                              onClick={() => handleEdit(translation.id, 'state', 'translated')}
+                              className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                            >
+                              ✓ Approve
+                            </button>
+                          )}
+                          {/* Quick fix: mark same-as-source as needs-translation for manual fix */}
+                          {qualityIssues.includes('same-as-source') && !qualityIssues.includes('ai-review') && (
+                            <button
+                              onClick={() => handleEdit(translation.id, 'state', 'needs-translation')}
+                              className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-900/70"
+                            >
+                              Flag for retranslation
+                            </button>
+                          )}
+                        </div>
+                      )}
                       {reviewResults.has(translation.id) && (
                         <div className="mt-1.5">
                           <ReviewBadge

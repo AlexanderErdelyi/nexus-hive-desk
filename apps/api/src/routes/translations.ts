@@ -1,5 +1,4 @@
-import type { Prisma } from '@nexus/db';
-import { prisma } from '@nexus/db';
+import { Prisma, prisma } from '@nexus/db';
 import type { TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../lib/auth';
@@ -14,13 +13,14 @@ export async function translationRoutes(app: FastifyInstance) {
       search?: string;
       searchIn?: string;      // 'all' | 'source' | 'target' | 'objectName'
       untranslatedOnly?: string;
+      qualityIssuesOnly?: string; // 'true' → only return rows with detected quality issues
       objectType?: string;
       objectFilters?: string; // comma-separated "{ObjectType} {ObjectName}" pairs from AL folder drop
       page?: string;
       pageSize?: string;
     };
   }>('/', async (req) => {
-    const { xliffFileId, projectId, state, search, searchIn = 'all', untranslatedOnly, objectType, objectFilters, page = '1', pageSize = '50' } = req.query;
+    const { xliffFileId, projectId, state, search, searchIn = 'all', untranslatedOnly, qualityIssuesOnly, objectType, objectFilters, page = '1', pageSize = '50' } = req.query;
 
     const pageNum = Math.max(1, Number(page));
     const pageSizeNum = Math.min(200, Math.max(1, Number(pageSize)));
@@ -34,6 +34,24 @@ export async function translationRoutes(app: FastifyInstance) {
     if (untranslatedOnly === 'true') {
       andClauses.push({
         OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }],
+      });
+    }
+    if (qualityIssuesOnly === 'true') {
+      // Detect same-as-source via raw SQL (column-to-column comparison not possible in Prisma ORM)
+      const sameAsSourceRows = await prisma.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM "Translation"
+          WHERE source = target AND target != ''
+          AND state NOT IN ('needs-translation', 'new')
+          ${xliffFileId ? Prisma.sql`AND "xliffFileId" = ${xliffFileId}` : Prisma.empty}
+          ${projectId   ? Prisma.sql`AND "projectId" = ${projectId}`   : Prisma.empty}`
+      );
+      const sameAsSourceIds = sameAsSourceRows.map((r) => r.id);
+      // Return rows that are AI-needs-review OR same-as-source (at least one issue)
+      andClauses.push({
+        OR: [
+          { state: 'needs-review-translation' },
+          ...(sameAsSourceIds.length > 0 ? [{ id: { in: sameAsSourceIds } }] : []),
+        ],
       });
     }
     if (objectType) {
@@ -79,8 +97,28 @@ export async function translationRoutes(app: FastifyInstance) {
       prisma.translation.count({ where }),
     ]);
 
+    // Annotate each row with detected quality issues (client can render badges)
+    const annotated = items.map((item) => {
+      const issues: string[] = [];
+      if (item.state === 'needs-review-translation') issues.push('ai-review');
+      if (item.target && item.source === item.target) issues.push('same-as-source');
+      // Placeholder mismatch: count {N}, %N, {{var}} tokens in source vs target
+      const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
+      const srcPh = (item.source.match(phRegex) ?? []).sort();
+      const tgtPh = (item.target.match(phRegex) ?? []).sort();
+      if (srcPh.length !== tgtPh.length || srcPh.join() !== tgtPh.join()) {
+        if (srcPh.length > 0) issues.push('placeholder-mismatch');
+      }
+      // Length anomaly: target much shorter or longer than source (ignore very short strings)
+      if (item.source.length > 15 && item.target.length > 0) {
+        const ratio = item.target.length / item.source.length;
+        if (ratio < 0.2 || ratio > 5) issues.push('length-anomaly');
+      }
+      return { ...item, qualityIssues: issues };
+    });
+
     return {
-      data: items,
+      data: annotated,
       meta: {
         total,
         page: pageNum,

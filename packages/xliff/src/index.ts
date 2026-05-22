@@ -28,8 +28,9 @@ function normalizeState(raw?: string, targetText?: string, sourceText?: string):
     'signed-off': 'signed-off',
   };
   if (raw && map[raw]) return map[raw];
-  // No state attribute — infer: if target exists and differs from source, treat as translated
-  if (targetText && targetText.trim() && targetText !== sourceText) return 'translated';
+  // No state attribute — infer from target text
+  // If a non-empty target exists (even equal to source — e.g. proper nouns, abbreviations) treat as translated
+  if (targetText && targetText.trim()) return 'translated';
   return 'needs-translation';
 }
 
