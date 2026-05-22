@@ -1,4 +1,4 @@
-import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { XMLBuilder, XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { ParsedXliff, TranslationState, XliffUnit } from '@nexus/types';
 
 const PARSER_OPTIONS = {
@@ -52,8 +52,83 @@ function getText(node: unknown): string {
   return '';
 }
 
+// ─── XML pre-processor ────────────────────────────────────────────────────────
+// BC Xliff Generator can produce invalid XML when AL object/field names contain
+// double-quote characters (e.g. field 'Customer "No."').  Those quotes end up
+// unescaped inside attribute values, breaking every XML parser.
+// Strategy: scan attribute values character-by-character and escape any `"`
+// that is NOT the delimiter quote (i.e. it appears *inside* an already-opened
+// attribute value).
+function sanitizeXmlAttributeQuotes(xml: string): string {
+  let result = '';
+  let i = 0;
+  while (i < xml.length) {
+    // Copy characters outside tags verbatim
+    if (xml[i] !== '<') { result += xml[i++]; continue; }
+
+    // We're at '<' — collect until we find the matching '>' (attribute-aware)
+    let tagStr = '<';
+    i++;
+    let inAttrValue = false;
+    let attrQuoteChar = '';
+
+    while (i < xml.length) {
+      const ch = xml[i];
+      if (!inAttrValue) {
+        if (ch === '"' || ch === "'") {
+          inAttrValue = true;
+          attrQuoteChar = ch;
+          tagStr += ch;
+        } else if (ch === '>') {
+          tagStr += '>';
+          i++;
+          break;
+        } else {
+          tagStr += ch;
+        }
+      } else {
+        // Inside an attribute value
+        if (ch === attrQuoteChar) {
+          // Could be the closing delimiter OR an unescaped quote INSIDE the value.
+          // Heuristic: if the character after is `=`, ` `, `/`, `>`, or EOF,
+          // it's most likely the closing delimiter.
+          const next = xml[i + 1] ?? '';
+          const isClosingDelimiter = (next === '=' || next === ' ' || next === '\t'
+            || next === '\n' || next === '\r' || next === '/' || next === '>');
+          if (isClosingDelimiter) {
+            inAttrValue = false;
+            attrQuoteChar = '';
+            tagStr += ch;
+          } else {
+            // Unescaped quote inside value — replace with &quot;
+            tagStr += '&quot;';
+          }
+        } else {
+          tagStr += ch;
+        }
+      }
+      i++;
+    }
+    result += tagStr;
+  }
+  return result;
+}
+
 // ─── Parse XLIFF ──────────────────────────────────────────────────────────────
 export function parseXliff(xmlContent: string): ParsedXliff {
+  // Validate first to get a proper human-readable error instead of a JS TypeError
+  const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: false });
+  if (validationResult !== true) {
+    // Try to fix common issues (unescaped quotes in attribute values) then re-validate
+    const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
+    const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
+    if (retryResult !== true) {
+      const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
+      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}`);
+    }
+    xmlContent = sanitized;
+  }
+
   const parser = new XMLParser({
     ...PARSER_OPTIONS,
     isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),

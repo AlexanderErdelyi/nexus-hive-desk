@@ -39,13 +39,17 @@ export async function translationRoutes(app: FastifyInstance) {
     }
     if (qualityIssuesOnly === 'true') {
       // Detect same-as-source via raw SQL (column-to-column comparison not possible in Prisma ORM)
-      const sameAsSourceRows = await prisma.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "Translation"
+      const sameAsSourceRows = await prisma.$queryRaw<{ id: string; source: string }[]>(
+        Prisma.sql`SELECT id, source FROM "Translation"
           WHERE source = target AND target != ''
           ${xliffFileId ? Prisma.sql`AND "xliffFileId" = ${xliffFileId}` : Prisma.empty}
           ${projectId   ? Prisma.sql`AND "projectId" = ${projectId}`   : Prisma.empty}`
       );
-      const sameAsSourceIds = sameAsSourceRows.map((r) => r.id);
+      // Only flag multi-word strings (>= 3 words) — single terms / abbreviations /
+      // proper nouns like "Delcredere %" or "PDF" are intentionally the same.
+      const sameAsSourceIds = sameAsSourceRows
+        .filter((r) => r.source.trim().split(/\s+/).length >= 3)
+        .map((r) => r.id);
       // Return rows that are AI-needs-review OR same-as-source (at least one issue)
       if (sameAsSourceIds.length > 0) {
         andClauses.push({
@@ -109,7 +113,12 @@ export async function translationRoutes(app: FastifyInstance) {
     const annotated = items.map((item) => {
       const issues: string[] = [];
       if (item.state === 'needs-review-translation') issues.push('ai-review');
-      if (item.target && item.source === item.target) issues.push('same-as-source');
+      // Only flag same-as-source for multi-word strings (>= 3 words).
+      // Single terms, abbreviations, proper nouns, financial terms (e.g. "Delcredere %")
+      // are often intentionally identical in source and target language.
+      if (item.target && item.source === item.target && item.source.trim().split(/\s+/).length >= 3) {
+        issues.push('same-as-source');
+      }
       // Placeholder mismatch: count {N}, %N, {{var}} tokens in source vs target
       const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
       const srcPh = (item.source.match(phRegex) ?? []).sort();

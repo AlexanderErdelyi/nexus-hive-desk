@@ -1205,7 +1205,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                 // Compute quality issues from current row data (client-side additions on top of server annotations)
                 const qualityIssues: string[] = translation.qualityIssues ? [...translation.qualityIssues] : [];
                 if (!qualityIssues.includes('ai-review') && currentState === 'needs-review-translation') qualityIssues.push('ai-review');
-                if (!qualityIssues.includes('same-as-source') && currentTarget && currentTarget === translation.source) qualityIssues.push('same-as-source');
+                if (!qualityIssues.includes('same-as-source') && currentTarget && currentTarget === translation.source && translation.source.trim().split(/\s+/).length >= 3) qualityIssues.push('same-as-source');
                 const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
                 const srcPh = (translation.source.match(phRegex) ?? []).sort();
                 const tgtPh = (currentTarget.match(phRegex) ?? []).sort();
