@@ -229,7 +229,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         description: 'Configure remote repository, glossary, capabilities, and project connections to Azure DevOps or GitHub.',
         badge: hasRemoteConfig ? 'Configured' : 'Not configured',
         badgeColor: hasRemoteConfig ? 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
-        available: hasRole('editor'),
+        available: myRole === null || hasRole('editor'),
       },
       {
         key: 'work-items' as ProjectView,

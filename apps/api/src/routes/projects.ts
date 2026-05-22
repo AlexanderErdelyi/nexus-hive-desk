@@ -69,6 +69,11 @@ export async function projectRoutes(app: FastifyInstance) {
         data: { name, description, customerId, sourceLanguage, targetLanguage, capabilities },
       });
 
+      // Auto-assign creator as project admin
+      await prisma.projectMember.create({
+        data: { userId: req.user.sub, projectId: project.id, role: 'admin' },
+      });
+
       return reply.status(201).send({ data: project });
     }
   );
