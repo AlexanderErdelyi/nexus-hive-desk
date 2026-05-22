@@ -6,7 +6,9 @@ const PARSER_OPTIONS = {
   attributeNamePrefix: '@_',
   parseAttributeValue: false,
   trimValues: true,
-  processEntities: true,
+  // Increase entity expansion limits — BC XLIFF files can contain thousands of
+  // XML character references (e.g. &#160;) that hit fast-xml-parser's default of 1000.
+  processEntities: { maxTotalExpansions: 100000, maxEntityCount: 100000, maxEntitySize: 100000, maxExpandedLength: 10000000, maxExpansionDepth: 100 },
 };
 
 const BUILDER_OPTIONS = {
@@ -53,75 +55,33 @@ function getText(node: unknown): string {
 }
 
 // ─── XML pre-processor ────────────────────────────────────────────────────────
-// BC Xliff Generator can produce invalid XML when AL object/field names contain
-// double-quote characters (e.g. field 'Customer "No."').  Those quotes end up
-// unescaped inside attribute values, breaking every XML parser.
-// Strategy: scan attribute values character-by-character and escape any `"`
-// that is NOT the delimiter quote (i.e. it appears *inside* an already-opened
-// attribute value).
+// BC Xliff Generator can produce malformed XML in several ways:
+//  1. AL object/field names with double-quote chars end up unescaped in trans-unit id values
+//  2. Duplicate <?xml?> processing instructions at the top of the file
+// Both issues are fixed here before handing the content to fast-xml-parser.
 function sanitizeXmlAttributeQuotes(xml: string): string {
-  let result = '';
-  let i = 0;
-  while (i < xml.length) {
-    // Copy characters outside tags verbatim
-    if (xml[i] !== '<') { result += xml[i++]; continue; }
+  // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
+  xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-    // We're at '<' — collect until we find the matching '>' (attribute-aware)
-    let tagStr = '<';
-    i++;
-    let inAttrValue = false;
-    let attrQuoteChar = '';
+  // Fix 2 — unescaped `"` inside trans-unit id attribute values.
+  // We identify the TRUE closing `"` by looking for `"\s+\w` — a quote followed by
+  // whitespace then a word character (= the start of the next attribute name).
+  // This is unambiguous because an AL identifier never ends with the pattern `"\s+\w`.
+  // NOTE: No `s` flag — each <trans-unit> tag is a single line in BC XLIFF, so we
+  // must NOT let `.` match newlines (otherwise the regex spans across tags).
+  xml = xml.replace(
+    /(\bid=")(.+?)("\s+\w)/g,
+    (_, pre, val, end) => `${pre}${val.replace(/"/g, '&quot;')}${end}`,
+  );
 
-    while (i < xml.length) {
-      const ch = xml[i];
-      if (!inAttrValue) {
-        if (ch === '"' || ch === "'") {
-          inAttrValue = true;
-          attrQuoteChar = ch;
-          tagStr += ch;
-        } else if (ch === '>') {
-          tagStr += '>';
-          i++;
-          break;
-        } else {
-          tagStr += ch;
-        }
-      } else {
-        // Inside an attribute value
-        if (ch === attrQuoteChar) {
-          // Could be the closing delimiter OR an unescaped quote INSIDE the value.
-          // Heuristic: if the character after is `=`, ` `, `/`, `>`, or EOF,
-          // it's most likely the closing delimiter.
-          const next = xml[i + 1] ?? '';
-          // A quote closes the attribute value if the next char is one of:
-          //   space/tab/newline (another attribute follows)
-          //   / (self-closing: attr="val"/>)
-          //   > (end of tag: attr="val">)
-          //   ? (end of XML decl: encoding="utf-8"?>)
-          //   end of string
-          const isClosingDelimiter = (next === '=' || next === ' ' || next === '\t'
-            || next === '\n' || next === '\r' || next === '/' || next === '>' || next === '?' || next === '');
-          if (isClosingDelimiter) {
-            inAttrValue = false;
-            attrQuoteChar = '';
-            tagStr += ch;
-          } else {
-            // Unescaped quote inside value — replace with &quot;
-            tagStr += '&quot;';
-          }
-        } else {
-          tagStr += ch;
-        }
-      }
-      i++;
-    }
-    result += tagStr;
-  }
-  return result;
+  return xml;
 }
 
 // ─── Parse XLIFF ──────────────────────────────────────────────────────────────
 export function parseXliff(xmlContent: string): ParsedXliff {
+  // Strip UTF-8 BOM (\uFEFF) — some editors / ADO add it; fast-xml-parser rejects it
+  xmlContent = xmlContent.replace(/^\uFEFF/, '');
+
   // Validate first to get a proper human-readable error instead of a JS TypeError
   const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: false });
   if (validationResult !== true) {
