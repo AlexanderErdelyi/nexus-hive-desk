@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
+import { BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
@@ -278,7 +278,7 @@ function StateDropdown({ value, onChange }: { value: TranslationState; onChange:
   );
 }
 
-export function TranslationEditor({ projectId, xliffFileId }: { projectId: string; xliffFileId?: string }) {
+export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter }: { projectId: string; xliffFileId?: string; initialObjectFilter?: string }) {
   const qc = useQueryClient();
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -314,7 +314,11 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
   });
   const currentFile = projectData?.data.xliffFiles.find((f) => f.id === xliffFileId);
 
-  const objectFilters = folderObjects.map((o) => `${o.objectType} ${o.objectName}`).join(',');
+  // Derive objectFilters: if an initialObjectFilter URL param was supplied (from AL Analyser),
+  // use that as the single object filter (unless the user has also dropped a folder).
+  const objectFilters = folderObjects.length > 0
+    ? folderObjects.map((o) => `${o.objectType} ${o.objectName}`).join(',')
+    : (initialObjectFilter ?? '');
 
   const queryParams = new URLSearchParams({
     projectId,
@@ -1058,6 +1062,17 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
             >
               Clear all
             </button>
+          </div>
+        )}
+
+        {/* Row 3b: AL Analyser deep-link filter banner */}
+        {folderObjects.length === 0 && initialObjectFilter && (
+          <div className="flex items-center gap-2 border-t border-teal-100 pt-3 dark:border-teal-900/40">
+            <BarChart2 size={13} className="shrink-0 text-teal-500" />
+            <span className="text-xs text-teal-700 dark:text-teal-300">
+              Filtered to: <span className="font-semibold">{initialObjectFilter}</span>
+            </span>
+            <span className="text-xs text-gray-400 dark:text-gray-600">(from AL Analyser)</span>
           </div>
         )}
       </div>

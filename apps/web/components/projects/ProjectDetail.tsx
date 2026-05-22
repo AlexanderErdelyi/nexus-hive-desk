@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowRight, BookOpen, ChevronRight, CloudDownload, Download,
-  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
+  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, BarChart2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -18,9 +18,10 @@ import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
 import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
+import { ALAnalyserView } from './ALAnalyserView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis';
 
 interface Customer {
   id: string;
@@ -172,7 +173,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-              {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation'}[view]}
+                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis'}[view]}
             </span>
           )}
         </div>
@@ -237,12 +238,22 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         comingSoon: false,
         dataTour: 'tab-wiki',
       },
+      {
+        key: 'al-analysis' as ProjectView,
+        icon: <BarChart2 size={28} className={hasTranslation && project.xliffFiles.length > 0 ? 'text-teal-500' : 'text-gray-300 dark:text-gray-600'} />,
+        title: 'AL Analysis',
+        description: 'Translation coverage per AL object. Upload your AL source folder to find objects missing from XLIFF.',
+        badge: !hasTranslation ? 'Not enabled' : project.xliffFiles.length > 0 ? `${project.xliffFiles.length} file${project.xliffFiles.length > 1 ? 's' : ''}` : 'No XLIFF yet',
+        badgeColor: !hasTranslation || !project.xliffFiles.length ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : 'text-teal-600 bg-teal-50 dark:bg-teal-900/30 dark:text-teal-400',
+        available: hasTranslation && project.xliffFiles.length > 0,
+        comingSoon: false,
+      },
     ];
 
     return (
       <div>
         {header}
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
           {cards.map((card) => (
             <button
               key={card.key}
@@ -613,6 +624,23 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         ) : (
           <WorkItemsView projectId={projectId} customerId={project.customerId} />
         )}
+      </div>
+    );
+  }
+
+  // ─── AL Analysis view ───────────────────────────────────────────────────────
+  if (view === 'al-analysis') {
+    return (
+      <div>
+        {header}
+        <ALAnalyserView
+          projectId={projectId}
+          xliffFiles={project.xliffFiles.map((f) => ({ id: f.id, filename: f.filename }))}
+          onOpenTranslations={(xliffFileId, objectFilter) => {
+            // Navigate to translations with the object filter applied via URL
+            router.push(`/projects/${projectId}/translations?fileId=${xliffFileId}&objectFilter=${encodeURIComponent(objectFilter)}`);
+          }}
+        />
       </div>
     );
   }

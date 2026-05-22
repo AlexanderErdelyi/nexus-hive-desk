@@ -346,6 +346,104 @@ export async function projectRoutes(app: FastifyInstance) {
     return reply.status(204).send();
   });
 
+  // ─── AL Coverage Analysis ──────────────────────────────────────────────────
+  // Aggregates translations by AL object (parsed from the `note` field which
+  // follows the BC Xliff Generator format:
+  //   "{ObjectType} {ObjectName} - [Member -] Property PropertyName"
+  // Returns per-object coverage stats useful for the AL Analyser view.
+  app.get<{
+    Params: { id: string };
+    Querystring: { xliffFileId?: string };
+  }>('/:id/al-coverage', async (req, reply) => {
+    const { id: projectId } = req.params;
+    const { xliffFileId } = req.query;
+
+    const BC_OBJECT_TYPES = [
+      'Table', 'TableExtension', 'Page', 'PageExtension', 'PageCustomization',
+      'Codeunit', 'Report', 'ReportExtension', 'XMLPort', 'Query', 'Enum',
+      'EnumExtension', 'Profile', 'Interface', 'PermissionSet',
+    ];
+
+    const whereClause = xliffFileId ? { projectId, xliffFileId } : { projectId };
+    const translations = await prisma.translation.findMany({
+      where: whereClause,
+      select: { id: true, state: true, target: true, note: true },
+    });
+
+    if (!translations.length) {
+      return { data: { objects: [], summary: { totalObjects: 0, totalStrings: 0, translated: 0, untranslated: 0, coveragePct: 0 } } };
+    }
+
+    // Parse note → {objectType, objectName}
+    type ObjectKey = string; // "{ObjectType}|{ObjectName}"
+    type ObjectStats = {
+      objectType: string;
+      objectName: string;
+      total: number;
+      translated: number;
+      needsReview: number;
+      untranslated: number;
+    };
+
+    const objectMap = new Map<ObjectKey, ObjectStats>();
+
+    for (const t of translations) {
+      const note = t.note ?? '';
+      const spaceIdx = note.indexOf(' ');
+      if (spaceIdx === -1) continue;
+
+      const objectType = note.substring(0, spaceIdx);
+      if (!BC_OBJECT_TYPES.includes(objectType)) continue;
+
+      // objectName is the part between first space and first ' - '
+      const dashIdx = note.indexOf(' - ');
+      const objectName = dashIdx !== -1 ? note.substring(spaceIdx + 1, dashIdx) : note.substring(spaceIdx + 1);
+      if (!objectName) continue;
+
+      const key: ObjectKey = `${objectType}|${objectName}`;
+      let stats = objectMap.get(key);
+      if (!stats) {
+        stats = { objectType, objectName, total: 0, translated: 0, needsReview: 0, untranslated: 0 };
+        objectMap.set(key, stats);
+      }
+
+      stats.total++;
+      const isTranslated = ['translated', 'final', 'signed-off'].includes(t.state);
+      const isReview = t.state === 'needs-review-translation';
+      const isUntranslated = ['new', 'needs-translation'].includes(t.state) || !t.target;
+
+      if (isTranslated) stats.translated++;
+      else if (isReview) stats.needsReview++;
+      else if (isUntranslated) stats.untranslated++;
+      else stats.translated++; // catch-all for other states
+    }
+
+    // Convert to array, add coveragePct, sort by coveragePct asc (worst first)
+    const objects = Array.from(objectMap.values())
+      .map((o) => ({
+        ...o,
+        coveragePct: o.total > 0 ? Math.round((o.translated / o.total) * 100) : 0,
+      }))
+      .sort((a, b) => a.coveragePct - b.coveragePct || a.objectType.localeCompare(b.objectType) || a.objectName.localeCompare(b.objectName));
+
+    const totalStrings = translations.length;
+    const totalTranslated = translations.filter((t) => ['translated', 'final', 'signed-off'].includes(t.state)).length;
+    const totalUntranslated = translations.filter((t) => ['new', 'needs-translation'].includes(t.state) || !t.target).length;
+
+    return {
+      data: {
+        objects,
+        summary: {
+          totalObjects: objects.length,
+          totalStrings,
+          translated: totalTranslated,
+          untranslated: totalUntranslated,
+          coveragePct: totalStrings > 0 ? Math.round((totalTranslated / totalStrings) * 100) : 0,
+        },
+      },
+    };
+  });
+
   // ─── Project Repositories ────────────────────────────────────────────────────
 
   app.get<{ Params: { id: string } }>('/:id/repositories', async (req, reply) => {
