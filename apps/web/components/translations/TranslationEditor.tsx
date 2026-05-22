@@ -299,6 +299,8 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
   const [aiReviewing, setAiReviewing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
   const [tmSuggestions, setTmSuggestions] = useState<Map<string, { target: string; score: number; projectId: string | null }>>(new Map());
+  const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
+  const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
 
   // ─── Bulk translate state ──────────────────────────────────────────────────
   type BulkResult = { id: string; suggestedTarget: string; confidenceScore: number; confidence: string };
@@ -395,6 +397,48 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
       return next;
     });
     toast.success(`Applied ${exact.length} exact TM match${exact.length > 1 ? 'es' : ''}`);
+  }
+
+  // Fetch TM suggestion for a single row on focus (if not already cached)
+  async function fetchTmForRow(translation: Translation) {
+    if (!currentFile) return;
+    if (tmSuggestions.has(translation.id) || tmLoadingIds.has(translation.id)) return;
+    setTmLoadingIds((prev) => new Set(prev).add(translation.id));
+    try {
+      const res = await api.post<{ data: Record<string, { target: string; score: number; projectId: string | null }> }>(
+        '/api/translation-memory/lookup',
+        { sources: [translation.source], sourceLanguage: currentFile.sourceLanguage, targetLanguage: currentFile.targetLanguage, projectId }
+      );
+      const hit = res.data[translation.source];
+      if (hit) {
+        setTmSuggestions((prev) => new Map(prev).set(translation.id, hit));
+      } else {
+        // Mark as "checked, no match" with a sentinel so we don't re-fetch
+        setTmSuggestions((prev) => new Map(prev).set(translation.id, { target: '', score: 0, projectId: null }));
+      }
+    } catch { /* ignore */ } finally {
+      setTmLoadingIds((prev) => { const s = new Set(prev); s.delete(translation.id); return s; });
+    }
+  }
+
+  // Single-string AI quick translate for one row
+  async function aiTranslateSingle(translation: Translation) {
+    setSingleAiIds((prev) => new Set(prev).add(translation.id));
+    try {
+      const res = await api.post<{ data: { id: string; suggestedTarget: string }[] }>(
+        '/api/ai/translate',
+        { translationIds: [translation.id], projectId }
+      );
+      const suggestion = res.data[0];
+      if (suggestion) {
+        handleEdit(translation.id, 'target', suggestion.suggestedTarget);
+        handleEdit(translation.id, 'state', 'needs-review-translation');
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSingleAiIds((prev) => { const s = new Set(prev); s.delete(translation.id); return s; });
+    }
   }
 
   const aiTranslate = useCallback(
@@ -1190,37 +1234,72 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter 
                         value={currentTarget}
                         rows={Math.max(2, Math.ceil(translation.source.length / 60))}
                         onChange={(e) => handleEdit(translation.id, 'target', e.target.value)}
+                        onFocus={() => fetchTmForRow(translation)}
                         onBlur={() => {
                           if (currentTarget && currentState === 'needs-translation') {
                             handleEdit(translation.id, 'state', 'translated');
                           }
                         }}
                       />
-                      {tmSuggestions.has(translation.id) && !currentTarget && (
-                        <div className="mt-1 flex items-center gap-2">
-                          <span className={cn(
-                            'rounded px-1.5 py-0.5 text-xs font-bold',
-                            tmSuggestions.get(translation.id)!.score === 1
-                              ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
-                              : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                          )}>
-                            TM {Math.round(tmSuggestions.get(translation.id)!.score * 100)}%
-                          </span>
-                          <span className="flex-1 truncate text-xs text-gray-500 dark:text-gray-400">
-                            {tmSuggestions.get(translation.id)!.target}
-                          </span>
-                          <button
-                            onClick={() => {
-                              const tm = tmSuggestions.get(translation.id)!;
-                              handleEdit(translation.id, 'target', tm.target);
-                              handleEdit(translation.id, 'state', 'translated');
-                            }}
-                            className="shrink-0 rounded bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-100 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/60"
-                          >
-                            Apply
-                          </button>
-                        </div>
-                      )}
+                      {/* TM / AI suggestions below textarea */}
+                      {(() => {
+                        const tm = tmSuggestions.get(translation.id);
+                        const isLoading = tmLoadingIds.has(translation.id);
+                        const isAiLoading = singleAiIds.has(translation.id);
+                        const hasTm = tm && tm.score > 0;
+
+                        if (isLoading) {
+                          return (
+                            <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-gray-700/40">
+                              <div className="h-3 w-8 animate-pulse rounded bg-gray-200 dark:bg-gray-600" />
+                              <div className="h-3 flex-1 animate-pulse rounded bg-gray-200 dark:bg-gray-600" />
+                            </div>
+                          );
+                        }
+
+                        if (hasTm) {
+                          return (
+                            <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-teal-100 bg-teal-50/60 px-2 py-1.5 dark:border-teal-800/40 dark:bg-teal-900/20">
+                              <span className={cn(
+                                'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold',
+                                tm.score === 1
+                                  ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+                                  : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                              )}>
+                                TM {Math.round(tm.score * 100)}%
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={tm.target}>
+                                {tm.target}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  handleEdit(translation.id, 'target', tm.target);
+                                  handleEdit(translation.id, 'state', 'translated');
+                                }}
+                                className="shrink-0 rounded bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                              >
+                                Apply
+                              </button>
+                            </div>
+                          );
+                        }
+
+                        // No TM match — show AI quick-translate button if untranslated
+                        if (!currentTarget || currentState === 'needs-translation') {
+                          return (
+                            <button
+                              onClick={() => aiTranslateSingle(translation)}
+                              disabled={isAiLoading}
+                              className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50/60 px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-100 disabled:opacity-50 dark:border-purple-800/40 dark:bg-purple-900/20 dark:text-purple-400 dark:hover:bg-purple-900/40"
+                            >
+                              <Sparkles size={11} />
+                              {isAiLoading ? 'Translating…' : 'AI Translate'}
+                            </button>
+                          );
+                        }
+
+                        return null;
+                      })()}
                     </td>
 
                     <td className="align-top p-3">
