@@ -485,6 +485,113 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
+  // ─── Compare two XLIFF files ─────────────────────────────────────────────────
+  // Diffs the translations of two loaded XLIFF files (by unitId) and returns
+  // rows categorised as: added | removed | changed | unchanged.
+  // Query params: fileA (base), fileB (compare-to / "theirs")
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      fileA: string;
+      fileB: string;
+      changeType?: string; // 'added' | 'removed' | 'changed' | 'unchanged'
+      search?: string;
+      page?: string;
+      pageSize?: string;
+    };
+  }>('/:id/xliff/compare', async (req, reply) => {
+    const { fileA, fileB, changeType, search, page = '1', pageSize = '50' } = req.query;
+    if (!fileA || !fileB) {
+      return reply.status(400).send({ error: 'validation', message: 'fileA and fileB query params are required' });
+    }
+
+    const pageNum = Math.max(1, Number(page));
+    const pageSizeNum = Math.min(200, Math.max(1, Number(pageSize)));
+
+    // Load both translation sets in parallel
+    const [aRows, bRows] = await Promise.all([
+      prisma.translation.findMany({
+        where: { xliffFileId: fileA },
+        select: { unitId: true, source: true, target: true, state: true, note: true },
+      }),
+      prisma.translation.findMany({
+        where: { xliffFileId: fileB },
+        select: { unitId: true, source: true, target: true, state: true, note: true },
+      }),
+    ]);
+
+    const aMap = new Map(aRows.map((r) => [r.unitId, r]));
+    const bMap = new Map(bRows.map((r) => [r.unitId, r]));
+    const allIds = new Set([...aMap.keys(), ...bMap.keys()]);
+
+    type DiffRow = {
+      unitId: string;
+      changeType: 'added' | 'removed' | 'changed' | 'unchanged';
+      source: string;
+      targetA: string;
+      targetB: string;
+      stateA: string;
+      stateB: string;
+      note?: string | null;
+    };
+
+    const rows: DiffRow[] = [];
+    for (const id of allIds) {
+      const a = aMap.get(id);
+      const b = bMap.get(id);
+      let ct: DiffRow['changeType'];
+      if (!a) ct = 'added';
+      else if (!b) ct = 'removed';
+      else if (a.target !== b.target || a.source !== b.source) ct = 'changed';
+      else ct = 'unchanged';
+
+      rows.push({
+        unitId: id,
+        changeType: ct,
+        source: b?.source ?? a?.source ?? '',
+        targetA: a?.target ?? '',
+        targetB: b?.target ?? '',
+        stateA: a?.state ?? '',
+        stateB: b?.state ?? '',
+        note: b?.note ?? a?.note,
+      });
+    }
+
+    // Filter
+    let filtered = rows;
+    if (changeType && changeType !== 'all') {
+      filtered = filtered.filter((r) => r.changeType === changeType);
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(
+        (r) =>
+          r.unitId.toLowerCase().includes(q) ||
+          r.source.toLowerCase().includes(q) ||
+          r.targetA.toLowerCase().includes(q) ||
+          r.targetB.toLowerCase().includes(q)
+      );
+    }
+
+    const summary = {
+      added: rows.filter((r) => r.changeType === 'added').length,
+      removed: rows.filter((r) => r.changeType === 'removed').length,
+      changed: rows.filter((r) => r.changeType === 'changed').length,
+      unchanged: rows.filter((r) => r.changeType === 'unchanged').length,
+      total: rows.length,
+    };
+
+    const total = filtered.length;
+    const skip = (pageNum - 1) * pageSizeNum;
+    const data = filtered.slice(skip, skip + pageSizeNum);
+
+    return {
+      data,
+      summary,
+      meta: { total, page: pageNum, pageSize: pageSizeNum, totalPages: Math.ceil(total / pageSizeNum) },
+    };
+  });
+
   // ─── Project Repositories ────────────────────────────────────────────────────
 
   app.get<{ Params: { id: string } }>('/:id/repositories', async (req, reply) => {

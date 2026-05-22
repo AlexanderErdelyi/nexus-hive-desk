@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowRight, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
-  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
+  FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -21,9 +21,10 @@ import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
 import { ALAnalyserView } from './ALAnalyserView';
 import { TranslationMemoryView } from './TranslationMemoryView';
+import XliffCompareView from './XliffCompareView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory' | 'compare';
 
 interface Customer {
   id: string;
@@ -199,7 +200,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library'}[view]}
+                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library', compare:'Compare'}[view]}
             </span>
           )}
         </div>
@@ -481,6 +482,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                   })}
                 </div>
               )}
+              {/* Compare button — shown when 2+ files are loaded */}
+              {project.xliffFiles.length >= 2 && (
+                <div className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-800">
+                  <button
+                    onClick={() => setView('compare')}
+                    className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40"
+                  >
+                    <GitCompare size={15} /> Compare Files
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -687,6 +699,29 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <div>
         {header}
         <TranslationMemoryView projectId={projectId} />
+      </div>
+    );
+  }
+
+  // ─── Compare view ────────────────────────────────────────────────────────────
+  if (view === 'compare') {
+    return (
+      <div className="h-[calc(100vh-8rem)] flex flex-col">
+        {header}
+        <div className="flex-1 overflow-auto">
+          <XliffCompareView
+            projectId={projectId}
+            files={project.xliffFiles.map((f) => ({
+              id: f.id,
+              filename: f.filename,
+              remoteBranch: f.remoteBranch,
+              remoteRepo: f.remoteRepo,
+              uploadedAt: f.uploadedAt,
+              lastSyncAt: null,
+            }))}
+            onBack={() => setView('translations')}
+          />
+        </div>
       </div>
     );
   }
