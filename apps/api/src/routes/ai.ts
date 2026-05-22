@@ -115,6 +115,97 @@ export async function aiRoutes(app: FastifyInstance) {
     }
   });
 
+  // ─── SSE streaming bulk translate ─────────────────────────────────────────
+  // Streams translation suggestions in batches; client collects them all and
+  // calls PATCH /translations/bulk when ready to save.
+  app.post<{
+    Body: {
+      projectId: string;
+      xliffFileId?: string;
+      translationIds?: string[];
+      provider?: AIProviderType;
+      model?: string;
+    };
+  }>('/translate-stream', async (req, reply) => {
+    const { projectId, xliffFileId, translationIds, provider, model } = req.body;
+    if (!projectId) {
+      return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
+    }
+
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    // Resolve the list of IDs to translate
+    let ids: string[];
+    if (translationIds?.length) {
+      ids = translationIds;
+    } else if (xliffFileId) {
+      const rows = await prisma.translation.findMany({
+        where: { xliffFileId, OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }] },
+        select: { id: true },
+        orderBy: { unitId: 'asc' },
+      });
+      ids = rows.map((r) => r.id);
+    } else {
+      return reply.status(400).send({ error: 'validation', message: 'xliffFileId or translationIds required' });
+    }
+
+    if (!ids.length) {
+      reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      reply.raw.write(`data: ${JSON.stringify({ type: 'complete', done: 0, total: 0 })}\n\n`);
+      reply.raw.end();
+      return;
+    }
+
+    const translations = await prisma.translation.findMany({
+      where: { id: { in: ids } },
+      orderBy: { unitId: 'asc' },
+    });
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
+
+    const glossaryEntries = await prisma.glossaryEntry.findMany({
+      where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+    });
+    const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
+
+    const providerInstance = createProvider({
+      type: provider ?? (process.env.AI_PROVIDER as AIProviderType) ?? 'github-models',
+      token,
+      model: model ?? process.env.AI_MODEL,
+    });
+
+    const total = translations.length;
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    reply.raw.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
+
+    let done = 0;
+    try {
+      for (let i = 0; i < translations.length; i += BATCH_SIZE) {
+        const batch = translations.slice(i, i + BATCH_SIZE);
+        const response = await providerInstance.translate({
+          units: batch.map((t) => ({ id: t.id, source: t.source })),
+          sourceLanguage: project.sourceLanguage ?? 'en',
+          targetLanguage: project.targetLanguage ?? 'de',
+          glossary,
+        });
+        done += batch.length;
+        const results = response.results.map((r) => ({
+          id: r.id,
+          suggestedTarget: r.translatedText,
+          confidenceScore: r.confidenceScore ?? 85,
+          confidence: r.confidence ?? 'high',
+        }));
+        reply.raw.write(`data: ${JSON.stringify({ type: 'progress', done, total, results })}\n\n`);
+      }
+      reply.raw.write(`data: ${JSON.stringify({ type: 'complete', done, total })}\n\n`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`);
+    }
+    reply.raw.end();
+  });
+
   app.post<{
     Body: {
       translationIds: string[];

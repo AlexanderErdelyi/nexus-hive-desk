@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, RotateCcw, Save, Search, Sparkles, Upload, X } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
@@ -300,6 +300,14 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
   const [showCommitModal, setShowCommitModal] = useState(false);
   const [tmSuggestions, setTmSuggestions] = useState<Map<string, { target: string; score: number; projectId: string | null }>>(new Map());
 
+  // ─── Bulk translate state ──────────────────────────────────────────────────
+  type BulkResult = { id: string; suggestedTarget: string; confidenceScore: number; confidence: string };
+  const [showBulkPanel, setShowBulkPanel] = useState(false);
+  const [bulkTranslating, setBulkTranslating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [bulkResults, setBulkResults] = useState<BulkResult[]>([]);
+  const [bulkDone, setBulkDone] = useState(false);
+
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
     queryFn: () => api.get<{ data: { xliffFiles: XliffFileInfo[] } }>(`/api/projects/${projectId}`),
@@ -439,6 +447,81 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
     },
     [projectId, reviewContext]
   );
+
+  // ─── Bulk translate via SSE streaming ─────────────────────────────────────
+  const startBulkTranslate = useCallback(async () => {
+    if (!xliffFileId) return;
+    setBulkTranslating(true);
+    setBulkResults([]);
+    setBulkDone(false);
+    setBulkProgress({ done: 0, total: 0 });
+
+    try {
+      const res = await fetch(`${API_URL}/api/ai/translate-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, xliffFileId }),
+      });
+      if (!res.ok || !res.body) throw new Error('Failed to start bulk translation');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as {
+              type: string;
+              total?: number;
+              done?: number;
+              results?: Array<{ id: string; suggestedTarget: string; confidenceScore: number; confidence: string }>;
+              message?: string;
+            };
+            if (event.type === 'start') {
+              setBulkProgress({ done: 0, total: event.total ?? 0 });
+            } else if (event.type === 'progress') {
+              setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
+              setBulkResults((prev) => [...prev, ...(event.results ?? [])]);
+            } else if (event.type === 'complete') {
+              setBulkDone(true);
+              setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
+              toast.success(`Bulk translation complete — ${event.done} strings ready to review`);
+            } else if (event.type === 'error') {
+              toast.error(event.message ?? 'Bulk translation failed');
+            }
+          } catch { /* skip malformed SSE line */ }
+        }
+      }
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setBulkTranslating(false);
+    }
+  }, [projectId, xliffFileId]);
+
+  /** Apply all bulk results as edits (staged for review, not yet saved) */
+  function applyBulkResults(minScore = 0) {
+    const toApply = bulkResults.filter((r) => r.confidenceScore >= minScore);
+    if (!toApply.length) { toast.info('No results to apply'); return; }
+    setEdits((prev) => {
+      const next = new Map(prev);
+      for (const r of toApply) {
+        next.set(r.id, { target: r.suggestedTarget, state: 'needs-review-translation' });
+      }
+      return next;
+    });
+    toast.success(`Staged ${toApply.length} translations — review highlighted rows, then Save`);
+    setShowBulkPanel(false);
+    setBulkResults([]);
+    setBulkDone(false);
+  }
 
   const onDrop = useCallback(
     async (files: File[]) => {
@@ -618,6 +701,22 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
               {aiTranslating ? 'Translating...' : `AI Translate (${selected.size})`}
             </button>
           )}
+          {/* Bulk translate button — only when a file is loaded */}
+          {xliffFileId && (
+            <button
+              onClick={() => { setShowBulkPanel((p) => !p); setShowReviewPanel(false); }}
+              disabled={bulkTranslating}
+              className={cn(
+                'flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50',
+                showBulkPanel || bulkResults.length > 0
+                  ? 'border-orange-500 bg-orange-50 text-orange-700 dark:border-orange-500 dark:bg-orange-900/30 dark:text-orange-300'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800'
+              )}
+            >
+              <Zap size={14} />
+              {bulkTranslating ? 'Translating…' : bulkDone ? `Bulk (${bulkResults.length} ready)` : 'Bulk Translate'}
+            </button>
+          )}
           {/* AI Review button — works on selected items, or all visible if none selected */}
           {translations.length > 0 && (
             <button
@@ -706,6 +805,121 @@ export function TranslationEditor({ projectId, xliffFileId }: { projectId: strin
               >
                 Clear results
               </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Translate Panel */}
+      {showBulkPanel && (
+        <div className="mb-4 rounded-xl border border-orange-200 bg-orange-50 p-4 dark:border-orange-800 dark:bg-orange-900/20">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap size={15} className="text-orange-600 dark:text-orange-400" />
+              <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">
+                Bulk AI Translate
+              </span>
+              {bulkProgress.total > 0 && (
+                <span className="text-xs text-orange-600 dark:text-orange-400">
+                  — all untranslated in file ({bulkProgress.total} strings)
+                </span>
+              )}
+            </div>
+            <button type="button" onClick={() => setShowBulkPanel(false)} className="text-orange-400 hover:text-orange-600 dark:hover:text-orange-300">
+              <X size={16} />
+            </button>
+          </div>
+
+          <p className="mb-3 text-xs text-orange-700 dark:text-orange-400">
+            Translates every untranslated string in this file using AI + your glossary. Results are staged for review — nothing is saved until you click Save.
+          </p>
+
+          {/* Progress bar */}
+          {(bulkTranslating || bulkProgress.total > 0) && (
+            <div className="mb-3">
+              <div className="mb-1 flex items-center justify-between text-xs text-orange-700 dark:text-orange-400">
+                <span className="flex items-center gap-1.5">
+                  {bulkTranslating && <Loader2 size={11} className="animate-spin" />}
+                  {bulkDone ? 'Complete' : bulkTranslating ? 'Translating…' : ''}
+                </span>
+                <span className="font-mono">{bulkProgress.done} / {bulkProgress.total}</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-orange-200 dark:bg-orange-900/50">
+                <div
+                  className="h-full rounded-full bg-orange-500 transition-all duration-300"
+                  style={{ width: bulkProgress.total ? `${(bulkProgress.done / bulkProgress.total) * 100}%` : '0%' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Stats once done */}
+          {bulkDone && bulkResults.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2 text-xs">
+              {(() => {
+                const high = bulkResults.filter((r) => r.confidenceScore >= 90).length;
+                const med = bulkResults.filter((r) => r.confidenceScore >= 70 && r.confidenceScore < 90).length;
+                const low = bulkResults.filter((r) => r.confidenceScore < 70).length;
+                return (
+                  <>
+                    <span className="rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                      {high} high confidence (≥90%)
+                    </span>
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                      {med} medium (70–89%)
+                    </span>
+                    {low > 0 && (
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                        {low} low (&lt;70%)
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            {!bulkTranslating && !bulkDone && (
+              <button
+                type="button"
+                onClick={startBulkTranslate}
+                className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+              >
+                <Zap size={14} /> Start Bulk Translate
+              </button>
+            )}
+            {bulkDone && bulkResults.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => applyBulkResults(0)}
+                  className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
+                >
+                  <Save size={14} /> Stage All ({bulkResults.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyBulkResults(70)}
+                  className="flex items-center gap-2 rounded-lg border border-orange-400 px-4 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 dark:text-orange-300 dark:hover:bg-orange-900/30"
+                >
+                  Stage High/Medium only (≥70%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyBulkResults(90)}
+                  className="flex items-center gap-2 rounded-lg border border-green-400 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 dark:text-green-300 dark:hover:bg-green-900/30"
+                >
+                  Stage High only (≥90%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setBulkResults([]); setBulkDone(false); setBulkProgress({ done: 0, total: 0 }); }}
+                  className="text-sm text-orange-500 hover:text-orange-700 dark:text-orange-400"
+                >
+                  Clear
+                </button>
+              </>
             )}
           </div>
         </div>
