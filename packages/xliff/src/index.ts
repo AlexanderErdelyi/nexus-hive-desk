@@ -93,8 +93,14 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
           // Heuristic: if the character after is `=`, ` `, `/`, `>`, or EOF,
           // it's most likely the closing delimiter.
           const next = xml[i + 1] ?? '';
+          // A quote closes the attribute value if the next char is one of:
+          //   space/tab/newline (another attribute follows)
+          //   / (self-closing: attr="val"/>)
+          //   > (end of tag: attr="val">)
+          //   ? (end of XML decl: encoding="utf-8"?>)
+          //   end of string
           const isClosingDelimiter = (next === '=' || next === ' ' || next === '\t'
-            || next === '\n' || next === '\r' || next === '/' || next === '>');
+            || next === '\n' || next === '\r' || next === '/' || next === '>' || next === '?' || next === '');
           if (isClosingDelimiter) {
             inAttrValue = false;
             attrQuoteChar = '';
