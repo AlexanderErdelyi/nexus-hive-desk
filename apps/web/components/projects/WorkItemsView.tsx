@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink, GitBranch,
-  Filter, LayoutList, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
+  Filter, LayoutGrid, LayoutList, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -182,6 +182,42 @@ function collectIds(nodes: BacklogNode[], depth = 0, maxDepth = Infinity): numbe
   }
   return ids;
 }
+
+// ── Board/Kanban helpers ──────────────────────────────────────────────────────
+
+// Canonical state ordering for board columns
+const STATE_COLUMN_ORDER = [
+  'new', 'to do', 'proposed',
+  'active', 'in progress', 'doing', 'committed',
+  'review', 'testing', 'in review', 'code review',
+  'resolved', 'done', 'closed', 'completed', 'removed',
+];
+
+function stateColumnOrder(state: string): number {
+  const idx = STATE_COLUMN_ORDER.indexOf(state.toLowerCase());
+  return idx === -1 ? 50 : idx;
+}
+
+function assigneeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+function columnTheme(state: string) {
+  const s = state.toLowerCase();
+  if (s.includes('done') || s.includes('closed') || s.includes('completed') || s.includes('resolved'))
+    return { header: 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800', dot: 'bg-emerald-400' };
+  if (s.includes('progress') || s.includes('active') || s.includes('doing') || s.includes('committed'))
+    return { header: 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800', dot: 'bg-blue-400' };
+  if (s.includes('review') || s.includes('testing'))
+    return { header: 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800', dot: 'bg-purple-400' };
+  if (s.includes('removed'))
+    return { header: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700', dot: 'bg-gray-400' };
+  return { header: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700', dot: 'bg-indigo-400' };
+}
+
+// ── BacklogRow ────────────────────────────────────────────────────────────────
 
 function BacklogRow({
   node, depth, onSelect, selectedId, expandedIds, onToggle,
@@ -2213,16 +2249,20 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [search, setSearch] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'backlog'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'backlog' | 'board'>('list');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [expandLevel, setExpandLevel] = useState(0);
+
+  // Board drag state
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dropTargetCol, setDropTargetCol] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['work-items', projectId, typeFilter, stateFilter, viewMode],
     queryFn: () => {
-      const params = new URLSearchParams({ top: viewMode === 'backlog' ? '200' : '100' });
-      if (viewMode !== 'backlog' && typeFilter) params.set('type', typeFilter);
-      if (stateFilter) params.set('state', stateFilter);
+      const params = new URLSearchParams({ top: (viewMode === 'backlog' || viewMode === 'board') ? '200' : '100' });
+      if (viewMode === 'list' && typeFilter) params.set('type', typeFilter);
+      if (viewMode !== 'board' && stateFilter) params.set('state', stateFilter);
       return api.get<{ data: WorkItem[]; meta: { total: number } }>(
         `/api/projects/${projectId}/work-items?${params}`
       );
@@ -2254,6 +2294,39 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   });
 
   const backlogTree = buildTree(filtered);
+
+  // Board grouping: derive sorted columns from unique states
+  const boardColumns = [...new Set(filtered.map((wi) => wi.state))]
+    .sort((a, b) => stateColumnOrder(a) - stateColumnOrder(b));
+  const boardGroups = new Map<string, WorkItem[]>(boardColumns.map((s) => [s, []]));
+  for (const wi of filtered) boardGroups.get(wi.state)?.push(wi);
+
+  // State-change mutation for drag-and-drop
+  const stateChangeMut = useMutation({
+    mutationFn: ({ wiId, state }: { wiId: number; state: string }) =>
+      api.patch(`/api/projects/${projectId}/work-items/${wiId}`, { state }),
+    onMutate: async ({ wiId, state }) => {
+      // Optimistic update: move the card in the query cache immediately
+      await qc.cancelQueries({ queryKey: ['work-items', projectId] });
+      qc.setQueryData<{ data: WorkItem[]; meta: { total: number } }>(
+        ['work-items', projectId, typeFilter, stateFilter, viewMode],
+        (old) => old ? { ...old, data: old.data.map((wi) => wi.id === wiId ? { ...wi, state } : wi) } : old
+      );
+    },
+    onError: () => {
+      toast.error('Failed to update state');
+      void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['work-items', projectId] }),
+  });
+
+  function handleDrop(targetState: string) {
+    if (draggingId === null || targetState === dropTargetCol) { setDraggingId(null); setDropTargetCol(null); return; }
+    const wi = items.find((w) => w.id === draggingId);
+    if (wi && wi.state !== targetState) stateChangeMut.mutate({ wiId: draggingId, state: targetState });
+    setDraggingId(null);
+    setDropTargetCol(null);
+  }
 
   // Initialise expanded state when tree first loads (start collapsed)
   useEffect(() => {
@@ -2303,13 +2376,14 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           <div className="flex items-center gap-1.5">
             <Filter size={13} className="shrink-0 text-gray-400" />
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-              disabled={viewMode === 'backlog'}
+              disabled={viewMode === 'backlog' || viewMode === 'board'}
               className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-40">
               <option value="">All types</option>
               {uniqueTypes.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+              disabled={viewMode === 'board'}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-40">
               <option value="">All states</option>
               {uniqueStates.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -2339,6 +2413,16 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
                   : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
             >
               <GitBranch size={13} />
+            </button>
+            <button
+              onClick={() => setViewMode('board')}
+              title="Board view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors border-l border-gray-200 dark:border-gray-700
+                ${viewMode === 'board'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <LayoutGrid size={13} />
             </button>
           </div>
           <button
@@ -2397,7 +2481,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
               </button>
             ))}
           </div>
-        ) : (
+        ) : viewMode === 'backlog' ? (
           /* Backlog tree view */
           <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
             {/* Header row */}
@@ -2430,6 +2514,81 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
                 />
               ))}
             </div>
+          </div>
+        ) : (
+          /* ── Kanban board ────────────────────────────────────────────────────── */
+          <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: '60vh' }}>
+            {boardColumns.length === 0 ? (
+              <div className="flex-1 rounded-2xl border-2 border-dashed border-gray-200 py-16 text-center dark:border-gray-800">
+                <p className="text-gray-400 dark:text-gray-600">No work items found.</p>
+              </div>
+            ) : boardColumns.map((colState) => {
+              const theme = columnTheme(colState);
+              const colItems = boardGroups.get(colState) ?? [];
+              const isOver = dropTargetCol === colState;
+              return (
+                <div
+                  key={colState}
+                  className={`flex flex-col rounded-xl border transition-colors shrink-0 w-72 ${theme.header} ${isOver ? 'ring-2 ring-indigo-400 ring-offset-1' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); setDropTargetCol(colState); }}
+                  onDragLeave={() => setDropTargetCol(null)}
+                  onDrop={() => handleDrop(colState)}
+                >
+                  {/* Column header */}
+                  <div className="flex items-center gap-2 px-3 py-2.5 border-b border-inherit">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${theme.dot}`} />
+                    <span className="flex-1 text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{colState}</span>
+                    <span className="text-xs font-medium text-gray-400 dark:text-gray-500 tabular-nums">{colItems.length}</span>
+                  </div>
+
+                  {/* Cards */}
+                  <div className="flex flex-col gap-2 p-2 flex-1">
+                    {colItems.map((wi) => (
+                      <div
+                        key={wi.id}
+                        draggable
+                        onDragStart={() => setDraggingId(wi.id)}
+                        onDragEnd={() => { setDraggingId(null); setDropTargetCol(null); }}
+                        onClick={() => { setSelectedItem(wi); setShowCreateModal(false); }}
+                        className={`group cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition-all
+                          hover:shadow-md hover:border-indigo-300 dark:bg-gray-900 dark:hover:border-indigo-700
+                          ${draggingId === wi.id ? 'opacity-40 scale-95' : ''}
+                          ${selectedItem?.id === wi.id ? 'border-indigo-300 ring-1 ring-indigo-300 dark:border-indigo-700 dark:ring-indigo-700' : 'border-gray-200 dark:border-gray-700'}
+                        `}
+                      >
+                        {/* Type + ID */}
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="shrink-0">{typeIcon(wi.type, 12)}</span>
+                          <span className="text-[10px] text-gray-400 dark:text-gray-600 font-mono">#{wi.id}</span>
+                          <span className="ml-auto text-[10px] text-gray-400 dark:text-gray-600 truncate max-w-[80px]">{wi.type}</span>
+                        </div>
+                        {/* Title */}
+                        <p className="text-sm font-medium text-gray-900 dark:text-white leading-snug line-clamp-3">{wi.title}</p>
+                        {/* Footer: priority + assignee */}
+                        <div className="mt-2 flex items-center gap-1.5">
+                          {wi.priority && <span className="shrink-0">{priorityBadge(wi.priority)}</span>}
+                          {wi.assignedTo && (
+                            <span
+                              title={wi.assignedTo}
+                              className="ml-auto shrink-0 flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-[10px] font-bold text-indigo-600 dark:text-indigo-300"
+                            >
+                              {assigneeInitials(wi.assignedTo)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Drop placeholder */}
+                    {isOver && draggingId !== null && (boardGroups.get(colState)?.every((w) => w.id !== draggingId) ?? true) && (
+                      <div className="rounded-lg border-2 border-dashed border-indigo-300 dark:border-indigo-700 h-16 flex items-center justify-center">
+                        <span className="text-xs text-indigo-400 dark:text-indigo-500">Drop here</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
