@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowRight, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
-  FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
+  FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -20,11 +20,12 @@ import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
 import { ALAnalyserView } from './ALAnalyserView';
+import { ALCodeHealthView } from './ALCodeHealthView';
 import { TranslationMemoryView } from './TranslationMemoryView';
 import XliffCompareView from './XliffCompareView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory' | 'compare';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory' | 'compare' | 'al-code-health';
 
 interface Customer {
   id: string;
@@ -203,7 +204,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library', compare:'Compare'}[view]}
+                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library', compare:'Compare', 'al-code-health':'AL Code Health'}[view]}
             </span>
           )}
         </div>
@@ -286,6 +287,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         badge: hasTranslation ? 'Active' : 'Not enabled',
         badgeColor: hasTranslation ? 'text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: hasTranslation,
+        comingSoon: false,
+      },
+      {
+        key: 'al-code-health' as ProjectView,
+        icon: <ShieldCheck size={28} className="text-emerald-500" />,
+        title: 'AL Code Health',
+        description: 'Drop your AL source folder to detect long procedures, DB operations in loops, deep nesting, and other quality issues.',
+        badge: 'Local scan',
+        badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
+        available: true,
         comingSoon: false,
       },
     ];
@@ -734,6 +745,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             router.push(`/projects/${projectId}/translations?fileId=${xliffFileId}&objectFilter=${encodeURIComponent(objectFilter)}`);
           }}
         />
+      </div>
+    );
+  }
+
+  // ─── AL Code Health view ──────────────────────────────────────────────────────
+  if (view === 'al-code-health') {
+    return (
+      <div>
+        {header}
+        <ALCodeHealthView projectId={projectId} />
       </div>
     );
   }
