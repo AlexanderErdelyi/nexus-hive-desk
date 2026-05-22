@@ -112,6 +112,38 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
     }
   });
 
+  // POST /bulk-delete — delete multiple TM entries by ID
+  app.post<{ Body: { ids: string[] } }>('/bulk-delete', async (req, reply) => {
+    const { ids } = req.body;
+    if (!ids?.length) return reply.status(400).send({ error: 'validation', message: 'ids array is required' });
+    const { count } = await prisma.translationMemory.deleteMany({ where: { id: { in: ids } } });
+    return { success: true, deleted: count };
+  });
+
+  // POST /import — import TMX or CSV entries in bulk
+  app.post<{
+    Body: { entries: Array<{ source: string; target: string; sourceLanguage: string; targetLanguage: string }>; projectId?: string };
+  }>('/import', async (req, reply) => {
+    const { entries, projectId = null } = req.body;
+    if (!entries?.length) return reply.status(400).send({ error: 'validation', message: 'entries array is required' });
+
+    let created = 0, updated = 0;
+    for (const e of entries) {
+      if (!e.source || !e.target || !e.sourceLanguage || !e.targetLanguage) continue;
+      const existing = await prisma.translationMemory.findFirst({
+        where: { source: e.source, sourceLanguage: e.sourceLanguage, targetLanguage: e.targetLanguage, projectId },
+      });
+      if (existing) {
+        await prisma.translationMemory.update({ where: { id: existing.id }, data: { target: e.target, updatedAt: new Date() } });
+        updated++;
+      } else {
+        await prisma.translationMemory.create({ data: { ...e, projectId } });
+        created++;
+      }
+    }
+    return { success: true, created, updated };
+  });
+
   // POST /upsert — manually add/update a TM entry
   app.post<{
     Body: { source: string; target: string; sourceLanguage: string; targetLanguage: string; projectId?: string };
@@ -135,5 +167,17 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
         });
 
     return { data: entry };
+  });
+
+  // PATCH /:id — update target of a TM entry
+  app.patch<{ Params: { id: string }; Body: { target: string } }>('/:id', async (req, reply) => {
+    const { target } = req.body;
+    if (!target) return reply.status(400).send({ error: 'validation', message: 'target is required' });
+    try {
+      const entry = await prisma.translationMemory.update({ where: { id: req.params.id }, data: { target, updatedAt: new Date() } });
+      return { data: entry };
+    } catch {
+      return reply.status(404).send({ error: 'not_found', message: 'Entry not found' });
+    }
   });
 }

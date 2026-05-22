@@ -2,8 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, ArrowRight, BookOpen, ChevronRight, CloudDownload, Download,
-  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, BarChart2,
+  ArrowLeft, ArrowRight, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
+  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -19,9 +19,10 @@ import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
 import { ALAnalyserView } from './ALAnalyserView';
+import { TranslationMemoryView } from './TranslationMemoryView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory';
 
 interface Customer {
   id: string;
@@ -173,7 +174,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis'}[view]}
+                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library'}[view]}
             </span>
           )}
         </div>
@@ -248,12 +249,22 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         available: hasTranslation && project.xliffFiles.length > 0,
         comingSoon: false,
       },
+      {
+        key: 'translation-memory' as ProjectView,
+        icon: <Brain size={28} className={hasTranslation ? 'text-violet-500' : 'text-gray-300 dark:text-gray-600'} />,
+        title: 'TM Library',
+        description: 'Browse, edit, import and export Translation Memory entries. Auto-populated as you translate.',
+        badge: hasTranslation ? 'Active' : 'Not enabled',
+        badgeColor: hasTranslation ? 'text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: hasTranslation,
+        comingSoon: false,
+      },
     ];
 
     return (
       <div>
         {header}
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           {cards.map((card) => (
             <button
               key={card.key}
@@ -641,6 +652,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             router.push(`/projects/${projectId}/translations?fileId=${xliffFileId}&objectFilter=${encodeURIComponent(objectFilter)}`);
           }}
         />
+      </div>
+    );
+  }
+
+  // ─── Translation Memory view ─────────────────────────────────────────────────
+  if (view === 'translation-memory') {
+    return (
+      <div>
+        {header}
+        <TranslationMemoryView projectId={projectId} />
       </div>
     );
   }
