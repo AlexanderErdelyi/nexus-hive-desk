@@ -1279,10 +1279,10 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                     </td>
 
                     <td className="align-top p-3"
-                      onContextMenu={localWorkspacePath ? (e) => {
+                      onContextMenu={(e) => {
                         e.preventDefault();
                         setVsCtxMenu({ x: e.clientX, y: e.clientY, type: 'source', unitId: translation.unitId, note: translation.note });
-                      } : undefined}
+                      }}
                     >
                       <p className="break-words whitespace-pre-wrap text-gray-800 dark:text-gray-200">{translation.source}</p>
                       {/* Sync change badges */}
@@ -1361,10 +1361,10 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                     </td>
 
                     <td className="align-top p-3"
-                      onContextMenu={localWorkspacePath && currentFile?.remotePath ? (e) => {
+                      onContextMenu={(e) => {
                         e.preventDefault();
                         setVsCtxMenu({ x: e.clientX, y: e.clientY, type: 'xliff', unitId: translation.unitId });
-                      } : undefined}
+                      }}
                     >
                       <textarea
                         className={cn(
@@ -1520,13 +1520,24 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
       <>
         <div className="fixed inset-0 z-40" onClick={() => setVsCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setVsCtxMenu(null); }} />
         <div
-          className="fixed z-50 min-w-[200px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-900"
+          className="fixed z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-900"
           style={{ top: vsCtxMenu.y, left: vsCtxMenu.x }}
         >
           <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-600">
             VS Code
           </div>
-          {vsCtxMenu.type === 'source' ? (
+          {!localWorkspacePath ? (
+            <div className="px-3 py-2">
+              <p className="text-xs text-amber-600 dark:text-amber-400">⚙ No workspace path configured.</p>
+              <a
+                href={`/projects/${projectId}`}
+                className="mt-1 block text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                onClick={() => setVsCtxMenu(null)}
+              >
+                Go to Setup → VS Code Navigation
+              </a>
+            </div>
+          ) : vsCtxMenu.type === 'source' ? (
             <button
               onClick={() => openVsCode('source', vsCtxMenu.unitId, vsCtxMenu.note)}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 dark:text-gray-200 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300"
@@ -1543,7 +1554,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
           )}
           <button
             onClick={() => setVsCtxMenu(null)}
-            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-gray-400 hover:bg-gray-50 dark:text-gray-600 dark:hover:bg-gray-800"
+            className="flex w-full items-center gap-2.5 border-t border-gray-100 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50 dark:border-gray-800 dark:text-gray-600 dark:hover:bg-gray-800"
           >
             Cancel
           </button>
