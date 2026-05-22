@@ -92,6 +92,7 @@ model Project {
   // Legacy single-repo fields (kept for backward compat)
   adoRepoName     String?
   defaultBranch   String?
+  localWorkspacePath String?              // absolute path on developer's machine for VS Code navigation
   sourceLanguage  String?
   targetLanguage  String?
   createdAt       DateTime             @default(now())

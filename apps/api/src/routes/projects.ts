@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import { promises as fs } from 'fs';
+import nodePath from 'path';
 import { prisma } from '@nexus/db';
 import { getXliffStats, parseXliff, serializeXliff } from '@nexus/xliff';
 import type { TranslationState } from '@nexus/types';
@@ -367,7 +369,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
   app.patch<{
     Params: { id: string };
-    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string | null; targetLanguage?: string | null; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null; capabilities?: string };
+    Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string | null; targetLanguage?: string | null; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null; capabilities?: string; localWorkspacePath?: string | null };
   }>('/:id', async (req, reply) => {
     const existing = await prisma.project.findUnique({ where: { id: req.params.id } });
     if (!existing) {
@@ -387,7 +389,146 @@ export async function projectRoutes(app: FastifyInstance) {
     return reply.status(204).send();
   });
 
-  // ─── AL Coverage Analysis ──────────────────────────────────────────────────
+  // ─── VS Code navigation links ──────────────────────────────────────────────
+  // Reads local files on the server (which runs on the dev's machine) to find
+  // the exact line of a translation unit or its AL source declaration, then
+  // returns a vscode://file/... deep-link URL.
+  //
+  // Query params:
+  //   type        'xliff' | 'source'
+  //   xliffFileId  required for both types
+  //   unitId       required for 'xliff' type (searches for trans-unit)
+  //   note         required for 'source' type (BC Xliff note, e.g. "Table 18 - Field No. - Property Caption")
+  app.get<{
+    Params: { id: string };
+    Querystring: { type: 'xliff' | 'source'; xliffFileId: string; unitId?: string; note?: string };
+  }>('/:id/vscode-link', async (req, reply) => {
+    const { type, xliffFileId, unitId, note } = req.query;
+
+    const project = await prisma.project.findUnique({
+      where: { id: req.params.id },
+      select: { localWorkspacePath: true },
+    });
+    if (!project?.localWorkspacePath) {
+      return reply.status(400).send({ error: 'no_workspace', message: 'No local workspace path configured. Set it in Project Setup.' });
+    }
+    const workspacePath = project.localWorkspacePath.replace(/[\\/]+$/, ''); // strip trailing slashes
+
+    const xliffFile = await prisma.xliffFile.findUnique({
+      where: { id: xliffFileId },
+      select: { remotePath: true },
+    });
+
+    /** Convert an absolute filesystem path to a vscode://file/ URL.
+     *  Windows: C:\foo\bar  → vscode://file/C:/foo/bar
+     *  Unix:    /foo/bar    → vscode://file//foo/bar  (note the double slash)
+     */
+    function toVsCodeUrl(absPath: string, line?: number): string {
+      const normalized = absPath.replace(/\\/g, '/');
+      const encoded = normalized.split('/').map(encodeURIComponent).join('/');
+      const base = `vscode://file/${encoded}`;
+      return line != null ? `${base}:${line}` : base;
+    }
+
+    /** Find a string in a text and return its 1-based line number, or undefined. */
+    function findLine(text: string, searchStr: string): number | undefined {
+      const lines = text.split('\n');
+      const idx = lines.findIndex((l) => l.includes(searchStr));
+      return idx >= 0 ? idx + 1 : undefined;
+    }
+
+    // ── XLIFF file navigation ─────────────────────────────────────────────
+    if (type === 'xliff') {
+      if (!unitId) return reply.status(400).send({ error: 'validation', message: 'unitId is required for type=xliff' });
+      if (!xliffFile?.remotePath) {
+        return reply.status(400).send({ error: 'no_remote_path', message: 'This XLIFF file has no remote path configured.' });
+      }
+      const absPath = nodePath.join(workspacePath, xliffFile.remotePath);
+      let line: number | undefined;
+      try {
+        const content = await fs.readFile(absPath, 'utf8');
+        // Search for the trans-unit id — escape the unitId to avoid regex issues
+        line = findLine(content, `id="${unitId.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}"`);
+      } catch {
+        // file not found locally — still return the URL without a line number
+      }
+      return { url: toVsCodeUrl(absPath, line) };
+    }
+
+    // ── AL source file navigation ─────────────────────────────────────────
+    if (type === 'source') {
+      if (!note) return reply.status(400).send({ error: 'validation', message: 'note is required for type=source' });
+
+      // Parse note: "{ObjectType} {ObjectName} - [{MemberType} {MemberName} -] Property {PropName}"
+      const BC_OBJECT_TYPES = [
+        'Table', 'TableExtension', 'Page', 'PageExtension', 'PageCustomization',
+        'Codeunit', 'Report', 'ReportExtension', 'XMLPort', 'Query', 'Enum',
+        'EnumExtension', 'Profile', 'Interface', 'PermissionSet',
+      ];
+      const parts = note.split(' - ');
+      const firstSpaceIdx = parts[0].indexOf(' ');
+      const objectType = firstSpaceIdx >= 0 ? parts[0].substring(0, firstSpaceIdx) : '';
+      const objectName = firstSpaceIdx >= 0 ? parts[0].substring(firstSpaceIdx + 1) : '';
+      if (!BC_OBJECT_TYPES.includes(objectType) || !objectName) {
+        return reply.status(400).send({ error: 'parse_error', message: 'Could not parse object type/name from note' });
+      }
+
+      // Property text we'll search for within the found file
+      const lastPart = parts[parts.length - 1];
+      const lastSpaceIdx = lastPart.indexOf(' ');
+      const propertyValue = lastSpaceIdx >= 0 ? lastPart.substring(lastSpaceIdx + 1) : lastPart;
+
+      // Walk the workspace recursively, looking for a .al file that declares this object
+      async function findAlFiles(dir: string): Promise<string[]> {
+        const result: string[] = [];
+        let entries;
+        try { entries = await fs.readdir(dir, { withFileTypes: true }); }
+        catch { return result; }
+        for (const e of entries) {
+          const full = nodePath.join(dir, e.name);
+          if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') {
+            result.push(...await findAlFiles(full));
+          } else if (e.isFile() && e.name.endsWith('.al')) {
+            result.push(full);
+          }
+        }
+        return result;
+      }
+
+      const alFiles = await findAlFiles(workspacePath);
+      const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
+
+      let foundPath: string | undefined;
+      let foundLine: number | undefined;
+
+      for (const filePath of alFiles) {
+        let content: string;
+        try { content = await fs.readFile(filePath, 'utf8'); }
+        catch { continue; }
+        const m = AL_OBJECT_RE.exec(content);
+        if (!m) continue;
+        const declaredName = m[2].trim().replace(/^["']|["']$/g, '');
+        if (declaredName.toLowerCase() !== objectName.toLowerCase()) continue;
+
+        foundPath = filePath;
+        // Try to find the property source value
+        if (propertyValue) {
+          const l = findLine(content, propertyValue);
+          if (l) foundLine = l;
+        }
+        break;
+      }
+
+      if (!foundPath) {
+        // Fallback: just open the workspace folder
+        return { url: toVsCodeUrl(workspacePath), hint: `No AL file found for ${objectType} "${objectName}"` };
+      }
+
+      return { url: toVsCodeUrl(foundPath, foundLine) };
+    }
+
+    return reply.status(400).send({ error: 'validation', message: 'type must be xliff or source' });
+  });
   // Aggregates translations by AL object (parsed from the `note` field which
   // follows the BC Xliff Generator format:
   //   "{ObjectType} {ObjectName} - [Member -] Property PropertyName"

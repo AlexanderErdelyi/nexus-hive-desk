@@ -43,6 +43,7 @@ interface Project {
   adoAccessScope?: string;
   adoRepoName?: string | null;
   defaultBranch?: string | null;
+  localWorkspacePath?: string | null;
   sourceLanguage?: string | null;
   targetLanguage?: string | null;
   xliffFiles: Array<{
@@ -77,6 +78,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
   const [view, setView] = useState<ProjectView>('hub');
   const [savingCaps, setSavingCaps] = useState(false);
+  const [savingWorkspacePath, setSavingWorkspacePath] = useState(false);
+  const [workspacePath, setWorkspacePath] = useState<string | undefined>(undefined);
 
   const { role: myRole, hasRole } = useProjectRole(projectId);
 
@@ -643,6 +646,48 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {/* Members — full width */}
           <div className="lg:col-span-2">
             <ProjectMembers projectId={projectId} />
+          </div>
+
+          {/* VS Code local workspace path */}
+          <div className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+            <h3 className="mb-1 font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <span className="text-lg">🖥</span> VS Code Navigation
+            </h3>
+            <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
+              Set your local workspace root path (e.g. <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">C:\Projects\MyBCProject</code>).
+              This enables right-click → "Open in VS Code" on any translation row to jump directly to the XLIFF file or AL source.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="C:\Projects\MyBCProject"
+                value={workspacePath ?? (project.localWorkspacePath ?? '')}
+                onChange={(e) => setWorkspacePath(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-mono focus:border-indigo-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+              <button
+                onClick={async () => {
+                  const val = (workspacePath ?? project.localWorkspacePath ?? '').trim();
+                  setSavingWorkspacePath(true);
+                  try {
+                    await api.patch(`/api/projects/${projectId}`, { localWorkspacePath: val || null });
+                    qc.invalidateQueries({ queryKey: ['project', projectId] });
+                    toast.success('Workspace path saved');
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Failed to save');
+                  } finally {
+                    setSavingWorkspacePath(false);
+                  }
+                }}
+                disabled={savingWorkspacePath}
+                className="rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-300"
+              >
+                {savingWorkspacePath ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {project.localWorkspacePath && (
+              <p className="mt-2 text-xs text-green-600 dark:text-green-400">✓ Configured: <span className="font-mono">{project.localWorkspacePath}</span></p>
+            )}
           </div>
         </div>
       </div>

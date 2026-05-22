@@ -308,6 +308,23 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
   const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
 
+  // ─── VS Code context menu ──────────────────────────────────────────────────
+  const [vsCtxMenu, setVsCtxMenu] = useState<{ x: number; y: number; type: 'source' | 'xliff'; unitId: string; note?: string } | null>(null);
+
+  function openVsCode(type: 'source' | 'xliff', unitId: string, note?: string) {
+    if (!xliffFileId) return;
+    const params = new URLSearchParams({ type, xliffFileId });
+    if (type === 'xliff') params.set('unitId', unitId);
+    if (type === 'source' && note) params.set('note', note);
+    api.get<{ url: string; hint?: string }>(`/api/projects/${projectId}/vscode-link?${params}`)
+      .then(({ url, hint }) => {
+        if (hint) toast.info(hint);
+        window.location.href = url;
+      })
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'VS Code navigation failed'));
+    setVsCtxMenu(null);
+  }
+
   // ─── Bulk translate state ──────────────────────────────────────────────────
   type BulkResult = { id: string; suggestedTarget: string; confidenceScore: number; confidence: string };
   const [showBulkPanel, setShowBulkPanel] = useState(false);
@@ -318,10 +335,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
 
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
-    queryFn: () => api.get<{ data: { xliffFiles: XliffFileInfo[] } }>(`/api/projects/${projectId}`),
+    queryFn: () => api.get<{ data: { xliffFiles: XliffFileInfo[]; localWorkspacePath?: string | null } }>(`/api/projects/${projectId}`),
     staleTime: 60_000, // avoid refetch on every back-navigation
   });
   const currentFile = projectData?.data.xliffFiles.find((f) => f.id === xliffFileId);
+  const localWorkspacePath = projectData?.data.localWorkspacePath;
 
   // Derive objectFilters: if an initialObjectFilter URL param was supplied (from AL Analyser),
   // use that as the single object filter (unless the user has also dropped a folder).
@@ -1260,7 +1278,12 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                       )}
                     </td>
 
-                    <td className="align-top p-3">
+                    <td className="align-top p-3"
+                      onContextMenu={localWorkspacePath ? (e) => {
+                        e.preventDefault();
+                        setVsCtxMenu({ x: e.clientX, y: e.clientY, type: 'source', unitId: translation.unitId, note: translation.note });
+                      } : undefined}
+                    >
                       <p className="break-words whitespace-pre-wrap text-gray-800 dark:text-gray-200">{translation.source}</p>
                       {/* Sync change badges */}
                       {translation.syncChangeType && (
@@ -1337,7 +1360,12 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                       )}
                     </td>
 
-                    <td className="align-top p-3">
+                    <td className="align-top p-3"
+                      onContextMenu={localWorkspacePath && currentFile?.remotePath ? (e) => {
+                        e.preventDefault();
+                        setVsCtxMenu({ x: e.clientX, y: e.clientY, type: 'xliff', unitId: translation.unitId });
+                      } : undefined}
+                    >
                       <textarea
                         className={cn(
                           'min-h-[72px] w-full resize-y rounded-lg border px-2.5 py-2 text-sm leading-relaxed focus:ring-2 focus:ring-indigo-300 focus:outline-none',
@@ -1486,6 +1514,41 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
           />
         );
       })()
+    )}
+    {/* VS Code context menu */}
+    {vsCtxMenu && (
+      <>
+        <div className="fixed inset-0 z-40" onClick={() => setVsCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setVsCtxMenu(null); }} />
+        <div
+          className="fixed z-50 min-w-[200px] rounded-lg border border-gray-200 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-900"
+          style={{ top: vsCtxMenu.y, left: vsCtxMenu.x }}
+        >
+          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-600">
+            VS Code
+          </div>
+          {vsCtxMenu.type === 'source' ? (
+            <button
+              onClick={() => openVsCode('source', vsCtxMenu.unitId, vsCtxMenu.note)}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 dark:text-gray-200 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300"
+            >
+              <span>🔍</span> Open Source in VS Code
+            </button>
+          ) : (
+            <button
+              onClick={() => openVsCode('xliff', vsCtxMenu.unitId)}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 dark:text-gray-200 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300"
+            >
+              <span>📄</span> Open XLIFF in VS Code
+            </button>
+          )}
+          <button
+            onClick={() => setVsCtxMenu(null)}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-gray-400 hover:bg-gray-50 dark:text-gray-600 dark:hover:bg-gray-800"
+          >
+            Cancel
+          </button>
+        </div>
+      </>
     )}
     </>
   );
