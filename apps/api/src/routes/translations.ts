@@ -42,18 +42,22 @@ export async function translationRoutes(app: FastifyInstance) {
       const sameAsSourceRows = await prisma.$queryRaw<{ id: string }[]>(
         Prisma.sql`SELECT id FROM "Translation"
           WHERE source = target AND target != ''
-          AND state NOT IN ('needs-translation', 'new')
           ${xliffFileId ? Prisma.sql`AND "xliffFileId" = ${xliffFileId}` : Prisma.empty}
           ${projectId   ? Prisma.sql`AND "projectId" = ${projectId}`   : Prisma.empty}`
       );
       const sameAsSourceIds = sameAsSourceRows.map((r) => r.id);
       // Return rows that are AI-needs-review OR same-as-source (at least one issue)
-      andClauses.push({
-        OR: [
-          { state: 'needs-review-translation' },
-          ...(sameAsSourceIds.length > 0 ? [{ id: { in: sameAsSourceIds } }] : []),
-        ],
-      });
+      if (sameAsSourceIds.length > 0) {
+        andClauses.push({
+          OR: [
+            { state: 'needs-review-translation' },
+            { id: { in: sameAsSourceIds } },
+          ],
+        });
+      } else {
+        // No same-as-source rows — only needs-review-translation
+        andClauses.push({ state: 'needs-review-translation' });
+      }
     }
     if (changesOnly === 'true') {
       andClauses.push({ syncChangedAt: { not: null } });

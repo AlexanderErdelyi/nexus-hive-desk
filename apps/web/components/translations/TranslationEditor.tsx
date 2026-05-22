@@ -319,6 +319,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
     queryFn: () => api.get<{ data: { xliffFiles: XliffFileInfo[] } }>(`/api/projects/${projectId}`),
+    staleTime: 60_000, // avoid refetch on every back-navigation
   });
   const currentFile = projectData?.data.xliffFiles.find((f) => f.id === xliffFileId);
 

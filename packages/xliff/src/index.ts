@@ -27,9 +27,17 @@ function normalizeState(raw?: string, targetText?: string, sourceText?: string):
     final: 'final',
     'signed-off': 'signed-off',
   };
+
+  // If source == target (both non-empty), treat as translated regardless of explicit state.
+  // BC Xliff Generator copies source → target as a placeholder and marks state="needs-translation".
+  // But identical source/target almost always means the string is the same in both languages
+  // (proper nouns, abbreviations, codes, numbers, etc.) — no translation needed.
+  const trimmedSource = sourceText?.trim();
+  const trimmedTarget = targetText?.trim();
+  if (trimmedSource && trimmedTarget && trimmedSource === trimmedTarget) return 'translated';
+
   if (raw && map[raw]) return map[raw];
   // No state attribute — infer from target text
-  // If a non-empty target exists (even equal to source — e.g. proper nouns, abbreviations) treat as translated
   if (targetText && targetText.trim()) return 'translated';
   return 'needs-translation';
 }

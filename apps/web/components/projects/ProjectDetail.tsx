@@ -82,6 +82,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api.get<{ data: Project }>(`/api/projects/${projectId}`),
+    staleTime: 60_000,
   });
 
   const deleteFileMutation = useMutation({

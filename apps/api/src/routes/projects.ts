@@ -272,6 +272,13 @@ export async function projectRoutes(app: FastifyInstance) {
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
         remoteXml = await res.text();
       }
+      // Strip UTF-8 BOM (\uFEFF) — ADO / some editors add it; fast-xml-parser chokes on it
+      remoteXml = remoteXml.replace(/^\uFEFF/, '');
+      // Guard: content must look like XML, not an HTML error page
+      const firstNonWs = remoteXml.trimStart();
+      if (!firstNonWs.startsWith('<')) {
+        throw new Error(`Remote content is not XML (first chars: ${JSON.stringify(firstNonWs.substring(0, 80))})`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return reply.status(502).send({ error: 'remote_error', message });
@@ -283,7 +290,7 @@ export async function projectRoutes(app: FastifyInstance) {
       parsed = parseXliff(remoteXml);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return reply.status(400).send({ error: 'parse_error', message });
+      return reply.status(400).send({ error: 'parse_error', message: `XML parse failed: ${message}` });
     }
 
     // Merge: update originalXml + lastSyncAt, upsert units
@@ -297,49 +304,63 @@ export async function projectRoutes(app: FastifyInstance) {
     const existingMap = new Map(existing.map((t) => [t.unitId, t]));
     const remoteIds = new Set(parsed.units.map((u) => u.id));
 
-    let added = 0;
-    let updated = 0;
-
-    for (const unit of parsed.units) {
-      const local = existingMap.get(unit.id);
-      if (!local) {
-        await prisma.translation.create({
-          data: {
-            xliffFileId: file.id,
-            projectId: req.params.id,
-            unitId: unit.id,
-            source: unit.source,
-            target: unit.target ?? '',
-            state: unit.state,
-            note: unit.note,
-            developerNote: unit.developerNote,
-            syncChangedAt: syncNow,
-            syncChangeType: 'added',
-          },
-        });
-        added++;
-      } else if (local.source !== unit.source) {
-        await prisma.translation.update({
-          where: { id: local.id },
-          data: {
-            source: unit.source,
-            note: unit.note,
-            developerNote: unit.developerNote,
-            syncChangedAt: syncNow,
-            syncChangeType: 'source-changed',
-          },
-        });
-        updated++;
-      }
-    }
-
-    // Mark removed units
-    const removed = existing.filter((t) => !remoteIds.has(t.unitId));
-    for (const t of removed) {
-      await prisma.translation.update({
-        where: { id: t.id },
-        data: { state: 'needs-review', syncChangedAt: syncNow, syncChangeType: 'removed' },
+    // ── Batch inserts for new units (createMany in chunks to stay under SQLite variable limit) ──
+    const newUnits = parsed.units.filter((u) => !existingMap.has(u.id));
+    const CHUNK = 80;
+    for (let i = 0; i < newUnits.length; i += CHUNK) {
+      await prisma.translation.createMany({
+        data: newUnits.slice(i, i + CHUNK).map((unit) => ({
+          xliffFileId: file.id,
+          projectId: req.params.id,
+          unitId: unit.id,
+          source: unit.source,
+          target: unit.target ?? '',
+          state: unit.state,
+          note: unit.note ?? null,
+          developerNote: unit.developerNote ?? null,
+          syncChangedAt: syncNow,
+          syncChangeType: 'added',
+        })),
+        skipDuplicates: true,
       });
+    }
+    const added = newUnits.length;
+
+    // ── Batch updates for source-changed units ──
+    const sourceChangedUnits = parsed.units.filter((u) => {
+      const local = existingMap.get(u.id);
+      return local && local.source !== u.source;
+    });
+    if (sourceChangedUnits.length > 0) {
+      await prisma.$transaction(
+        sourceChangedUnits.map((unit) => {
+          const local = existingMap.get(unit.id)!;
+          return prisma.translation.update({
+            where: { id: local.id },
+            data: {
+              source: unit.source,
+              note: unit.note ?? null,
+              developerNote: unit.developerNote ?? null,
+              syncChangedAt: syncNow,
+              syncChangeType: 'source-changed',
+            },
+          });
+        })
+      );
+    }
+    const updated = sourceChangedUnits.length;
+
+    // ── Batch updates for removed units ──
+    const removed = existing.filter((t) => !remoteIds.has(t.unitId));
+    if (removed.length > 0) {
+      await prisma.$transaction(
+        removed.map((t) =>
+          prisma.translation.update({
+            where: { id: t.id },
+            data: { state: 'needs-review', syncChangedAt: syncNow, syncChangeType: 'removed' },
+          })
+        )
+      );
     }
 
     return { data: { added, updated, obsolete: removed.length, total: parsed.units.length, syncAt: syncNow.toISOString() } };
