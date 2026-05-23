@@ -165,6 +165,7 @@ model XliffFile {
   targetLanguage   String
   uploadedAt       DateTime      @default(now())
   lastSyncAt       DateTime?     // set after every sync-from-remote
+  remoteObjectId   String?       // blob SHA at last sync (ADO objectId / GitHub file SHA) — used for staleness checks
   remoteConnectionId String?     // which connection fetched this file
   remotePath       String?       // full path in repo e.g. "Translations/App.de-DE.xlf"
   remoteBranch     String?       // branch name

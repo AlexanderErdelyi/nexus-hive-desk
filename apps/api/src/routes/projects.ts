@@ -38,6 +38,7 @@ export async function projectRoutes(app: FastifyInstance) {
             filename: true,
             uploadedAt: true,
             lastSyncAt: true,
+            remoteObjectId: true,
             sourceLanguage: true,
             targetLanguage: true,
             remoteConnectionId: true,
@@ -250,6 +251,7 @@ export async function projectRoutes(app: FastifyInstance) {
 
     // Fetch remote content
     let remoteXml: string;
+    let fetchedObjectId: string | undefined;
     const repoParts = file.remoteRepo.split('/');
     try {
       if (conn.type === 'azure-devops') {
@@ -266,6 +268,7 @@ export async function projectRoutes(app: FastifyInstance) {
         if (!metaRes.ok) throw new Error(`ADO metadata HTTP ${metaRes.status}: ${await metaRes.text().catch(() => metaRes.statusText)}`);
         const meta = await metaRes.json() as { objectId?: string };
         if (!meta.objectId) throw new Error('ADO did not return objectId for file');
+        fetchedObjectId = meta.objectId;
 
         // Step 2: download blob by objectId — no size limit, always returns raw bytes
         const blobUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/blobs/${meta.objectId}?download=true&api-version=7.1`;
@@ -274,11 +277,21 @@ export async function projectRoutes(app: FastifyInstance) {
         remoteXml = await blobRes.text();
       } else {
         const [owner, repoName] = repoParts;
-        const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/contents/${file.remotePath}?ref=${encodeURIComponent(file.remoteBranch)}`;
-        const res = await fetch(url, {
+        // Step 1: get JSON metadata to retrieve the file SHA (for staleness checks)
+        const metaUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/contents/${file.remotePath}?ref=${encodeURIComponent(file.remoteBranch)}`;
+        const metaRes = await fetch(metaUrl, {
+          headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        });
+        if (!metaRes.ok) throw new Error(`GitHub metadata HTTP ${metaRes.status}: ${await metaRes.text().catch(() => metaRes.statusText)}`);
+        const metaJson = await metaRes.json() as { sha?: string; download_url?: string };
+        if (metaJson.sha) fetchedObjectId = metaJson.sha;
+
+        // Step 2: download raw content
+        const downloadUrl = metaJson.download_url ?? metaUrl;
+        const res = await fetch(downloadUrl, {
           headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' },
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+        if (!res.ok) throw new Error(`GitHub download HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
         remoteXml = await res.text();
       }
       // Strip UTF-8 BOM (\uFEFF) — ADO / some editors add it; fast-xml-parser chokes on it
@@ -306,7 +319,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const syncNow = new Date();
     await prisma.xliffFile.update({
       where: { id: file.id },
-      data: { originalXml: remoteXml, lastSyncAt: syncNow },
+      data: { originalXml: remoteXml, lastSyncAt: syncNow, ...(fetchedObjectId ? { remoteObjectId: fetchedObjectId } : {}) },
     });
 
     const existing = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
@@ -374,6 +387,63 @@ export async function projectRoutes(app: FastifyInstance) {
 
     return { data: { added, updated, obsolete: removed.length, total: parsed.units.length, syncAt: syncNow.toISOString() } };
   });
+
+  // POST /:id/xliff-files/check-staleness — lightweight metadata check for each remote-connected file
+  app.post<{ Params: { id: string } }>('/:id/xliff-files/check-staleness', async (req) => {
+    const files = await prisma.xliffFile.findMany({
+      where: { projectId: req.params.id, remoteConnectionId: { not: null }, remotePath: { not: null }, remoteBranch: { not: null }, remoteRepo: { not: null } },
+      select: { id: true, remoteConnectionId: true, remotePath: true, remoteBranch: true, remoteRepo: true, remoteObjectId: true },
+    });
+
+    const results = await Promise.allSettled(
+      files.map(async (file) => {
+        if (!file.remoteConnectionId || !file.remotePath || !file.remoteBranch || !file.remoteRepo) return null;
+        const conn = await prisma.customerConnection.findUnique({ where: { id: file.remoteConnectionId }, select: { type: true, baseUrl: true, pat: true } });
+        if (!conn) return null;
+
+        const repoParts = file.remoteRepo.split('/');
+        let currentObjectId: string | null = null;
+
+        try {
+          if (conn.type === 'azure-devops') {
+            const adoProject = repoParts[repoParts.length - 2];
+            const repoName = repoParts[repoParts.length - 1];
+            const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+            const authHeader = `Basic ${Buffer.from(`:${conn.pat}`).toString('base64')}`;
+            const metaUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodeURIComponent(file.remotePath)}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&includeContent=false&api-version=7.1`;
+            const res = await fetch(metaUrl, { headers: { Authorization: authHeader, Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+            if (res.ok) {
+              const data = await res.json() as { objectId?: string };
+              currentObjectId = data.objectId ?? null;
+            }
+          } else {
+            const [owner, repoName] = repoParts;
+            const metaUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/contents/${file.remotePath}?ref=${encodeURIComponent(file.remoteBranch)}`;
+            const res = await fetch(metaUrl, { headers: { Authorization: `Bearer ${conn.pat}`, Accept: 'application/vnd.github.v3+json', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(8000) });
+            if (res.ok) {
+              const data = await res.json() as { sha?: string };
+              currentObjectId = data.sha ?? null;
+            }
+          }
+        } catch { /* network failure — skip */ }
+
+        return {
+          fileId: file.id,
+          currentObjectId,
+          storedObjectId: file.remoteObjectId,
+          isStale: currentObjectId !== null && file.remoteObjectId !== null && currentObjectId !== file.remoteObjectId,
+          neverSynced: file.remoteObjectId === null && currentObjectId !== null,
+        };
+      })
+    );
+
+    return {
+      data: results
+        .filter((r): r is PromiseFulfilledResult<NonNullable<typeof r extends PromiseFulfilledResult<infer V> ? V : never>> => r.status === 'fulfilled' && r.value !== null)
+        .map((r) => r.value),
+    };
+  });
+
   app.patch<{
     Params: { id: string };
     Body: { name?: string; description?: string; customerId?: string | null; sourceLanguage?: string | null; targetLanguage?: string | null; connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null; capabilities?: string; localWorkspacePath?: string | null };

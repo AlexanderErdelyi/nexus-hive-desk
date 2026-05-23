@@ -2,12 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, ArrowRight, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
+  ArrowLeft, ArrowRight, AlertTriangle, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
   FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -59,6 +59,8 @@ interface Project {
     remoteRepo?: string;
     remotePrId?: string | null;
     remotePrUrl?: string | null;
+    lastSyncAt?: string | null;
+    remoteObjectId?: string | null;
   }>;
   repositories: ProjectRepo[];
   _count: { glossaryEntries: number };
@@ -73,6 +75,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [syncingFile, setSyncingFile] = useState<string | null>(null);
+  const [staleFiles, setStaleFiles] = useState<Map<string, { isStale: boolean; neverSynced: boolean }>>(new Map());
   const [showCommitModal, setShowCommitModal] = useState<string | null>(null);
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
@@ -123,6 +126,22 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     [projectId, qc, router]
   );
 
+  // ── Staleness check: ping remote metadata for all remote-connected files on load ────────────
+  useEffect(() => {
+    const hasRemoteFiles = project?.xliffFiles?.some((f) => f.remoteRepo && f.remoteConnectionId);
+    if (!hasRemoteFiles) return;
+    api.post<{ data: Array<{ fileId: string; isStale: boolean; neverSynced: boolean }> }>(
+      `/api/projects/${projectId}/xliff-files/check-staleness`, {}
+    ).then((res) => {
+      const map = new Map<string, { isStale: boolean; neverSynced: boolean }>();
+      for (const entry of res.data) {
+        map.set(entry.fileId, { isStale: entry.isStale, neverSynced: entry.neverSynced });
+      }
+      setStaleFiles(map);
+    }).catch(() => { /* silently ignore network errors */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, project?.xliffFiles?.map((f) => f.id).join(',')]);
+
   const syncFromRemote = useCallback(
     async (file: Project['xliffFiles'][0]) => {
       if (!file.remoteConnectionId) return;
@@ -134,6 +153,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         );
         qc.invalidateQueries({ queryKey: ['project', projectId] });
         qc.invalidateQueries({ queryKey: ['project-files', projectId] });
+        // Clear stale flag for this file since we just synced
+        setStaleFiles((prev) => { const m = new Map(prev); m.delete(file.id); return m; });
         const { added, updated, obsolete } = res.data;
         if (added > 0 || updated > 0) {
           toast.success(`Synced — ${added} new, ${updated} source changes, ${obsolete} obsolete`, {
@@ -427,6 +448,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                                   {file.remoteRepo} / {file.remoteBranch}
                                 </p>
                               )}
+                              {staleFiles.get(file.id)?.isStale && (
+                                <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" title="Remote file has changed since last sync — click Fetch to update">
+                                  <AlertTriangle size={10} /> Update available
+                                </span>
+                              )}
+                              {staleFiles.get(file.id)?.neverSynced && (
+                                <span className="flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600 dark:bg-sky-900/30 dark:text-sky-400" title="This file has never been synced from remote">
+                                  <AlertTriangle size={10} /> Not synced yet
+                                </span>
+                              )}
                               {prStatus && (
                                 <span className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
                                   <GitPullRequest size={10} /> PR #{prStatus.id}
@@ -451,7 +482,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                               <button
                                 onClick={() => syncFromRemote(file)}
                                 disabled={syncingFile === file.id}
-                                className="flex items-center gap-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50"
+                                className={staleFiles.get(file.id)?.isStale
+                                  ? 'flex items-center gap-1 rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-200 disabled:opacity-50 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50 ring-1 ring-amber-400 dark:ring-amber-600'
+                                  : 'flex items-center gap-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50'}
                                 title="Fetch latest from remote and merge"
                               >
                                 {syncingFile === file.id ? <Loader2 size={13} className="animate-spin" /> : <CloudDownload size={13} />}
