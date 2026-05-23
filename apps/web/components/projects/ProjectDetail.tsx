@@ -139,7 +139,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           toast.success(`Synced — ${added} new, ${updated} source changes, ${obsolete} obsolete`, {
             action: {
               label: 'View changes',
-              onClick: () => router.push(`/projects/${projectId}/translations/${file.id}?filter=since-last-sync`),
+              onClick: () => router.push(`/projects/${projectId}/translations?fileId=${file.id}&filter=since-last-sync`),
             },
             duration: 8000,
           });
