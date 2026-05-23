@@ -293,6 +293,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     (initialFilter as TranslationState | 'all' | 'untranslated' | 'quality-issues' | 'since-last-sync') ?? 'untranslated'
   );
   const [showAcceptedIssues, setShowAcceptedIssues] = useState(false);
+  const [expandedTmKey, setExpandedTmKey] = useState<string | null>(null);
   const [objectType, setObjectType] = useState('');
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
@@ -394,6 +395,22 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     mutationFn: ({ id, suppressedQualityIssues }: { id: string; suppressedQualityIssues: string[] }) =>
       api.patch(`/api/translations/${id}`, { suppressedQualityIssues }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['translations', projectId] }),
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const applyToSourceMutation = useMutation({
+    mutationFn: ({ source, target }: { source: string; target: string }) =>
+      api.post<{ updated: number }>('/api/translations/apply-to-source', {
+        xliffFileId: currentFile?.id,
+        projectId,
+        source,
+        target,
+      }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['translations', projectId] });
+      toast.success(`Applied to ${res.updated} translation${res.updated !== 1 ? 's' : ''} with the same source`);
+      setExpandedTmKey(null);
+    },
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
@@ -1482,41 +1499,92 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                         if (hasTm) {
                           return (
                             <div className="mt-1.5 space-y-1">
-                              {tm.map((suggestion, i) => (
-                                <div key={i} className="flex items-center gap-2 rounded-lg border border-teal-100 bg-teal-50/60 px-2 py-1.5 dark:border-teal-800/40 dark:bg-teal-900/20">
-                                  <span className={cn(
-                                    'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold',
-                                    suggestion.score === 1
-                                      ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
-                                      : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                                  )}>
-                                    TM {Math.round(suggestion.score * 100)}%
-                                  </span>
-                                  {suggestion.usageCount > 1 && (
-                                    <span className="shrink-0 rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-400" title={`Used ${suggestion.usageCount} times`}>
-                                      ×{suggestion.usageCount}
-                                    </span>
-                                  )}
-                                  <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={suggestion.target}>
-                                    {suggestion.target}
-                                  </span>
-                                  {suggestion.sourceText !== translation.source && (
-                                    <span className="shrink-0 text-xs italic text-gray-400 dark:text-gray-500" title={`TM matched from: "${suggestion.sourceText}"`}>
-                                      from: {suggestion.sourceText.length > 20 ? suggestion.sourceText.slice(0, 20) + '…' : suggestion.sourceText}
-                                    </span>
-                                  )}
-                                  <button
-                                    onClick={() => {
-                                      handleEdit(translation.id, 'target', suggestion.target);
-                                      handleEdit(translation.id, 'state', 'translated');
-                                    }}
-                                    className="shrink-0 rounded bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                              {tm.map((suggestion, i) => {
+                                const tmKey = `${translation.id}-${i}`;
+                                const isExpanded = expandedTmKey === tmKey;
+                                return (
+                                  <div key={i}>
+                                    <div
+                                      className={cn(
+                                        'flex cursor-pointer items-center gap-2 rounded-lg border px-2 py-1.5 transition-colors',
+                                        isExpanded
+                                          ? 'border-teal-400 bg-teal-50 dark:border-teal-600 dark:bg-teal-900/30'
+                                          : 'border-teal-100 bg-teal-50/60 hover:border-teal-300 hover:bg-teal-50 dark:border-teal-800/40 dark:bg-teal-900/20 dark:hover:border-teal-700'
+                                      )}
+                                      onClick={() => setExpandedTmKey(isExpanded ? null : tmKey)}
                                     >
-                                      Apply
-                                    </button>
+                                      <span className={cn(
+                                        'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold',
+                                        suggestion.score === 1
+                                          ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+                                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                                      )}>
+                                        TM {Math.round(suggestion.score * 100)}%
+                                      </span>
+                                      {suggestion.usageCount > 1 && (
+                                        <span className="shrink-0 rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-400" title={`Used ${suggestion.usageCount} times`}>
+                                          ×{suggestion.usageCount}
+                                        </span>
+                                      )}
+                                      <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={suggestion.target}>
+                                        {suggestion.target}
+                                      </span>
+                                      {suggestion.sourceText !== translation.source && (
+                                        <span className="shrink-0 text-xs italic text-gray-400 dark:text-gray-500" title={`TM matched from: "${suggestion.sourceText}"`}>
+                                          from: {suggestion.sourceText.length > 20 ? suggestion.sourceText.slice(0, 20) + '…' : suggestion.sourceText}
+                                        </span>
+                                      )}
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleEdit(translation.id, 'target', suggestion.target);
+                                          handleEdit(translation.id, 'state', 'translated');
+                                        }}
+                                        className="shrink-0 rounded bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                                      >
+                                        Apply
+                                      </button>
+                                    </div>
+                                    {/* Expanded detail panel */}
+                                    {isExpanded && (
+                                      <div className="rounded-b-lg border border-t-0 border-teal-300 bg-white px-3 py-2.5 dark:border-teal-700 dark:bg-gray-800/80">
+                                        <div className="mb-2 space-y-1.5 text-xs">
+                                          {suggestion.sourceText !== translation.source && (
+                                            <div>
+                                              <span className="font-medium text-gray-500 dark:text-gray-400">Matched from source: </span>
+                                              <span className="text-gray-700 dark:text-gray-300">{suggestion.sourceText}</span>
+                                            </div>
+                                          )}
+                                          <div>
+                                            <span className="font-medium text-gray-500 dark:text-gray-400">Full suggestion: </span>
+                                            <span className="font-medium text-gray-800 dark:text-gray-200">{suggestion.target}</span>
+                                          </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                          <button
+                                            onClick={() => {
+                                              handleEdit(translation.id, 'target', suggestion.target);
+                                              handleEdit(translation.id, 'state', 'translated');
+                                              setExpandedTmKey(null);
+                                            }}
+                                            className="rounded bg-teal-100 px-2.5 py-1 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                                          >
+                                            Apply to this row
+                                          </button>
+                                          <button
+                                            onClick={() => applyToSourceMutation.mutate({ source: translation.source, target: suggestion.target })}
+                                            disabled={applyToSourceMutation.isPending}
+                                            className="rounded bg-indigo-100 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-200 disabled:opacity-50 dark:bg-indigo-900/40 dark:text-indigo-300 dark:hover:bg-indigo-900/70"
+                                          >
+                                            {applyToSourceMutation.isPending ? 'Applying…' : `Apply to all with same source`}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })}
+                            </div>
                           );
                         }
 

@@ -318,4 +318,25 @@ export async function translationRoutes(app: FastifyInstance) {
 
     return { data: results };
   });
+
+  // Apply a single target to ALL translations with the same source in a file/project scope
+  app.post<{
+    Body: { xliffFileId?: string; projectId?: string; source: string; target: string };
+  }>('/apply-to-source', async (req, reply) => {
+    const { xliffFileId, projectId, source, target } = req.body;
+    if (!source || !target) {
+      return reply.status(400).send({ error: 'validation', message: 'source and target are required' });
+    }
+    const where: Record<string, unknown> = { source };
+    if (xliffFileId) where['xliffFileId'] = xliffFileId;
+    else if (projectId) where['projectId'] = projectId;
+    else return reply.status(400).send({ error: 'validation', message: 'xliffFileId or projectId required' });
+
+    const result = await prisma.translation.updateMany({
+      where: where as Parameters<typeof prisma.translation.updateMany>[0]['where'],
+      data: { target, state: 'translated', updatedAt: new Date() },
+    });
+
+    return { updated: result.count };
+  });
 }
