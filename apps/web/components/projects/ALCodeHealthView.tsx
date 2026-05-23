@@ -3,8 +3,8 @@
 import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight,
-  Download, FileCode2, FolderOpen, FolderTree, GitBranch,
+  AlertTriangle, Brain, CheckCircle2, ChevronDown, ChevronRight,
+  Code2, Download, FileCode2, FolderOpen, FolderTree, GitBranch,
   Info, List, Loader2, Sparkles, Ticket, X, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -39,6 +39,9 @@ interface ObjectResult {
   lineCount: number;
   procedures: ProcInfo[];
   issues: HealthIssue[];
+  contentHash?: string;
+  isNew?: boolean;
+  isChanged?: boolean;
 }
 
 interface ProjectRepo {
@@ -47,6 +50,15 @@ interface ProjectRepo {
   repoName: string;
   adoProjectName?: string | null;
   defaultBranch?: string | null;
+}
+
+interface SemanticFinding {
+  type: 'duplicate' | 'naming' | 'pattern';
+  severity: 'warning' | 'info';
+  message: string;
+  affectedObjects?: string[];
+  affectedProcedures?: string[];
+  suggestion?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,7 +73,20 @@ function getDirectory(filePath: string): string {
   return idx > 0 ? norm.substring(0, idx) : '/';
 }
 
-// ─── AL analysis (client-side, mirrors ALCodeHealthView logic) ────────────────
+// ─── BC built-in triggers (excluded from duplicate detection) ─────────────────
+
+const BC_BUILTIN_TRIGGERS = new Set([
+  'onvalidate', 'onlookup', 'onformat', 'onafterlookup', 'onafterformat', 'onassistededit',
+  'oninsert', 'onmodify', 'ondelete', 'onrename',
+  'oninit', 'onopenpage', 'onclosepage', 'onaftergetrecord', 'onaftergetcurrrecord',
+  'onnewrecord', 'oninsertrecord', 'onmodifyrecord', 'ondeleterecord',
+  'onqueryclosepage', 'onfindrecord', 'onnextrecord', 'onaction', 'ondrilldown',
+  'onprereport', 'onpostreport', 'onpredataitem', 'onpostdataitem', 'onpresection', 'onpostsection',
+  'onrun', 'oninitxmlport', 'onbeforeinsertrecord', 'onafterinsertrecord',
+  'onbeforemodifyrecord', 'onaftermodifyrecord', 'onbeforeopen',
+]);
+
+// ─── AL analysis (client-side) ────────────────────────────────────────────────
 
 const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
 const AL_TYPE_MAP: Record<string, string> = {
@@ -108,8 +133,11 @@ function analyzeAlFile(content: string, filePath: string): ObjectResult | null {
 
   const procedures = parseProcedures(lines);
   for (const p of procedures) {
+    const slice = lines.slice(p.startLine - 1, p.endLine);
+
     if (p.lineCount > 100) issues.push({ severity: p.lineCount > 200 ? 'error' : 'warning', ruleId: 'AL0002', message: `Procedure "${p.name}" is ${p.lineCount} lines`, line: p.startLine, procedure: p.name });
 
+    // AL0003 / AL0004 – DB read / Commit in loop
     let ld = 0;
     for (let i = p.startLine - 1; i < Math.min(p.endLine, lines.length); i++) {
       const s = stripStrings(lines[i]).toLowerCase();
@@ -119,9 +147,12 @@ function analyzeAlFile(content: string, filePath: string): ObjectResult | null {
       if (ld > 0) {
         if (/\.(findset|findfirst|findlast|find\s*\(|get\s*\()\b/i.test(lines[i])) issues.push({ severity: 'error', ruleId: 'AL0003', message: 'DB read inside loop', detail: lines[i].trim(), line: i + 1, procedure: p.name });
         if (/\bcommit\s*\(\s*\)/i.test(lines[i])) issues.push({ severity: 'error', ruleId: 'AL0004', message: 'Commit() inside loop', detail: lines[i].trim(), line: i + 1, procedure: p.name });
+        // AL0010 – CalcFields in loop
+        if (/\.calcfields\s*\(/i.test(lines[i])) issues.push({ severity: 'warning', ruleId: 'AL0010', message: 'CalcFields() inside loop — use SetAutoCalcFields or move outside loop', detail: lines[i].trim(), line: i + 1, procedure: p.name });
       }
     }
 
+    // AL0005 – deep nesting
     let maxD = 0, maxL = -1;
     for (let i = p.startLine - 1; i < Math.min(p.endLine, lines.length); i++) {
       const d = Math.floor((lines[i].match(/^(\s*)/)?.[1].length ?? 0) / 4);
@@ -129,11 +160,24 @@ function analyzeAlFile(content: string, filePath: string): ObjectResult | null {
     }
     if (maxD >= 6) issues.push({ severity: 'warning', ruleId: 'AL0005', message: `Deep nesting ≈${maxD} levels`, line: maxL, procedure: p.name });
 
+    // AL0006 – too many params
     if (p.paramCount > 8) issues.push({ severity: 'warning', ruleId: 'AL0006', message: `Procedure "${p.name}" has ${p.paramCount} params`, line: p.startLine, procedure: p.name });
+
+    // AL0009 – missing SetLoadFields in read-only traversal
+    const hasLoadFields = slice.some((l) => /\.(setloadfields|setautocalcfields)\s*\(/i.test(l));
+    if (!hasLoadFields) {
+      const hasModify = slice.some((l) => /\.(modify|delete|insert)\s*\(/i.test(l));
+      const findIdx = slice.findIndex((l) => /\.(findset|findfirst|findlast)\s*\(/i.test(l));
+      if (findIdx >= 0 && !hasModify)
+        issues.push({ severity: 'warning', ruleId: 'AL0009', message: `SetLoadFields missing before FindSet/FindFirst in "${p.name}" (read-only — all fields loaded)`, detail: slice[findIdx].trim(), line: p.startLine + findIdx, procedure: p.name });
+    }
   }
 
   for (let i = 0; i < lines.length; i++) {
     if (/\/\/\s*(TODO|FIXME|HACK|XXX)\b/i.test(lines[i])) issues.push({ severity: 'info', ruleId: 'AL0007', message: `Dev note: ${lines[i].trim()}`, line: i + 1 });
+    // AL0011 – WITH statement (deprecated in modern AL)
+    if (/^\s*with\s+[\w.]+\s+do\b/i.test(lines[i]) && !/^\s*\/\//.test(lines[i]))
+      issues.push({ severity: 'warning', ruleId: 'AL0011', message: 'WITH statement is deprecated in modern AL — use explicit record variable', detail: lines[i].trim(), line: i + 1 });
   }
 
   return { objectType: bcType, objectName, filePath, lineCount: lines.length, procedures, issues };
@@ -141,8 +185,12 @@ function analyzeAlFile(content: string, filePath: string): ObjectResult | null {
 
 function addDuplicateIssues(results: ObjectResult[]) {
   const nm = new Map<string, string[]>();
-  for (const r of results) for (const p of r.procedures) { const k = p.name.toLowerCase(); if (!nm.has(k)) nm.set(k, []); nm.get(k)!.push(`${r.objectType} ${r.objectName}`); }
   for (const r of results) for (const p of r.procedures) {
+    if (BC_BUILTIN_TRIGGERS.has(p.name.toLowerCase())) continue;
+    const k = p.name.toLowerCase(); if (!nm.has(k)) nm.set(k, []); nm.get(k)!.push(`${r.objectType} ${r.objectName}`);
+  }
+  for (const r of results) for (const p of r.procedures) {
+    if (BC_BUILTIN_TRIGGERS.has(p.name.toLowerCase())) continue;
     const others = (nm.get(p.name.toLowerCase()) ?? []).filter((o) => o !== `${r.objectType} ${r.objectName}`);
     if (others.length > 0) r.issues.push({ severity: 'info', ruleId: 'AL0008', message: `"${p.name}" also in: ${others.slice(0, 3).join(', ')}${others.length > 3 ? ` +${others.length - 3}` : ''}`, line: p.startLine, procedure: p.name });
   }
@@ -162,14 +210,17 @@ async function readEntryFiles(entry: FileSystemEntry): Promise<File[]> {
 // ─── Rule metadata ────────────────────────────────────────────────────────────
 
 const RULES: Record<string, { label: string; description: string }> = {
-  AL0001: { label: 'Large Object',             description: 'Object > 2000 lines' },
-  AL0002: { label: 'Long Procedure',           description: 'Procedure > 100 lines' },
-  AL0003: { label: 'DB Read in Loop',          description: 'FindSet/FindFirst/Get inside loop' },
-  AL0004: { label: 'Commit in Loop',           description: 'Commit() inside a loop' },
-  AL0005: { label: 'Deep Nesting',             description: 'Indentation ≥ 6 levels' },
-  AL0006: { label: 'Too Many Params',          description: 'Procedure has > 8 parameters' },
-  AL0007: { label: 'TODO Comment',             description: 'Unresolved developer note' },
-  AL0008: { label: 'Duplicate Proc Name',      description: 'Same name in multiple objects' },
+  AL0001: { label: 'Large Object',           description: 'Object > 2000 lines' },
+  AL0002: { label: 'Long Procedure',         description: 'Procedure > 100 lines' },
+  AL0003: { label: 'DB Read in Loop',        description: 'FindSet/FindFirst/Get inside loop' },
+  AL0004: { label: 'Commit in Loop',         description: 'Commit() inside a loop' },
+  AL0005: { label: 'Deep Nesting',           description: 'Indentation ≥ 6 levels' },
+  AL0006: { label: 'Too Many Params',        description: 'Procedure has > 8 parameters' },
+  AL0007: { label: 'TODO Comment',           description: 'Unresolved developer note' },
+  AL0008: { label: 'Duplicate Proc Name',    description: 'Same name in multiple objects (non-BC-built-in)' },
+  AL0009: { label: 'Missing SetLoadFields',  description: 'FindSet/FindFirst without SetLoadFields in read-only loop' },
+  AL0010: { label: 'CalcFields in Loop',     description: 'CalcFields() called inside a loop' },
+  AL0011: { label: 'WITH Deprecated',        description: 'WITH statement is deprecated in modern AL' },
 };
 
 const SEV: Record<Severity, { color: string; icon: React.ReactNode }> = {
@@ -304,6 +355,105 @@ function WorkItemModal({ issue, object, projectId, onClose }: {
   );
 }
 
+// ─── AI Semantic Modal ────────────────────────────────────────────────────────
+
+function AiSemanticModal({ results, projectId, onClose }: {
+  results: ObjectResult[]; projectId: string; onClose: () => void;
+}) {
+  const [findings, setFindings] = useState<SemanticFinding[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [mode, setMode] = useState<'all' | 'custom'>('all');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const targets = mode === 'all' ? results : results.filter((r) => selected.has(`${r.objectType}|${r.objectName}`));
+
+  async function scan() {
+    setLoading(true); setError('');
+    try {
+      const res = await api.post<{ data: { findings: SemanticFinding[] } }>(`/api/projects/${projectId}/al-health/ai-semantic`, {
+        objects: targets.map((o) => ({ objectType: o.objectType, objectName: o.objectName, filePath: o.filePath, procedures: o.procedures })),
+      });
+      setFindings(res.data.findings ?? []);
+    } catch (e) { setError(e instanceof Error ? e.message : 'AI scan failed'); } finally { setLoading(false); }
+  }
+
+  function toggle(key: string) { setSelected((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; }); }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="flex h-[80vh] w-full max-w-3xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+          <div className="flex items-center gap-2">
+            <Brain size={16} className="text-violet-500" />
+            <span className="font-semibold text-gray-900 dark:text-white">AI Semantic Analysis</span>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800">{targets.length} objects</span>
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left: object selector */}
+          <div className="flex w-56 shrink-0 flex-col border-r border-gray-100 dark:border-gray-800">
+            <div className="flex gap-1 border-b border-gray-100 p-2 dark:border-gray-800">
+              <button onClick={() => setMode('all')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'all' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>All</button>
+              <button onClick={() => setMode('custom')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'custom' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>Select</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+              {results.map((r) => {
+                const k = `${r.objectType}|${r.objectName}`;
+                const checked = mode === 'all' || selected.has(k);
+                return (
+                  <label key={k} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs', mode === 'custom' && selected.has(k) ? 'bg-violet-50 dark:bg-violet-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800')}>
+                    <input type="checkbox" disabled={mode === 'all'} checked={checked} onChange={() => toggle(k)} className="accent-violet-500" />
+                    <span className="truncate text-gray-700 dark:text-gray-300" title={r.objectName}>{r.objectName}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right: findings */}
+          <div className="flex flex-1 flex-col overflow-hidden">
+            {findings.length === 0 && !loading && !error && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
+                <Brain size={36} className="text-gray-300 dark:text-gray-600" />
+                <p className="text-sm text-gray-500">Scan {targets.length} objects to detect semantic duplicates, naming inconsistencies and patterns that static rules can&apos;t find.</p>
+                <button onClick={scan} disabled={targets.length === 0} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                  <Brain size={14} /> Scan {targets.length} Objects
+                </button>
+              </div>
+            )}
+            {loading && <div className="flex flex-1 items-center justify-center gap-2 text-sm text-gray-500"><Loader2 size={18} className="animate-spin" /> AI is analysing…</div>}
+            {error && <div className="p-4 text-sm text-red-600 dark:text-red-400">{error} <button onClick={scan} className="underline">Retry</button></div>}
+            {findings.length > 0 && (
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 dark:border-gray-800">
+                  <span className="text-xs text-gray-500">{findings.length} finding{findings.length !== 1 ? 's' : ''}</span>
+                  <button onClick={scan} className="flex items-center gap-1 text-xs text-violet-600 hover:underline"><Brain size={12} /> Re-scan</button>
+                </div>
+                <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                  {findings.map((f, i) => (
+                    <div key={i} className="p-4 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', f.severity === 'warning' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300')}>{f.type}</span>
+                        <span className="font-medium text-sm text-gray-800 dark:text-gray-200">{f.message}</span>
+                      </div>
+                      {f.affectedObjects && f.affectedObjects.length > 0 && <div className="flex flex-wrap gap-1">{f.affectedObjects.map((o, j) => <span key={j} className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] dark:bg-gray-800 dark:text-gray-400">{o}</span>)}</div>}
+                      {f.affectedProcedures && f.affectedProcedures.length > 0 && <div className="flex flex-wrap gap-1">{f.affectedProcedures.map((p, j) => <span key={j} className="rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">{p}</span>)}</div>}
+                      {f.suggestion && <p className="text-xs text-gray-500 dark:text-gray-400">{f.suggestion}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props { projectId: string; }
@@ -321,22 +471,33 @@ export function ALCodeHealthView({ projectId }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [showReviewed, setShowReviewed] = useState(false);
+  const [showNew, setShowNew] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('flat');
   const [aiModal, setAiModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
   const [wiModal, setWiModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
-  const [showRepoPanel, setShowRepoPanel] = useState(false);
+  const [semanticModal, setSemanticModal] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState('');
   const [repoBranch, setRepoBranch] = useState('');
   const [fetchingRepo, setFetchingRepo] = useState(false);
+  const [lastFetchedRepoId, setLastFetchedRepoId] = useState('');
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Project repos ──────────────────────────────────────────────────────────
+  // ── Project data (repos + localWorkspacePath) ─────────────────────────────
   const { data: projectData } = useQuery({
     queryKey: ['project-repos', projectId],
-    queryFn: () => api.get<{ data: { repositories: ProjectRepo[] } }>(`/api/projects/${projectId}`),
+    queryFn: () => api.get<{ data: { repositories: ProjectRepo[]; localWorkspacePath?: string } }>(`/api/projects/${projectId}`),
     staleTime: 60_000,
   });
   const repos = projectData?.data.repositories ?? [];
+  const localWorkspacePath = projectData?.data.localWorkspacePath;
+
+  // ── Baseline (localStorage) ────────────────────────────────────────────────
+  function loadBaseline(repoId: string): Record<string, string> {
+    try { return JSON.parse(localStorage.getItem(`nhd-al-baseline-${projectId}-${repoId}`) ?? '{}'); } catch { return {}; }
+  }
+  function saveBaseline(repoId: string, baseline: Record<string, string>) {
+    try { localStorage.setItem(`nhd-al-baseline-${projectId}-${repoId}`, JSON.stringify(baseline)); } catch { /* noop */ }
+  }
 
   // ── Reviews ────────────────────────────────────────────────────────────────
   const { data: reviewsData } = useQuery({
@@ -391,15 +552,21 @@ export function ALCodeHealthView({ projectId }: Props) {
     if (!selectedRepo) { toast.error('Select a repository first'); return; }
     setFetchingRepo(true);
     try {
-      const body: Record<string, string> = { repositoryId: selectedRepo };
+      const baseline = loadBaseline(selectedRepo);
+      const hasBaseline = Object.keys(baseline).length > 0;
+      const body: Record<string, unknown> = { repositoryId: selectedRepo, baseline };
       if (repoBranch) body.branch = repoBranch;
-      const res = await api.post<{ data: ObjectResult[]; meta: { filesScanned: number; objectsFound: number; totalIssues: number; branch: string } }>(
+      const res = await api.post<{ data: ObjectResult[]; meta: { filesScanned: number; objectsFound: number; totalIssues: number; branch: string }; newBaseline: Record<string, string> }>(
         `/api/projects/${projectId}/al-health/fetch-analyse`, body
       );
       setResults(res.data);
       setExpanded(new Set());
-      setShowRepoPanel(false);
-      toast.success(`Fetched ${res.meta.filesScanned} files from ${res.meta.branch} — ${res.meta.totalIssues} issues`);
+      setLastFetchedRepoId(selectedRepo);
+      saveBaseline(selectedRepo, res.newBaseline ?? {});
+      const newCount = res.data.filter((r) => r.isNew).length;
+      const changedCount = res.data.filter((r) => r.isChanged).length;
+      const diffMsg = hasBaseline && (newCount || changedCount) ? ` · ${newCount} new, ${changedCount} changed` : hasBaseline ? ' · no structural changes' : '';
+      toast.success(`Fetched ${res.meta.filesScanned} files from ${res.meta.branch} — ${res.meta.totalIssues} issues${diffMsg}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Fetch failed');
     } finally { setFetchingRepo(false); }
@@ -428,7 +595,9 @@ export function ALCodeHealthView({ projectId }: Props) {
   }).length;
   const presentRules = [...new Set(allIssues.map((i) => i.ruleId))].sort();
 
-  const filteredResults = results.map((r) => ({
+  const filteredResults = results
+    .filter((r) => !showNew || r.isNew || r.isChanged)
+    .map((r) => ({
     ...r,
     issues: r.issues.filter((i) => {
       const key = makeIssueKey(r, i);
@@ -445,6 +614,12 @@ export function ALCodeHealthView({ projectId }: Props) {
     const key = makeIssueKey(r, issue);
     const reviewed = reviewedKeys.has(key);
     const cfg = SEV[issue.severity];
+
+    // VS Code link: combine workspace path + file path + line number
+    const vsCodeUrl = localWorkspacePath && issue.line
+      ? `vscode://file/${[localWorkspacePath, r.filePath].join('/').replace(/\\/g, '/').replace(/\/+/g, '/')}:${issue.line}`
+      : null;
+
     return (
       <div key={key} className={cn('flex items-start gap-3 px-4 py-3 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0', reviewed ? 'opacity-50' : issue.severity === 'error' ? 'bg-red-50/30 dark:bg-red-900/10' : issue.severity === 'warning' ? 'bg-amber-50/30 dark:bg-amber-900/10' : '')}>
         <span className={cn('mt-0.5 flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold', cfg.color)}>{cfg.icon} {issue.ruleId}</span>
@@ -459,6 +634,15 @@ export function ALCodeHealthView({ projectId }: Props) {
         </div>
         {/* Actions */}
         <div className="flex shrink-0 items-center gap-1">
+          {vsCodeUrl ? (
+            <a href={vsCodeUrl} title={`Open in VS Code :${issue.line}`} className="rounded p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/30">
+              <Code2 size={14} />
+            </a>
+          ) : localWorkspacePath ? null : (
+            <span title="Set local workspace path in Setup to enable VS Code navigation" className="cursor-help rounded p-1.5 text-gray-200 dark:text-gray-700">
+              <Code2 size={14} />
+            </span>
+          )}
           <button
             title={reviewed ? 'Unmark reviewed' : 'Mark as reviewed'}
             onClick={() => reviewMutation.mutate({ issueKey: key, remove: reviewed })}
@@ -492,6 +676,8 @@ export function ALCodeHealthView({ projectId }: Props) {
           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{r.objectType}</span>
           <span className="font-medium text-gray-900 dark:text-white">{r.objectName}</span>
           <span className="text-xs text-gray-400">{r.lineCount} lines · {r.procedures.length} procs</span>
+            {r.isNew && <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-bold text-green-700 dark:bg-green-900/30 dark:text-green-300">NEW</span>}
+            {r.isChanged && <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">CHANGED</span>}
           <div className="ml-auto flex items-center gap-1">
             {e > 0 && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-900/40 dark:text-red-300">{e}E</span>}
             {w > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{w}W</span>}
@@ -513,6 +699,7 @@ export function ALCodeHealthView({ projectId }: Props) {
         </div>
         {results.length > 0 && (
           <div className="flex gap-2">
+            <button onClick={() => setSemanticModal(true)} className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/20 dark:text-violet-300"><Brain size={13} /> AI Semantic</button>
             <button onClick={() => { setResults([]); setExpanded(new Set()); }} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"><X size={13} /> Clear</button>
             <button onClick={exportCsv} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"><Download size={13} /> CSV</button>
           </div>
@@ -603,6 +790,11 @@ export function ALCodeHealthView({ projectId }: Props) {
             <button onClick={() => setShowReviewed((v) => !v)} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', showReviewed ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
               <CheckCircle2 size={12} /> {showReviewed ? 'Hiding reviewed' : 'Show reviewed'}
             </button>
+            {results.some((r) => r.isNew || r.isChanged) && (
+              <button onClick={() => setShowNew((v) => !v)} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', showNew ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
+                <GitBranch size={12} /> {showNew ? 'New/Changed only' : 'All objects'}
+              </button>
+            )}
             <button onClick={() => setViewMode((v) => v === 'flat' ? 'tree' : 'flat')} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', viewMode === 'tree' ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
               {viewMode === 'tree' ? <FolderTree size={12} /> : <List size={12} />} {viewMode === 'tree' ? 'Tree' : 'Flat'}
             </button>
@@ -650,6 +842,9 @@ export function ALCodeHealthView({ projectId }: Props) {
           )}
         </>
       )}
+
+      {/* AI Semantic modal */}
+      {semanticModal && <AiSemanticModal results={results} projectId={projectId} onClose={() => setSemanticModal(false)} />}
 
       {/* AI Explain modal */}
       {aiModal && <AiExplainModal issue={aiModal.issue} object={aiModal.object} projectId={projectId} onClose={() => setAiModal(null)} />}
