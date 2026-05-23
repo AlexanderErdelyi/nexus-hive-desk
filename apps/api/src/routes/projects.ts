@@ -292,6 +292,12 @@ export async function projectRoutes(app: FastifyInstance) {
       parsed = parseXliff(remoteXml);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Write raw content to a debug file so we can examine the malformed XML
+      try {
+        const debugPath = nodePath.join(process.cwd(), '..', '..', 'data', 'xliff-debug-raw.txt');
+        await fs.writeFile(debugPath, remoteXml, 'utf-8');
+        console.error(`[XLIFF DEBUG] Raw content saved to ${debugPath}`);
+      } catch { /* ignore write errors */ }
       return reply.status(400).send({ error: 'parse_error', message: `XML parse failed: ${message}` });
     }
 
