@@ -79,13 +79,13 @@ export async function translationRoutes(app: FastifyInstance) {
         }
         // Inconsistent: 2+ distinct real targets for the same source
         if (g.targets.size > 1) {
-          // Build sorted variant list: "Target (×N)" sorted by count desc
+          // Build sorted variant list by count desc — structured for tooltip + suggestions
           const variants = [...g.targetsByCount.entries()]
             .sort((a, b) => b[1] - a[1])
-            .map(([t, n]) => `${t} (×${n})`);
+            .map(([t, n]) => ({ target: t, count: n }));
           for (const id of g.diffIds) {
             inconsistentIds.add(id);
-            inconsistentVariantsMap.set(id, variants);
+            inconsistentVariantsMap.set(id, variants as unknown as string[]);
           }
         }
       }
@@ -165,8 +165,8 @@ export async function translationRoutes(app: FastifyInstance) {
         if (targets && targets.size > 1) {
           inconsistentIds.add(item.id);
           const cm = pageSourceTargetCounts.get(item.source)!;
-          const variants = [...cm.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} (×${n})`);
-          inconsistentVariantsMap.set(item.id, variants);
+          const variants = [...cm.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => ({ target: t, count: n }));
+          inconsistentVariantsMap.set(item.id, variants as unknown as string[]);
         }
       }
     }

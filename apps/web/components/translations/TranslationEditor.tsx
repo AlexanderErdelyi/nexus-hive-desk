@@ -22,7 +22,7 @@ interface Translation {
   developerNote?: string;
   qualityIssues?: string[];
   suppressedQualityIssues?: string[];
-  qualityIssueMeta?: { inconsistentVariants?: string[] };
+  qualityIssueMeta?: { inconsistentVariants?: Array<{ target: string; count: number }> };
   syncChangedAt?: string | null;
   syncChangeType?: 'added' | 'source-changed' | 'removed' | null;
 }
@@ -1369,17 +1369,18 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                             };
                             const c = cfg[issue] ?? { label: issue, color: 'bg-gray-100 text-gray-600' };
                             const variants = issue === 'inconsistent-translation' ? translation.qualityIssueMeta?.inconsistentVariants : undefined;
+                            const tooltipText = variants ? variants.map(v => `${v.target} (×${v.count})`).join('\n') : undefined;
                             return (
                               <span
                                 key={issue}
                                 className={`group/badge relative rounded-full px-2 py-0.5 text-[10px] font-medium ${c.color}`}
-                                title={variants ? `Conflicting translations:\n${variants.join('\n')}` : undefined}
+                                title={tooltipText}
                               >
                                 {c.label}
                                 {variants && (
                                   <span className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden min-w-[160px] max-w-[300px] rounded-lg bg-gray-900 px-2.5 py-1.5 text-[10px] text-white shadow-lg group-hover/badge:block dark:bg-gray-700">
                                     <span className="font-semibold block mb-0.5">Conflicting translations:</span>
-                                    {variants.map((v) => <span key={v} className="block">{v}</span>)}
+                                    {variants.map((v) => <span key={v.target} className="block">{v.target} (×{v.count})</span>)}
                                   </span>
                                 )}
                               </span>
@@ -1584,8 +1585,91 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                                   </div>
                                 );
                               })}
+                              {/* Conflict variants not in TM — shown when row has inconsistent-translation issue */}
+                              {(() => {
+                                const variants = translation.qualityIssueMeta?.inconsistentVariants;
+                                if (!variants || variants.length <= 1) return null;
+                                const tmTargets = new Set(tm.map((s) => s.target));
+                                const missing = variants.filter((v) => !tmTargets.has(v.target));
+                                if (missing.length === 0) return null;
+                                return (
+                                  <>
+                                    <div className="pt-0.5 text-[10px] font-medium text-orange-500 dark:text-orange-400">
+                                      Also used for this source (not in TM):
+                                    </div>
+                                    {missing.map((v) => (
+                                      <div key={v.target} className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50/60 px-2 py-1.5 dark:border-orange-800/40 dark:bg-orange-900/20">
+                                        <span className="shrink-0 rounded bg-orange-100 px-1.5 py-0.5 text-xs font-bold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                                          ⇄ ×{v.count}
+                                        </span>
+                                        <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={v.target}>
+                                          {v.target}
+                                        </span>
+                                        <button
+                                          onClick={() => {
+                                            handleEdit(translation.id, 'target', v.target);
+                                            handleEdit(translation.id, 'state', 'translated');
+                                          }}
+                                          className="shrink-0 rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:hover:bg-orange-900/60"
+                                        >
+                                          Use
+                                        </button>
+                                        <button
+                                          onClick={() => applyToSourceMutation.mutate({ source: translation.source, target: v.target })}
+                                          disabled={applyToSourceMutation.isPending}
+                                          className="shrink-0 rounded bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-200 disabled:opacity-50 dark:bg-indigo-900/40 dark:text-indigo-300"
+                                          title="Apply this variant to all translations with the same source"
+                                        >
+                                          Use for all
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </>
+                                );
+                              })()}
                             </div>
                           );
+                        }
+
+                        // No TM match — show conflict variants if available (inconsistent row not yet focused for TM)
+                        {
+                          const variants = translation.qualityIssueMeta?.inconsistentVariants;
+                          if (variants && variants.length > 1) {
+                            return (
+                              <div className="mt-1.5 space-y-1">
+                                <div className="text-[10px] font-medium text-orange-500 dark:text-orange-400">
+                                  Conflicting variants used for this source:
+                                </div>
+                                {variants.map((v) => (
+                                  <div key={v.target} className="flex items-center gap-2 rounded-lg border border-orange-200 bg-orange-50/60 px-2 py-1.5 dark:border-orange-800/40 dark:bg-orange-900/20">
+                                    <span className="shrink-0 rounded bg-orange-100 px-1.5 py-0.5 text-xs font-bold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                                      ⇄ ×{v.count}
+                                    </span>
+                                    <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={v.target}>
+                                      {v.target}
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        handleEdit(translation.id, 'target', v.target);
+                                        handleEdit(translation.id, 'state', 'translated');
+                                      }}
+                                      className="shrink-0 rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:hover:bg-orange-900/60"
+                                    >
+                                      Use
+                                    </button>
+                                    <button
+                                      onClick={() => applyToSourceMutation.mutate({ source: translation.source, target: v.target })}
+                                      disabled={applyToSourceMutation.isPending}
+                                      className="shrink-0 rounded bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700 hover:bg-indigo-200 disabled:opacity-50 dark:bg-indigo-900/40 dark:text-indigo-300"
+                                      title="Apply this variant to all translations with the same source"
+                                    >
+                                      Use for all
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          }
                         }
 
                         // No TM match — show AI quick-translate button if untranslated
