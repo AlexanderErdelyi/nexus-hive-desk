@@ -232,11 +232,11 @@ export async function remoteRoutes(app: FastifyInstance) {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const { branch, path: filePath } = req.query;
 
-        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&api-version=7.1`;
+        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&api-version=7.1`;
         if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
 
-        // Get as text
-        const res = await fetch(url, { headers: azureHeaders(conn.pat) });
+        // Get as text — omit Content-Type on GET so ADO returns raw file bytes
+        const res = await fetch(url, { headers: { Authorization: azureHeaders(conn.pat).Authorization } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const content = await res.text();
 
