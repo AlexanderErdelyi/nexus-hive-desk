@@ -232,7 +232,8 @@ export async function remoteRoutes(app: FastifyInstance) {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const { branch, path: filePath } = req.query;
 
-        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&api-version=7.1`;
+        // download=true bypasses ADO's inline size limit for large XLIFF files
+        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&download=true&api-version=7.1`;
         if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
 
         // Get as text — omit Content-Type on GET so ADO returns raw file bytes

@@ -259,7 +259,8 @@ export async function projectRoutes(app: FastifyInstance) {
         const repoName = repoParts[repoParts.length - 1];
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const encodedPath = encodeURIComponent(file.remotePath);
-        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodedPath}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&$format=text&api-version=7.1`;
+        // download=true bypasses ADO's inline size limit for large files (>~4MB)
+        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodedPath}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&$format=text&download=true&api-version=7.1`;
         const res = await fetch(url, {
           headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
         });
@@ -292,12 +293,6 @@ export async function projectRoutes(app: FastifyInstance) {
       parsed = parseXliff(remoteXml);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Write raw content to a debug file so we can examine the malformed XML
-      try {
-        const debugPath = nodePath.join(process.cwd(), '..', '..', 'data', 'xliff-debug-raw.txt');
-        await fs.writeFile(debugPath, remoteXml, 'utf-8');
-        console.error(`[XLIFF DEBUG] Raw content saved to ${debugPath}`);
-      } catch { /* ignore write errors */ }
       return reply.status(400).send({ error: 'parse_error', message: `XML parse failed: ${message}` });
     }
 
