@@ -357,19 +357,89 @@ function WorkItemModal({ issue, object, projectId, onClose }: {
 
 // ─── AI Semantic Modal ────────────────────────────────────────────────────────
 
-function AiSemanticModal({ results, projectId, onClose }: {
-  results: ObjectResult[]; projectId: string; onClose: () => void;
+interface ProcMatch { object: ObjectResult; proc: ProcInfo; vsUrl: string | null; }
+
+function findProcMatches(results: ObjectResult[], affObjs: string[], affProcs: string[], wsPath?: string): ProcMatch[] {
+  // Strip AI-added suffixes like "(2p,20L)" and quotes
+  const cleanName = (s: string) => s.replace(/\s*\(\d+p,\d+L\)$/, '').trim().replace(/^["']|["']$/g, '');
+
+  // Parse affected object names: "Codeunit \"BC OnPrem File Functions\"" → "BC OnPrem File Functions"
+  const objNames = affObjs.map((o) => {
+    const m = o.match(/"([^"]+)"/);
+    return m ? m[1].toLowerCase() : o.toLowerCase();
+  });
+
+  const matches: ProcMatch[] = [];
+  for (const rawProc of affProcs) {
+    const procName = cleanName(rawProc).toLowerCase();
+    // Search in affected objects first, then all results
+    const searchIn = objNames.length > 0
+      ? results.filter((r) => objNames.some((n) => r.objectName.toLowerCase().includes(n) || n.includes(r.objectName.toLowerCase())))
+      : results;
+    const candidates = searchIn.length > 0 ? searchIn : results;
+    for (const r of candidates) {
+      const proc = r.procedures.find((p) => p.name.toLowerCase() === procName);
+      if (proc) {
+        const vsUrl = wsPath && proc.startLine
+          ? `vscode://file/${[wsPath, r.filePath].join('/').replace(/\\/g, '/').replace(/\/+/g, '/')}:${proc.startLine}`
+          : null;
+        matches.push({ object: r, proc, vsUrl });
+        break;
+      }
+    }
+  }
+  return matches;
+}
+
+function ProcComparePanel({ matches }: { matches: ProcMatch[] }) {
+  if (matches.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50/50 dark:border-violet-800 dark:bg-violet-900/10">
+      <div className="flex items-center gap-2 border-b border-violet-200 px-3 py-2 dark:border-violet-800">
+        <FileCode2 size={12} className="text-violet-500" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">Procedure Comparison</span>
+      </div>
+      <div className="grid gap-2 p-3" style={{ gridTemplateColumns: `repeat(${Math.min(matches.length, 3)}, 1fr)` }}>
+        {matches.map((m, i) => (
+          <div key={i} className="flex flex-col gap-1.5 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
+            <div className="font-mono text-xs font-bold text-gray-800 dark:text-gray-100 truncate" title={m.proc.name}>{m.proc.name}</div>
+            <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">{m.object.objectType} &ldquo;{m.object.objectName}&rdquo;</div>
+            <div className="text-[10px] font-mono text-gray-400 truncate" title={m.object.filePath}>{m.object.filePath.split('/').pop()}</div>
+            <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] text-gray-500">
+              <span className="flex items-center gap-0.5">📏 {m.proc.lineCount} lines</span>
+              <span className="flex items-center gap-0.5">🔢 {m.proc.paramCount} params</span>
+              <span className="flex items-center gap-0.5">📍 :{m.proc.startLine}</span>
+            </div>
+            {m.vsUrl ? (
+              <a href={m.vsUrl} title="Open in VS Code" className="mt-1 flex items-center justify-center gap-1.5 rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400">
+                <Code2 size={10} /> Open in VS Code
+              </a>
+            ) : (
+              <span className="mt-1 rounded border border-gray-100 px-2 py-1 text-center text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600">Set workspace path for VS Code link</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
+  results: ObjectResult[]; projectId: string; localWorkspacePath?: string; onClose: () => void;
 }) {
   const [findings, setFindings] = useState<SemanticFinding[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<'all' | 'custom'>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [listView, setListView] = useState<'flat' | 'tree'>('flat');
+  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  const [expandedFinding, setExpandedFinding] = useState<number | null>(null);
 
   const targets = mode === 'all' ? results : results.filter((r) => selected.has(`${r.objectType}|${r.objectName}`));
 
   async function scan() {
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setExpandedFinding(null);
     try {
       const res = await api.post<{ data: { findings: SemanticFinding[] } }>(`/api/projects/${projectId}/al-health/ai-semantic`, {
         objects: targets.map((o) => ({ objectType: o.objectType, objectName: o.objectName, filePath: o.filePath, procedures: o.procedures })),
@@ -379,10 +449,30 @@ function AiSemanticModal({ results, projectId, onClose }: {
   }
 
   function toggle(key: string) { setSelected((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; }); }
+  function toggleType(t: string) { setExpandedTypes((p) => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n; }); }
+
+  // Group objects by objectType for tree view
+  const objectsByType = results.reduce<Record<string, ObjectResult[]>>((acc, r) => {
+    if (!acc[r.objectType]) acc[r.objectType] = [];
+    acc[r.objectType].push(r);
+    return acc;
+  }, {});
+
+  function renderObjectItem(r: ObjectResult) {
+    const k = `${r.objectType}|${r.objectName}`;
+    const checked = mode === 'all' || selected.has(k);
+    return (
+      <label key={k} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs', mode === 'custom' && selected.has(k) ? 'bg-violet-50 dark:bg-violet-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800')}>
+        <input type="checkbox" disabled={mode === 'all'} checked={checked} onChange={() => toggle(k)} className="accent-violet-500" />
+        <span className="truncate text-gray-700 dark:text-gray-300" title={r.objectName}>{r.objectName}</span>
+      </label>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex h-[80vh] w-full max-w-3xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+      <div className="flex h-[85vh] w-full max-w-4xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+        {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <Brain size={16} className="text-violet-500" />
@@ -394,22 +484,43 @@ function AiSemanticModal({ results, projectId, onClose }: {
 
         <div className="flex flex-1 overflow-hidden">
           {/* Left: object selector */}
-          <div className="flex w-56 shrink-0 flex-col border-r border-gray-100 dark:border-gray-800">
-            <div className="flex gap-1 border-b border-gray-100 p-2 dark:border-gray-800">
-              <button onClick={() => setMode('all')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'all' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>All</button>
-              <button onClick={() => setMode('custom')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'custom' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>Select</button>
+          <div className="flex w-60 shrink-0 flex-col border-r border-gray-100 dark:border-gray-800">
+            {/* Mode + view toggles */}
+            <div className="space-y-1 border-b border-gray-100 p-2 dark:border-gray-800">
+              <div className="flex gap-1">
+                <button onClick={() => setMode('all')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'all' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>All</button>
+                <button onClick={() => setMode('custom')} className={cn('flex-1 rounded py-1 text-xs font-medium', mode === 'custom' ? 'bg-violet-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800')}>Select</button>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={() => setListView('flat')} title="Flat list" className={cn('flex flex-1 items-center justify-center gap-1 rounded py-1 text-xs', listView === 'flat' ? 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800')}>
+                  <List size={11} /> Flat
+                </button>
+                <button onClick={() => { setListView('tree'); setExpandedTypes(new Set(Object.keys(objectsByType))); }} title="Tree view" className={cn('flex flex-1 items-center justify-center gap-1 rounded py-1 text-xs', listView === 'tree' ? 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800')}>
+                  <FolderTree size={11} /> Tree
+                </button>
+              </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-              {results.map((r) => {
-                const k = `${r.objectType}|${r.objectName}`;
-                const checked = mode === 'all' || selected.has(k);
-                return (
-                  <label key={k} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs', mode === 'custom' && selected.has(k) ? 'bg-violet-50 dark:bg-violet-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800')}>
-                    <input type="checkbox" disabled={mode === 'all'} checked={checked} onChange={() => toggle(k)} className="accent-violet-500" />
-                    <span className="truncate text-gray-700 dark:text-gray-300" title={r.objectName}>{r.objectName}</span>
-                  </label>
-                );
-              })}
+
+            {/* Object list */}
+            <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
+              {listView === 'flat'
+                ? results.map((r) => renderObjectItem(r))
+                : Object.entries(objectsByType).sort().map(([type, objs]) => (
+                    <div key={type}>
+                      <button
+                        onClick={() => toggleType(type)}
+                        className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs font-semibold text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800"
+                      >
+                        {expandedTypes.has(type) ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                        <span className="rounded bg-amber-50 px-1 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">{type}</span>
+                        <span className="ml-auto text-[10px] text-gray-400">{objs.length}</span>
+                      </button>
+                      {expandedTypes.has(type) && (
+                        <div className="ml-3 space-y-0.5">{objs.map((r) => renderObjectItem(r))}</div>
+                      )}
+                    </div>
+                  ))
+              }
             </div>
           </div>
 
@@ -418,7 +529,7 @@ function AiSemanticModal({ results, projectId, onClose }: {
             {findings.length === 0 && !loading && !error && (
               <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
                 <Brain size={36} className="text-gray-300 dark:text-gray-600" />
-                <p className="text-sm text-gray-500">Scan {targets.length} objects to detect semantic duplicates, naming inconsistencies and patterns that static rules can&apos;t find.</p>
+                <p className="text-sm text-gray-500">Scan {targets.length} objects to detect semantic duplicates, naming inconsistencies, and patterns that static rules can&apos;t find.</p>
                 <button onClick={scan} disabled={targets.length === 0} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
                   <Brain size={14} /> Scan {targets.length} Objects
                 </button>
@@ -433,17 +544,49 @@ function AiSemanticModal({ results, projectId, onClose }: {
                   <button onClick={scan} className="flex items-center gap-1 text-xs text-violet-600 hover:underline"><Brain size={12} /> Re-scan</button>
                 </div>
                 <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-                  {findings.map((f, i) => (
-                    <div key={i} className="p-4 space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', f.severity === 'warning' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300')}>{f.type}</span>
-                        <span className="font-medium text-sm text-gray-800 dark:text-gray-200">{f.message}</span>
+                  {findings.map((f, i) => {
+                    const isExpandable = (f.type === 'duplicate' || f.type === 'naming') && (f.affectedProcedures?.length ?? 0) > 0;
+                    const isExpanded = expandedFinding === i;
+                    const procMatches = isExpanded
+                      ? findProcMatches(results, f.affectedObjects ?? [], f.affectedProcedures ?? [], localWorkspacePath)
+                      : [];
+
+                    return (
+                      <div key={i} className={cn('px-4 py-3 space-y-2', isExpandable && 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50')}
+                        onClick={() => isExpandable && setExpandedFinding(isExpanded ? null : i)}>
+                        <div className="flex items-start gap-2">
+                          <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase', f.type === 'duplicate' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300' : f.type === 'naming' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300')}>{f.type}</span>
+                          <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200">{f.message}</span>
+                          {isExpandable && (
+                            <span className="ml-auto shrink-0 text-[10px] text-violet-500">{isExpanded ? '▲ hide' : '▼ compare'}</span>
+                          )}
+                        </div>
+
+                        {/* Affected objects */}
+                        {f.affectedObjects && f.affectedObjects.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {f.affectedObjects.map((o, j) => (
+                              <span key={j} className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] dark:bg-gray-800 dark:text-gray-400">{o}</span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Affected procedures */}
+                        {f.affectedProcedures && f.affectedProcedures.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {f.affectedProcedures.map((p, j) => (
+                              <span key={j} className="rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">{p}</span>
+                            ))}
+                          </div>
+                        )}
+
+                        {f.suggestion && <p className="text-xs text-gray-500 dark:text-gray-400">{f.suggestion}</p>}
+
+                        {/* Comparison panel (inline, shown when expanded) */}
+                        {isExpanded && <ProcComparePanel matches={procMatches} />}
                       </div>
-                      {f.affectedObjects && f.affectedObjects.length > 0 && <div className="flex flex-wrap gap-1">{f.affectedObjects.map((o, j) => <span key={j} className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] dark:bg-gray-800 dark:text-gray-400">{o}</span>)}</div>}
-                      {f.affectedProcedures && f.affectedProcedures.length > 0 && <div className="flex flex-wrap gap-1">{f.affectedProcedures.map((p, j) => <span key={j} className="rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700 dark:bg-violet-900/20 dark:text-violet-300">{p}</span>)}</div>}
-                      {f.suggestion && <p className="text-xs text-gray-500 dark:text-gray-400">{f.suggestion}</p>}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -844,7 +987,7 @@ export function ALCodeHealthView({ projectId }: Props) {
       )}
 
       {/* AI Semantic modal */}
-      {semanticModal && <AiSemanticModal results={results} projectId={projectId} onClose={() => setSemanticModal(false)} />}
+      {semanticModal && <AiSemanticModal results={results} projectId={projectId} localWorkspacePath={localWorkspacePath} onClose={() => setSemanticModal(false)} />}
 
       {/* AI Explain modal */}
       {aiModal && <AiExplainModal issue={aiModal.issue} object={aiModal.object} projectId={projectId} onClose={() => setAiModal(null)} />}
