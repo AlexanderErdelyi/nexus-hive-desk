@@ -330,7 +330,7 @@ export async function projectRoutes(app: FastifyInstance) {
           syncChangedAt: syncNow,
           syncChangeType: 'added',
         })),
-        skipDuplicates: true,
+        // Note: skipDuplicates not supported by SQLite; newUnits is already deduplicated above
       });
     }
     const added = newUnits.length;
