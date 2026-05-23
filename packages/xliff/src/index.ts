@@ -116,11 +116,13 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
   // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
   xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-  // Fix 2 — unescaped `"` inside trans-unit id and note attribute values.
-  // Both can contain AL object/field names that the BC XLIFF generator
-  // sometimes emits without proper &quot; escaping.
+  // Fix 2 — unescaped `"` inside attribute values.
+  // BC XLIFF generator sometimes emits AL object/field names without proper &quot; escaping
+  // in trans-unit id and note attrs, and occasionally in <note> element from/annotates attrs.
   xml = fixAttrQuotes(xml, 'id');
   xml = fixAttrQuotes(xml, 'note');
+  xml = fixAttrQuotes(xml, 'from');
+  xml = fixAttrQuotes(xml, 'annotates');
 
   return xml;
 }
@@ -138,6 +140,11 @@ export function parseXliff(xmlContent: string): ParsedXliff {
     const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
     if (retryResult !== true) {
       const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
+      // Log the lines around the error to help diagnose remaining issues
+      const lines = sanitized.split('\n');
+      const errLine = err.line - 1; // 0-based
+      const context = lines.slice(Math.max(0, errLine - 2), errLine + 3).join('\n');
+      console.error(`[XLIFF parse error] line ${err.line}, col ${err.col}: ${err.msg}\nContext:\n${context}`);
       throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}`);
     }
     xmlContent = sanitized;
