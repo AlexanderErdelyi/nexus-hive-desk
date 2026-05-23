@@ -304,7 +304,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [aiReviewing, setAiReviewing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
-  const [tmSuggestions, setTmSuggestions] = useState<Map<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>>>(new Map());
+  const [tmSuggestions, setTmSuggestions] = useState<Map<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>>>(new Map());
   const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
   const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
 
@@ -405,7 +405,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
         projectId,
       }
     ).then((res) => {
-      const map = new Map<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>>();
+      const map = new Map<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>>();
       for (const t of untranslated) {
         const hits = res.data[t.source];
         if (hits?.length) map.set(t.id, hits);
@@ -434,7 +434,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     if (tmSuggestions.has(translation.id) || tmLoadingIds.has(translation.id)) return;
     setTmLoadingIds((prev) => new Set(prev).add(translation.id));
     try {
-      const res = await api.post<{ data: Record<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>> }>(
+      const res = await api.post<{ data: Record<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>> }>(
         '/api/translation-memory/lookup',
         { sources: [translation.source], sourceLanguage: currentFile.sourceLanguage, targetLanguage: currentFile.targetLanguage, projectId }
       );
@@ -1421,6 +1421,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                                   <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={suggestion.target}>
                                     {suggestion.target}
                                   </span>
+                                  {suggestion.sourceText !== translation.source && (
+                                    <span className="shrink-0 text-xs italic text-gray-400 dark:text-gray-500" title={`TM matched from: "${suggestion.sourceText}"`}>
+                                      from: {suggestion.sourceText.length > 20 ? suggestion.sourceText.slice(0, 20) + '…' : suggestion.sourceText}
+                                    </span>
+                                  )}
                                   <button
                                     onClick={() => {
                                       handleEdit(translation.id, 'target', suggestion.target);

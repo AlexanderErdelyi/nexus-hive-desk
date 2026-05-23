@@ -62,34 +62,51 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       },
     });
 
-    const results: Record<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>> = {};
+    const results: Record<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>> = {};
 
     for (const source of sources) {
-      const candidates: Array<{ target: string; score: number; usageCount: number; projectId: string | null }> = [];
+      type Candidate = { target: string; textScore: number; usageCount: number; sourceText: string; projectId: string | null };
+      const candidates: Candidate[] = [];
 
       for (const entry of entries) {
         const score = similarity(source, entry.source);
         if (score >= FUZZY_THRESHOLD) {
-          // Merge into existing candidate with same target (keep highest score + combined usageCount)
+          // Merge into existing candidate with same target (keep best score + combined usageCount)
           const existing = candidates.find((c) => c.target === entry.target);
           if (existing) {
-            if (score > existing.score) existing.score = Math.round(score * 100) / 100;
+            if (score > existing.textScore) {
+              existing.textScore = score;
+              existing.sourceText = entry.source; // track source of best-scoring match
+            }
             existing.usageCount += entry.usageCount;
             if (entry.projectId !== null) existing.projectId = entry.projectId;
           } else {
-            candidates.push({ target: entry.target, score: Math.round(score * 100) / 100, usageCount: entry.usageCount, projectId: entry.projectId });
+            candidates.push({ target: entry.target, textScore: score, usageCount: entry.usageCount, sourceText: entry.source, projectId: entry.projectId });
           }
         }
       }
 
-      // Sort: score DESC, then project-scoped first, then usageCount DESC; return top 3
-      candidates.sort((a, b) =>
+      if (!candidates.length) continue;
+
+      // Frequency-weighted score: most-common candidate keeps its text score,
+      // less-common candidates are penalized. Formula: textScore × (0.6 + 0.4 × relativeFreq)
+      const maxCount = Math.max(...candidates.map((c) => c.usageCount));
+      const weighted = candidates.map((c) => ({
+        target: c.target,
+        score: Math.round(c.textScore * (0.6 + 0.4 * (c.usageCount / maxCount)) * 100) / 100,
+        usageCount: c.usageCount,
+        sourceText: c.sourceText,
+        projectId: c.projectId,
+      }));
+
+      // Sort: weighted score DESC, then project-scoped first, then usageCount DESC; return top 3
+      weighted.sort((a, b) =>
         b.score - a.score ||
         (b.projectId !== null ? 1 : 0) - (a.projectId !== null ? 1 : 0) ||
         b.usageCount - a.usageCount
       );
 
-      if (candidates.length) results[source] = candidates.slice(0, 3);
+      results[source] = weighted.slice(0, 3);
     }
 
     return { data: results };
@@ -129,6 +146,15 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'not_found', message: 'Entry not found' });
     }
   });
+
+  // DELETE /all?projectId=... — purge all TM entries for a project (to allow re-generation)
+  app.delete<{ Querystring: { projectId?: string } }>('/all', async (req, reply) => {
+    const { projectId } = req.query;
+    if (!projectId) return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
+    const { count } = await prisma.translationMemory.deleteMany({ where: { projectId } });
+    return { deleted: count };
+  });
+
 
   // POST /bulk-delete — delete multiple TM entries by ID
   app.post<{ Body: { ids: string[] } }>('/bulk-delete', async (req, reply) => {

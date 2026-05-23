@@ -379,6 +379,7 @@ export function TranslationMemoryView({ projectId }: Props) {
   const [showAdd, setShowAdd] = useState(false);
   const [showPopulate, setShowPopulate] = useState(false);
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [importing, setImporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -412,6 +413,17 @@ export function TranslationMemoryView({ projectId }: Props) {
       qc.invalidateQueries({ queryKey: ['tm', projectId] });
     },
     onError: () => toast.error('Delete failed'),
+  });
+
+  const deleteAllMut = useMutation({
+    mutationFn: () => api.delete(`/api/translation-memory/all?projectId=${projectId}`),
+    onSuccess: (res: { deleted: number }) => {
+      toast.success(`Deleted ${res.deleted} TM entries. Re-populate to rebuild the library.`);
+      setConfirmDeleteAll(false);
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['tm', projectId] });
+    },
+    onError: () => toast.error('Delete all failed'),
   });
 
   const patchMut = useMutation({
@@ -521,6 +533,14 @@ export function TranslationMemoryView({ projectId }: Props) {
           className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100 dark:border-teal-800/40 dark:bg-teal-900/20 dark:text-teal-400 dark:hover:bg-teal-900/40"
         >
           <RefreshCw size={14} /> Populate from Translations
+        </button>
+
+        <button
+          onClick={() => setConfirmDeleteAll(true)}
+          className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
+          title="Delete all TM entries for this project so you can re-populate from scratch"
+        >
+          <Trash2 size={14} /> Delete All
         </button>
 
         <button
@@ -687,6 +707,26 @@ export function TranslationMemoryView({ projectId }: Props) {
               <button onClick={() => deleteMut.mutate(confirmDeleteIds)} disabled={deleteMut.isPending}
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
                 {deleteMut.isPending ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All confirm */}
+      {confirmDeleteAll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-900">
+            <h2 className="mb-2 text-base font-semibold text-gray-900 dark:text-gray-100">Delete ALL TM entries?</h2>
+            <p className="mb-5 text-sm text-gray-500 dark:text-gray-400">
+              This will remove all project-scoped translation memory entries. You can re-populate from translations afterwards. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmDeleteAll(false)}
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800">Cancel</button>
+              <button onClick={() => deleteAllMut.mutate()} disabled={deleteAllMut.isPending}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
+                {deleteAllMut.isPending ? 'Deleting…' : 'Delete All'}
               </button>
             </div>
           </div>
