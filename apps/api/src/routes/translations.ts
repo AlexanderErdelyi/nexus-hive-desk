@@ -41,9 +41,11 @@ export async function translationRoutes(app: FastifyInstance) {
     // Only computed when qualityIssuesOnly=true.
     let sameAsSourceIds = new Set<string>();
     let inconsistentIds = new Set<string>();
+    // translationId → array of all distinct targets for that source (for tooltip)
+    const inconsistentVariantsMap = new Map<string, string[]>();
 
     if (qualityIssuesOnly === 'true') {
-      // Single fast O(n) scan — fetch all (id, source, target) for the scope,
+      // Single fast O(n) scan — fetch all (id, source, target, suppressedQualityIssues) for the scope,
       // then compute same-as-source and inconsistency in JS (avoids correlated subqueries).
       const allRows = await prisma.translation.findMany({
         where: {
@@ -51,14 +53,14 @@ export async function translationRoutes(app: FastifyInstance) {
           ...(projectId   ? { projectId }   : {}),
           NOT: { target: '' },
         },
-        select: { id: true, source: true, target: true },
+        select: { id: true, source: true, target: true, suppressedQualityIssues: true },
       });
 
       // Group by source: track IDs where target==source vs. target!=source, and all distinct targets
-      const bySource = new Map<string, { sameIds: string[]; diffIds: string[]; targets: Set<string> }>();
+      const bySource = new Map<string, { sameIds: string[]; diffIds: string[]; targets: Set<string>; targetsByCount: Map<string, number> }>();
       for (const row of allRows) {
         if (!bySource.has(row.source)) {
-          bySource.set(row.source, { sameIds: [], diffIds: [], targets: new Set() });
+          bySource.set(row.source, { sameIds: [], diffIds: [], targets: new Set(), targetsByCount: new Map() });
         }
         const g = bySource.get(row.source)!;
         if (row.source === row.target) {
@@ -66,6 +68,7 @@ export async function translationRoutes(app: FastifyInstance) {
         } else {
           g.diffIds.push(row.id);
           g.targets.add(row.target);
+          g.targetsByCount.set(row.target, (g.targetsByCount.get(row.target) ?? 0) + 1);
         }
       }
 
@@ -76,7 +79,14 @@ export async function translationRoutes(app: FastifyInstance) {
         }
         // Inconsistent: 2+ distinct real targets for the same source
         if (g.targets.size > 1) {
-          for (const id of g.diffIds) inconsistentIds.add(id);
+          // Build sorted variant list: "Target (×N)" sorted by count desc
+          const variants = [...g.targetsByCount.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([t, n]) => `${t} (×${n})`);
+          for (const id of g.diffIds) {
+            inconsistentIds.add(id);
+            inconsistentVariantsMap.set(id, variants);
+          }
         }
       }
 
@@ -140,42 +150,61 @@ export async function translationRoutes(app: FastifyInstance) {
     if (qualityIssuesOnly !== 'true') {
       // Build source → Set<target> map from page items for cheap page-local inconsistency detection
       const pageSourceTargets = new Map<string, Set<string>>();
+      const pageSourceTargetCounts = new Map<string, Map<string, number>>();
       for (const item of items) {
         if (item.target && item.source !== item.target) {
           if (!pageSourceTargets.has(item.source)) pageSourceTargets.set(item.source, new Set());
           pageSourceTargets.get(item.source)!.add(item.target);
+          if (!pageSourceTargetCounts.has(item.source)) pageSourceTargetCounts.set(item.source, new Map());
+          const cm = pageSourceTargetCounts.get(item.source)!;
+          cm.set(item.target, (cm.get(item.target) ?? 0) + 1);
         }
       }
       for (const item of items) {
         const targets = pageSourceTargets.get(item.source);
-        if (targets && targets.size > 1) inconsistentIds.add(item.id);
+        if (targets && targets.size > 1) {
+          inconsistentIds.add(item.id);
+          const cm = pageSourceTargetCounts.get(item.source)!;
+          const variants = [...cm.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} (×${n})`);
+          inconsistentVariantsMap.set(item.id, variants);
+        }
       }
     }
 
     const annotated = items.map((item) => {
-      const issues: string[] = [];
-      if (item.state === 'needs-review-translation') issues.push('ai-review');
+      const suppressed: string[] = JSON.parse((item as any).suppressedQualityIssues ?? '[]');
+      const allIssues: string[] = [];
+      if (item.state === 'needs-review-translation') allIssues.push('ai-review');
       // Same-as-source: only flag when pre-computed set says it's translatable elsewhere
       if (item.target && sameAsSourceIds.has(item.id)) {
-        issues.push('same-as-source');
+        allIssues.push('same-as-source');
       }
       // Inconsistent: same source has multiple distinct translations
       if (inconsistentIds.has(item.id)) {
-        issues.push('inconsistent-translation');
+        allIssues.push('inconsistent-translation');
       }
       // Placeholder mismatch: count {N}, %N, {{var}} tokens in source vs target
       const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
       const srcPh = (item.source.match(phRegex) ?? []).sort();
       const tgtPh = (item.target.match(phRegex) ?? []).sort();
       if (srcPh.length !== tgtPh.length || srcPh.join() !== tgtPh.join()) {
-        if (srcPh.length > 0) issues.push('placeholder-mismatch');
+        if (srcPh.length > 0) allIssues.push('placeholder-mismatch');
       }
       // Length anomaly: target much shorter or longer than source (ignore very short strings)
       if (item.source.length > 15 && item.target.length > 0) {
         const ratio = item.target.length / item.source.length;
-        if (ratio < 0.2 || ratio > 5) issues.push('length-anomaly');
+        if (ratio < 0.2 || ratio > 5) allIssues.push('length-anomaly');
       }
-      return { ...item, qualityIssues: issues };
+      const activeIssues = allIssues.filter((i) => !suppressed.includes(i));
+      const qualityIssueMeta: Record<string, unknown> = {};
+      const variants = inconsistentVariantsMap.get(item.id);
+      if (variants) qualityIssueMeta['inconsistentVariants'] = variants;
+      return {
+        ...item,
+        qualityIssues: activeIssues,
+        suppressedQualityIssues: suppressed,
+        qualityIssueMeta: Object.keys(qualityIssueMeta).length > 0 ? qualityIssueMeta : undefined,
+      };
     });
 
     return {
@@ -200,14 +229,17 @@ export async function translationRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string };
-    Body: { target?: string; state?: TranslationState };
+    Body: { target?: string; state?: TranslationState; suppressedQualityIssues?: string[] };
   }>('/:id', async (req) => {
-    const { target, state } = req.body;
+    const { target, state, suppressedQualityIssues } = req.body;
     const updated = await prisma.translation.update({
       where: { id: req.params.id },
       data: {
         ...(target !== undefined ? { target } : {}),
         ...(state ? { state } : {}),
+        ...(suppressedQualityIssues !== undefined
+          ? { suppressedQualityIssues: JSON.stringify(suppressedQualityIssues) }
+          : {}),
         updatedAt: new Date(),
       },
     });

@@ -21,6 +21,8 @@ interface Translation {
   note?: string;
   developerNote?: string;
   qualityIssues?: string[];
+  suppressedQualityIssues?: string[];
+  qualityIssueMeta?: { inconsistentVariants?: string[] };
   syncChangedAt?: string | null;
   syncChangeType?: 'added' | 'source-changed' | 'removed' | null;
 }
@@ -290,6 +292,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [filterState, setFilterState] = useState<TranslationState | 'all' | 'untranslated' | 'quality-issues' | 'since-last-sync'>(
     (initialFilter as TranslationState | 'all' | 'untranslated' | 'quality-issues' | 'since-last-sync') ?? 'untranslated'
   );
+  const [showAcceptedIssues, setShowAcceptedIssues] = useState(false);
   const [objectType, setObjectType] = useState('');
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
@@ -384,6 +387,13 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
       setEdits(new Map());
       toast.success('Translations saved');
     },
+    onError: (error) => toast.error(getErrorMessage(error)),
+  });
+
+  const suppressIssueMutation = useMutation({
+    mutationFn: ({ id, suppressedQualityIssues }: { id: string; suppressedQualityIssues: string[] }) =>
+      api.patch(`/api/translations/${id}`, { suppressedQualityIssues }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['translations', projectId] }),
     onError: (error) => toast.error(getErrorMessage(error)),
   });
 
@@ -1116,6 +1126,20 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
             <AlertTriangle size={11} />
             Quality Issues
           </button>
+          {/* Show accepted issues toggle — only visible in quality-issues mode */}
+          {filterState === 'quality-issues' && (
+            <button
+              onClick={() => setShowAcceptedIssues((v) => !v)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                showAcceptedIssues
+                  ? 'bg-gray-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'
+              )}
+            >
+              👁 {showAcceptedIssues ? 'Hide accepted' : 'Show accepted'}
+            </button>
+          )}
           {/* Since last sync filter — only show if file has been synced */}
           {currentFile?.lastSyncAt && (
             <button
@@ -1230,6 +1254,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                 if (srcPh.length > 0 && (srcPh.length !== tgtPh.length || srcPh.join() !== tgtPh.join())) {
                   if (!qualityIssues.includes('placeholder-mismatch')) qualityIssues.push('placeholder-mismatch');
                 }
+                const suppressed = translation.suppressedQualityIssues ?? [];
+                // In quality-issues mode, skip rows where all issues are suppressed (unless showAcceptedIssues)
+                if (filterState === 'quality-issues' && !showAcceptedIssues && qualityIssues.length === 0 && suppressed.length > 0) {
+                  return null;
+                }
 
                 return (
                   <tr
@@ -1311,7 +1340,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                         </div>
                       )}
                       {/* Quality issue badges */}
-                      {qualityIssues.length > 0 && (
+                      {(qualityIssues.length > 0 || (showAcceptedIssues && suppressed.length > 0)) && (
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {qualityIssues.map((issue) => {
                             const cfg: Record<string, { label: string; color: string }> = {
@@ -1322,12 +1351,37 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                               'length-anomaly':           { label: '📏 Length anomaly', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
                             };
                             const c = cfg[issue] ?? { label: issue, color: 'bg-gray-100 text-gray-600' };
+                            const variants = issue === 'inconsistent-translation' ? translation.qualityIssueMeta?.inconsistentVariants : undefined;
                             return (
-                              <span key={issue} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${c.color}`}>
+                              <span
+                                key={issue}
+                                className={`group/badge relative rounded-full px-2 py-0.5 text-[10px] font-medium ${c.color}`}
+                                title={variants ? `Conflicting translations:\n${variants.join('\n')}` : undefined}
+                              >
                                 {c.label}
+                                {variants && (
+                                  <span className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden min-w-[160px] max-w-[300px] rounded-lg bg-gray-900 px-2.5 py-1.5 text-[10px] text-white shadow-lg group-hover/badge:block dark:bg-gray-700">
+                                    <span className="font-semibold block mb-0.5">Conflicting translations:</span>
+                                    {variants.map((v) => <span key={v} className="block">{v}</span>)}
+                                  </span>
+                                )}
                               </span>
                             );
                           })}
+                          {/* Accept buttons per active issue */}
+                          {qualityIssues.filter(i => i !== 'ai-review').map((issue) => (
+                            <button
+                              key={`accept-${issue}`}
+                              onClick={() => {
+                                const next = [...suppressed, issue];
+                                suppressIssueMutation.mutate({ id: translation.id, suppressedQualityIssues: next });
+                              }}
+                              className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 hover:bg-green-100 hover:text-green-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-green-900/40 dark:hover:text-green-300"
+                              title={`Accept this "${issue}" issue — won't appear in quality issues list`}
+                            >
+                              ✓ Accept
+                            </button>
+                          ))}
                           {/* Quick fix: approve AI review */}
                           {qualityIssues.includes('ai-review') && (
                             <button
@@ -1346,6 +1400,31 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                               Flag for retranslation
                             </button>
                           )}
+                          {/* Accepted (suppressed) issues — shown when "Show accepted" is on */}
+                          {showAcceptedIssues && suppressed.map((issue) => {
+                            const cfg: Record<string, string> = {
+                              'same-as-source':           '≡ Same as source',
+                              'inconsistent-translation': '⇄ Inconsistent',
+                              'placeholder-mismatch':     '⚠ Placeholder mismatch',
+                              'length-anomaly':           '📏 Length anomaly',
+                            };
+                            return (
+                              <span key={`sup-${issue}`} className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-400 line-through dark:bg-gray-800 dark:text-gray-600">
+                                {cfg[issue] ?? issue}
+                                <button
+                                  onClick={() => {
+                                    const next = suppressed.filter((i) => i !== issue);
+                                    suppressIssueMutation.mutate({ id: translation.id, suppressedQualityIssues: next });
+                                  }}
+                                  className="ml-0.5 no-underline text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                                  title="Restore this issue"
+                                  style={{ textDecoration: 'none' }}
+                                >
+                                  ↺
+                                </button>
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                       {reviewResults.has(translation.id) && (

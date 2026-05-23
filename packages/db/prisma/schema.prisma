@@ -186,8 +186,9 @@ model Translation {
   state           String    @default("needs-translation")
   note            String?
   developerNote   String?
-  syncChangedAt   DateTime? // set when this unit was added or its source changed during a repo sync
-  syncChangeType  String?   // 'added' | 'source-changed' | 'removed'
+  syncChangedAt             DateTime? // set when this unit was added or its source changed during a repo sync
+  syncChangeType            String?   // 'added' | 'source-changed' | 'removed'
+  suppressedQualityIssues   String    @default("[]") // JSON array of suppressed issue keys
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   xliffFile       XliffFile @relation(fields: [xliffFileId], references: [id], onDelete: Cascade)
