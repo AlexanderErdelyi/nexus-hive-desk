@@ -37,48 +37,45 @@ export async function translationRoutes(app: FastifyInstance) {
         OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }],
       });
     }
-    // ── Quality issue sets (used for filtering AND annotation) ───────────────
-    // Computed once per request for the current file/project scope.
+    // ── Quality issue sets ────────────────────────────────────────────────────
+    // Only computed when qualityIssuesOnly=true (expensive on large tables).
+    // For annotation on other pages, we use the page-local items instead.
     const fileFilter = xliffFileId ? Prisma.sql`AND "xliffFileId" = ${xliffFileId}` : Prisma.empty;
     const projFilter = projectId   ? Prisma.sql`AND "projectId"   = ${projectId}`   : Prisma.empty;
-
-    // 1. Same-as-source ONLY when that source text is translated differently elsewhere
-    //    (i.e. it CAN be translated — this entry was just missed/skipped).
-    //    If every occurrence has the same source=target (e.g. "PDF", "Delcredere %") → not flagged.
-    const sasWithSiblingRows = await prisma.$queryRaw<{ id: string; source: string }[]>(
-      Prisma.sql`SELECT t.id, t.source FROM "Translation" t
-        WHERE t.source = t.target AND t.target != ''
-        ${fileFilter} ${projFilter}
-        AND EXISTS (
-          SELECT 1 FROM "Translation" t2
-          WHERE t2.source = t.source AND t2.target != t2.source AND t2.target != ''
-          ${fileFilter} ${projFilter}
-        )`
-    );
-    // Still exclude single-word / abbreviation entries (< 3 words) as they're often intentional
-    const sameAsSourceIds = new Set(
-      sasWithSiblingRows
-        .filter((r) => r.source.trim().split(/\s+/).length >= 3)
-        .map((r) => r.id)
-    );
-
-    // 2. Inconsistent translations: same source, 2+ distinct non-same-as-source targets.
-    //    Flags all variants so the reviewer can pick the correct one.
-    const inconsistentRows = await prisma.$queryRaw<{ id: string }[]>(
-      Prisma.sql`SELECT id FROM "Translation"
-        WHERE target != '' AND source != target
-        ${fileFilter} ${projFilter}
-        AND source IN (
-          SELECT source FROM "Translation"
-          WHERE target != '' AND source != target
-          ${fileFilter} ${projFilter}
-          GROUP BY source
-          HAVING COUNT(DISTINCT target) > 1
-        )`
-    );
-    const inconsistentIds = new Set(inconsistentRows.map((r) => r.id));
+    let sameAsSourceIds = new Set<string>();
+    let inconsistentIds = new Set<string>();
 
     if (qualityIssuesOnly === 'true') {
+      // 1. Same-as-source ONLY when that source text is translated differently elsewhere
+      const sasRows = await prisma.$queryRaw<{ id: string; source: string }[]>(
+        Prisma.sql`SELECT t.id, t.source FROM "Translation" t
+          WHERE t.source = t.target AND t.target != ''
+          ${fileFilter} ${projFilter}
+          AND EXISTS (
+            SELECT 1 FROM "Translation" t2
+            WHERE t2.source = t.source AND t2.target != t2.source AND t2.target != ''
+            ${fileFilter} ${projFilter}
+          )`
+      );
+      sameAsSourceIds = new Set(
+        sasRows.filter((r) => r.source.trim().split(/\s+/).length >= 3).map((r) => r.id)
+      );
+
+      // 2. Inconsistent translations: same source, 2+ distinct non-same-as-source targets
+      const inconRows = await prisma.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM "Translation"
+          WHERE target != '' AND source != target
+          ${fileFilter} ${projFilter}
+          AND source IN (
+            SELECT source FROM "Translation"
+            WHERE target != '' AND source != target
+            ${fileFilter} ${projFilter}
+            GROUP BY source
+            HAVING COUNT(DISTINCT target) > 1
+          )`
+      );
+      inconsistentIds = new Set(inconRows.map((r) => r.id));
+
       const qualityIds = [...new Set([...sameAsSourceIds, ...inconsistentIds])];
       andClauses.push({
         OR: [
@@ -134,14 +131,31 @@ export async function translationRoutes(app: FastifyInstance) {
     ]);
 
     // Annotate each row with detected quality issues (client can render badges)
+    // For quality-only pages the sets are pre-computed above.
+    // For other pages, derive inconsistency from the current page items only.
+    if (qualityIssuesOnly !== 'true') {
+      // Build source → Set<target> map from page items for cheap page-local inconsistency detection
+      const pageSourceTargets = new Map<string, Set<string>>();
+      for (const item of items) {
+        if (item.target && item.source !== item.target) {
+          if (!pageSourceTargets.has(item.source)) pageSourceTargets.set(item.source, new Set());
+          pageSourceTargets.get(item.source)!.add(item.target);
+        }
+      }
+      for (const item of items) {
+        const targets = pageSourceTargets.get(item.source);
+        if (targets && targets.size > 1) inconsistentIds.add(item.id);
+      }
+    }
+
     const annotated = items.map((item) => {
       const issues: string[] = [];
       if (item.state === 'needs-review-translation') issues.push('ai-review');
-      // Same-as-source: only flag when the source is known to be translatable elsewhere
+      // Same-as-source: only flag when pre-computed set says it's translatable elsewhere
       if (item.target && sameAsSourceIds.has(item.id)) {
         issues.push('same-as-source');
       }
-      // Inconsistent: same source has multiple distinct translations across the file
+      // Inconsistent: same source has multiple distinct translations
       if (inconsistentIds.has(item.id)) {
         issues.push('inconsistent-translation');
       }
