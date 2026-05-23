@@ -38,43 +38,47 @@ export async function translationRoutes(app: FastifyInstance) {
       });
     }
     // ── Quality issue sets ────────────────────────────────────────────────────
-    // Only computed when qualityIssuesOnly=true (expensive on large tables).
-    // For annotation on other pages, we use the page-local items instead.
-    const fileFilter = xliffFileId ? Prisma.sql`AND "xliffFileId" = ${xliffFileId}` : Prisma.empty;
-    const projFilter = projectId   ? Prisma.sql`AND "projectId"   = ${projectId}`   : Prisma.empty;
+    // Only computed when qualityIssuesOnly=true.
     let sameAsSourceIds = new Set<string>();
     let inconsistentIds = new Set<string>();
 
     if (qualityIssuesOnly === 'true') {
-      // 1. Same-as-source ONLY when that source text is translated differently elsewhere
-      const sasRows = await prisma.$queryRaw<{ id: string; source: string }[]>(
-        Prisma.sql`SELECT t.id, t.source FROM "Translation" t
-          WHERE t.source = t.target AND t.target != ''
-          ${fileFilter} ${projFilter}
-          AND EXISTS (
-            SELECT 1 FROM "Translation" t2
-            WHERE t2.source = t.source AND t2.target != t2.source AND t2.target != ''
-            ${fileFilter} ${projFilter}
-          )`
-      );
-      sameAsSourceIds = new Set(
-        sasRows.filter((r) => r.source.trim().split(/\s+/).length >= 3).map((r) => r.id)
-      );
+      // Single fast O(n) scan — fetch all (id, source, target) for the scope,
+      // then compute same-as-source and inconsistency in JS (avoids correlated subqueries).
+      const allRows = await prisma.translation.findMany({
+        where: {
+          ...(xliffFileId ? { xliffFileId } : {}),
+          ...(projectId   ? { projectId }   : {}),
+          NOT: { target: '' },
+        },
+        select: { id: true, source: true, target: true },
+      });
 
-      // 2. Inconsistent translations: same source, 2+ distinct non-same-as-source targets
-      const inconRows = await prisma.$queryRaw<{ id: string }[]>(
-        Prisma.sql`SELECT id FROM "Translation"
-          WHERE target != '' AND source != target
-          ${fileFilter} ${projFilter}
-          AND source IN (
-            SELECT source FROM "Translation"
-            WHERE target != '' AND source != target
-            ${fileFilter} ${projFilter}
-            GROUP BY source
-            HAVING COUNT(DISTINCT target) > 1
-          )`
-      );
-      inconsistentIds = new Set(inconRows.map((r) => r.id));
+      // Group by source: track IDs where target==source vs. target!=source, and all distinct targets
+      const bySource = new Map<string, { sameIds: string[]; diffIds: string[]; targets: Set<string> }>();
+      for (const row of allRows) {
+        if (!bySource.has(row.source)) {
+          bySource.set(row.source, { sameIds: [], diffIds: [], targets: new Set() });
+        }
+        const g = bySource.get(row.source)!;
+        if (row.source === row.target) {
+          g.sameIds.push(row.id);
+        } else {
+          g.diffIds.push(row.id);
+          g.targets.add(row.target);
+        }
+      }
+
+      for (const [source, g] of bySource) {
+        // Same-as-source: only flag if there's also at least one real translation (>= 3 words)
+        if (g.sameIds.length > 0 && g.diffIds.length > 0 && source.trim().split(/\s+/).length >= 3) {
+          for (const id of g.sameIds) sameAsSourceIds.add(id);
+        }
+        // Inconsistent: 2+ distinct real targets for the same source
+        if (g.targets.size > 1) {
+          for (const id of g.diffIds) inconsistentIds.add(id);
+        }
+      }
 
       const qualityIds = [...new Set([...sameAsSourceIds, ...inconsistentIds])];
       andClauses.push({
