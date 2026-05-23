@@ -140,13 +140,14 @@ export function parseXliff(xmlContent: string): ParsedXliff {
     const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
     if (retryResult !== true) {
       const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
-      // Log context around the error line + first chars of raw input for diagnosis
-      const lines = sanitized.split('\n');
+      // Include the raw lines around the error in the thrown message for diagnosis
+      const rawLines = xmlContent.split('\n');
+      const sanitizedLines = sanitized.split('\n');
       const errLine = err.line - 1;
-      const context = lines.slice(Math.max(0, errLine - 2), errLine + 3).join('\n');
-      const firstChars = xmlContent.substring(0, 200).replace(/\n/g, '↵');
-      console.error(`[XLIFF parse error] line ${err.line}, col ${err.col}: ${err.msg}\nFirst 200 chars: ${firstChars}\nContext:\n${context}`);
-      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}`);
+      const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+      const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}`);
+      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
     }
     xmlContent = sanitized;
   }
