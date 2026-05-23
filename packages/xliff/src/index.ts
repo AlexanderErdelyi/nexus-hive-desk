@@ -56,23 +56,71 @@ function getText(node: unknown): string {
 
 // ─── XML pre-processor ────────────────────────────────────────────────────────
 // BC Xliff Generator can produce malformed XML in several ways:
-//  1. AL object/field names with double-quote chars end up unescaped in trans-unit id values
+//  1. AL object/field names with double-quote chars end up unescaped in
+//     trans-unit id and note attribute values (e.g. note="Table "Cust." ...")
 //  2. Duplicate <?xml?> processing instructions at the top of the file
 // Both issues are fixed here before handing the content to fast-xml-parser.
+
+/**
+ * Fix unescaped double-quotes inside the value of a named XML attribute.
+ *
+ * Strategy: scan character-by-character after the opening `attr="`.
+ * A `"` is treated as the TRUE closing delimiter only when the very next
+ * characters match one of:
+ *   - whitespace then a XML name-start char (next attribute follows)
+ *   - optional whitespace then `>` or `/>`  (tag ends here)
+ * Every other `"` encountered is an embedded (unescaped) quote and is
+ * replaced with `&quot;`.
+ */
+function fixAttrQuotes(xml: string, attrName: string): string {
+  const prefix = `${attrName}="`;
+  const parts: string[] = [];
+  let pos = 0;
+
+  while (pos < xml.length) {
+    const start = xml.indexOf(prefix, pos);
+    if (start === -1) { parts.push(xml.slice(pos)); break; }
+
+    // Copy everything up to and including the opening `attr="`
+    parts.push(xml.slice(pos, start + prefix.length));
+    let i = start + prefix.length;
+    let value = '';
+
+    while (i < xml.length) {
+      const ch = xml[i];
+      if (ch !== '"') { value += ch; i++; continue; }
+
+      // Is this the TRUE closing quote?
+      const after = xml.slice(i + 1);
+      const isEnd =
+        /^\s+[a-zA-Z_:]/.test(after) ||   // next attribute: space then XML name-start
+        /^\s*\/?>/.test(after);            // end of tag: />  or  >  (with optional space)
+
+      if (isEnd) {
+        parts.push(value.replace(/"/g, '&quot;'), '"');
+        pos = i + 1;
+        break;
+      }
+      value += '"';
+      i++;
+    }
+
+    // Ran off end without finding a closing quote — just emit as-is
+    if (i >= xml.length) { parts.push(value); pos = xml.length; break; }
+  }
+
+  return parts.join('');
+}
+
 function sanitizeXmlAttributeQuotes(xml: string): string {
   // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
   xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-  // Fix 2 — unescaped `"` inside trans-unit id attribute values.
-  // We identify the TRUE closing `"` by looking for `"\s+\w` — a quote followed by
-  // whitespace then a word character (= the start of the next attribute name).
-  // This is unambiguous because an AL identifier never ends with the pattern `"\s+\w`.
-  // NOTE: No `s` flag — each <trans-unit> tag is a single line in BC XLIFF, so we
-  // must NOT let `.` match newlines (otherwise the regex spans across tags).
-  xml = xml.replace(
-    /(\bid=")(.+?)("\s+\w)/g,
-    (_, pre, val, end) => `${pre}${val.replace(/"/g, '&quot;')}${end}`,
-  );
+  // Fix 2 — unescaped `"` inside trans-unit id and note attribute values.
+  // Both can contain AL object/field names that the BC XLIFF generator
+  // sometimes emits without proper &quot; escaping.
+  xml = fixAttrQuotes(xml, 'id');
+  xml = fixAttrQuotes(xml, 'note');
 
   return xml;
 }
