@@ -62,21 +62,34 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       },
     });
 
-    const results: Record<string, { target: string; score: number; projectId: string | null }> = {};
+    const results: Record<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>> = {};
 
     for (const source of sources) {
-      let best: { target: string; score: number; projectId: string | null } | null = null;
+      const candidates: Array<{ target: string; score: number; usageCount: number; projectId: string | null }> = [];
 
       for (const entry of entries) {
         const score = similarity(source, entry.source);
         if (score >= FUZZY_THRESHOLD) {
-          if (!best || score > best.score || (score === best.score && entry.projectId !== null)) {
-            best = { target: entry.target, score: Math.round(score * 100) / 100, projectId: entry.projectId };
+          // Merge into existing candidate with same target (keep highest score + combined usageCount)
+          const existing = candidates.find((c) => c.target === entry.target);
+          if (existing) {
+            if (score > existing.score) existing.score = Math.round(score * 100) / 100;
+            existing.usageCount += entry.usageCount;
+            if (entry.projectId !== null) existing.projectId = entry.projectId;
+          } else {
+            candidates.push({ target: entry.target, score: Math.round(score * 100) / 100, usageCount: entry.usageCount, projectId: entry.projectId });
           }
         }
       }
 
-      if (best) results[source] = best;
+      // Sort: score DESC, then project-scoped first, then usageCount DESC; return top 3
+      candidates.sort((a, b) =>
+        b.score - a.score ||
+        (b.projectId !== null ? 1 : 0) - (a.projectId !== null ? 1 : 0) ||
+        b.usageCount - a.usageCount
+      );
+
+      if (candidates.length) results[source] = candidates.slice(0, 3);
     }
 
     return { data: results };
@@ -295,7 +308,7 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
     let created = 0;
     for (let i = 0; i < toCreate.length; i += CHUNK) {
       const chunk = toCreate.slice(i, i + CHUNK);
-      const result = await prisma.translationMemory.createMany({ data: chunk, skipDuplicates: true });
+      const result = await prisma.translationMemory.createMany({ data: chunk });
       created += result.count;
     }
 

@@ -304,7 +304,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [aiReviewing, setAiReviewing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
-  const [tmSuggestions, setTmSuggestions] = useState<Map<string, { target: string; score: number; projectId: string | null }>>(new Map());
+  const [tmSuggestions, setTmSuggestions] = useState<Map<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>>>(new Map());
   const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
   const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
 
@@ -405,10 +405,10 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
         projectId,
       }
     ).then((res) => {
-      const map = new Map<string, { target: string; score: number; projectId: string | null }>();
+      const map = new Map<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>>();
       for (const t of untranslated) {
-        const hit = res.data[t.source];
-        if (hit) map.set(t.id, hit);
+        const hits = res.data[t.source];
+        if (hits?.length) map.set(t.id, hits);
       }
       setTmSuggestions(map);
     }).catch(() => { /* silently ignore TM errors */ });
@@ -416,12 +416,12 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   }, [translations.map((t) => t.id).join(','), currentFile?.id]);
 
   function applyAllTmMatches() {
-    const exact = Array.from(tmSuggestions.entries()).filter(([, v]) => v.score === 1);
+    const exact = Array.from(tmSuggestions.entries()).filter(([, v]) => v[0]?.score === 1);
     if (!exact.length) { toast.info('No exact TM matches to apply'); return; }
     setEdits((prev) => {
       const next = new Map(prev);
-      for (const [id, { target }] of exact) {
-        next.set(id, { target, state: 'translated' });
+      for (const [id, suggestions] of exact) {
+        next.set(id, { target: suggestions[0].target, state: 'translated' });
       }
       return next;
     });
@@ -434,16 +434,16 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     if (tmSuggestions.has(translation.id) || tmLoadingIds.has(translation.id)) return;
     setTmLoadingIds((prev) => new Set(prev).add(translation.id));
     try {
-      const res = await api.post<{ data: Record<string, { target: string; score: number; projectId: string | null }> }>(
+      const res = await api.post<{ data: Record<string, Array<{ target: string; score: number; usageCount: number; projectId: string | null }>> }>(
         '/api/translation-memory/lookup',
         { sources: [translation.source], sourceLanguage: currentFile.sourceLanguage, targetLanguage: currentFile.targetLanguage, projectId }
       );
-      const hit = res.data[translation.source];
-      if (hit) {
-        setTmSuggestions((prev) => new Map(prev).set(translation.id, hit));
+      const hits = res.data[translation.source];
+      if (hits?.length) {
+        setTmSuggestions((prev) => new Map(prev).set(translation.id, hits));
       } else {
         // Mark as "checked, no match" with a sentinel so we don't re-fetch
-        setTmSuggestions((prev) => new Map(prev).set(translation.id, { target: '', score: 0, projectId: null }));
+        setTmSuggestions((prev) => new Map(prev).set(translation.id, []));
       }
     } catch { /* ignore */ } finally {
       setTmLoadingIds((prev) => { const s = new Set(prev); s.delete(translation.id); return s; });
@@ -763,8 +763,8 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               title="Apply all exact (100%) translation memory matches"
             >
               <span className="text-xs font-bold">TM</span>
-              {Array.from(tmSuggestions.values()).filter((v) => v.score === 1).length > 0
-                ? `Apply exact (${Array.from(tmSuggestions.values()).filter((v) => v.score === 1).length})`
+              {Array.from(tmSuggestions.values()).filter((v) => v[0]?.score === 1).length > 0
+                ? `Apply exact (${Array.from(tmSuggestions.values()).filter((v) => v[0]?.score === 1).length})`
                 : `${tmSuggestions.size} fuzzy matches`}
             </button>
           )}
@@ -1389,7 +1389,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                         const tm = tmSuggestions.get(translation.id);
                         const isLoading = tmLoadingIds.has(translation.id);
                         const isAiLoading = singleAiIds.has(translation.id);
-                        const hasTm = tm && tm.score > 0;
+                        const hasTm = tm && tm.length > 0 && tm[0].score > 0;
 
                         if (isLoading) {
                           return (
@@ -1402,28 +1402,37 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
 
                         if (hasTm) {
                           return (
-                            <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-teal-100 bg-teal-50/60 px-2 py-1.5 dark:border-teal-800/40 dark:bg-teal-900/20">
-                              <span className={cn(
-                                'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold',
-                                tm.score === 1
-                                  ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
-                                  : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                              )}>
-                                TM {Math.round(tm.score * 100)}%
-                              </span>
-                              <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={tm.target}>
-                                {tm.target}
-                              </span>
-                              <button
-                                onClick={() => {
-                                  handleEdit(translation.id, 'target', tm.target);
-                                  handleEdit(translation.id, 'state', 'translated');
-                                }}
-                                className="shrink-0 rounded bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
-                              >
-                                Apply
-                              </button>
-                            </div>
+                            <div className="mt-1.5 space-y-1">
+                              {tm.map((suggestion, i) => (
+                                <div key={i} className="flex items-center gap-2 rounded-lg border border-teal-100 bg-teal-50/60 px-2 py-1.5 dark:border-teal-800/40 dark:bg-teal-900/20">
+                                  <span className={cn(
+                                    'shrink-0 rounded px-1.5 py-0.5 text-xs font-bold',
+                                    suggestion.score === 1
+                                      ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300'
+                                      : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                                  )}>
+                                    TM {Math.round(suggestion.score * 100)}%
+                                  </span>
+                                  {suggestion.usageCount > 1 && (
+                                    <span className="shrink-0 rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-400" title={`Used ${suggestion.usageCount} times`}>
+                                      ×{suggestion.usageCount}
+                                    </span>
+                                  )}
+                                  <span className="min-w-0 flex-1 truncate text-xs text-gray-600 dark:text-gray-300" title={suggestion.target}>
+                                    {suggestion.target}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      handleEdit(translation.id, 'target', suggestion.target);
+                                      handleEdit(translation.id, 'state', 'translated');
+                                    }}
+                                    className="shrink-0 rounded bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 hover:bg-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:hover:bg-teal-900/70"
+                                    >
+                                      Apply
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
                           );
                         }
 
