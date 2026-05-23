@@ -1223,7 +1223,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                 // Compute quality issues from current row data (client-side additions on top of server annotations)
                 const qualityIssues: string[] = translation.qualityIssues ? [...translation.qualityIssues] : [];
                 if (!qualityIssues.includes('ai-review') && currentState === 'needs-review-translation') qualityIssues.push('ai-review');
-                if (!qualityIssues.includes('same-as-source') && currentTarget && currentTarget === translation.source && translation.source.trim().split(/\s+/).length >= 3) qualityIssues.push('same-as-source');
+                // same-as-source is now detected server-side with sibling awareness
                 const phRegex = /\{[\w\d]+\}|%\d+|\{\{[\w]+\}\}/g;
                 const srcPh = (translation.source.match(phRegex) ?? []).sort();
                 const tgtPh = (currentTarget.match(phRegex) ?? []).sort();
@@ -1315,10 +1315,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {qualityIssues.map((issue) => {
                             const cfg: Record<string, { label: string; color: string }> = {
-                              'ai-review':            { label: '🤖 AI review', color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
-                              'same-as-source':       { label: '≡ Same as source', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
-                              'placeholder-mismatch': { label: '⚠ Placeholder mismatch', color: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
-                              'length-anomaly':       { label: '📏 Length anomaly', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+                              'ai-review':                { label: '🤖 AI review', color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+                              'same-as-source':           { label: '≡ Same as source', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
+                              'inconsistent-translation': { label: '⇄ Inconsistent', color: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' },
+                              'placeholder-mismatch':     { label: '⚠ Placeholder mismatch', color: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
+                              'length-anomaly':           { label: '📏 Length anomaly', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
                             };
                             const c = cfg[issue] ?? { label: issue, color: 'bg-gray-100 text-gray-600' };
                             return (
