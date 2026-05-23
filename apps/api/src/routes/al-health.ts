@@ -389,43 +389,61 @@ Return JSON: { "explanation": "...", "impact": "...", "suggestion": "...", "exam
   // POST ai-semantic (detect semantic duplicates / patterns across objects)
   app.post<{
     Params: { projectId: string };
-    Body: { objects: Array<{ objectType: string; objectName: string; filePath: string; procedures: Array<{ name: string; lineCount: number; paramCount: number }> }> };
+    Body: {
+      objects: Array<{ objectType: string; objectName: string; filePath: string; procedures: Array<{ name: string; lineCount: number; paramCount: number }> }>;
+      model?: string;
+    };
   }>('/:projectId/al-health/ai-semantic', async (req, reply) => {
-    const { objects } = req.body;
+    const { objects, model: requestModel } = req.body;
     const token = process.env.GITHUB_TOKEN;
-    const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+    const model = requestModel ?? process.env.AI_MODEL ?? 'gpt-4o-mini';
     if (!token) return reply.status(503).send({ error: 'no_ai_token', message: 'AI token not configured' });
     if (!objects?.length) return reply.status(400).send({ error: 'validation', message: 'objects array required' });
 
     const summary = objects.map((o) => `${o.objectType} "${o.objectName}": [${o.procedures.map((p) => `${p.name}(${p.paramCount}p,${p.lineCount}L)`).join(', ')}]`).join('\n');
 
-    const userPrompt = `You are reviewing Business Central AL extension code. Below are objects and their procedure signatures.
-Identify: (1) procedures that likely have duplicate/overlapping logic across objects, (2) naming inconsistencies for the same operation, (3) suspicious patterns.
-Do NOT flag standard BC triggers (OnValidate, OnInsert, OnModify, OnDelete, OnAction, OnAfterGetRecord, etc.).
+    const systemPrompt = `You are an expert Business Central AL code reviewer with deep knowledge of AL language patterns and BC architecture. Respond with valid JSON only.`;
 
-Objects:
+    const userPrompt = `Analyse the following Business Central AL extension objects and their procedure signatures for code quality issues.
+
+IMPORTANT — AL-SPECIFIC PATTERNS YOU MUST UNDERSTAND AND NOT FLAG AS ISSUES:
+1. AL does not support default parameter values. The common workaround is to create an overloaded procedure with fewer parameters that simply calls the fuller version with a default value. Example:
+     procedure ExistsFile(Name: Text): Boolean  → calls → ExistsFile(Name, false)
+   This is INTENTIONAL and CORRECT AL design. Do NOT flag same-name procedures with different parameter counts as duplicates if the shorter one is clearly a convenience wrapper (typically 1-4 lines that just calls the longer one).
+2. Standard BC triggers (OnValidate, OnInsert, OnModify, OnDelete, OnAction, OnAfterGetRecord, OnRun, etc.) appear in many objects by design. Do NOT flag them.
+3. "Local" helper procedures with the same name across objects are sometimes intentional (e.g. Init, Clear, GetBaseUrl).
+
+ONLY flag genuine issues such as:
+- Two procedures in the SAME object or DIFFERENT objects that each implement similar non-trivial logic independently (both have meaningful line counts and neither just delegates to the other)
+- Inconsistent naming where different names describe the same operation (e.g. GetUser vs FetchUser vs RetrieveUser in the same codeunit)
+- Suspicious patterns like very similar long procedures (both > 20 lines) with the same parameter signature
+
+Objects to analyse:
 ${summary}
 
-Return JSON: {
+Return JSON:
+{
   "findings": [
     {
       "type": "duplicate" | "naming" | "pattern",
       "severity": "warning" | "info",
-      "message": "...",
+      "message": "concise description",
       "affectedObjects": ["ObjectType \\"Name\\""],
-      "affectedProcedures": ["ProcName"],
-      "suggestion": "..."
+      "affectedProcedures": ["ProcName(Np,ML)"],
+      "suggestion": "concrete actionable advice"
     }
   ]
-}`;
+}
+
+If there are no genuine issues, return { "findings": [] }.`;
 
     const aiRes = await fetch('https://models.inference.ai.azure.com/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        messages: [{ role: 'system', content: 'You are an expert Business Central AL code reviewer. Respond with valid JSON only.' }, { role: 'user', content: userPrompt }],
-        temperature: 0.2,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        temperature: 0.1,
         max_tokens: 2000,
         response_format: { type: 'json_object' },
       }),

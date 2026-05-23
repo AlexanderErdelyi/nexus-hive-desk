@@ -435,6 +435,15 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
   const [listView, setListView] = useState<'flat' | 'tree'>('flat');
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [expandedFinding, setExpandedFinding] = useState<number | null>(null);
+  const [selectedModel, setSelectedModel] = useState('gpt-4o');
+
+  const MODELS = [
+    { value: 'gpt-4o',       label: 'GPT-4o (Recommended)' },
+    { value: 'gpt-4o-mini',  label: 'GPT-4o Mini (Fast)' },
+    { value: 'gpt-4.1',      label: 'GPT-4.1' },
+    { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+    { value: 'o3-mini',      label: 'o3-mini (Deep reasoning)' },
+  ];
 
   const targets = mode === 'all' ? results : results.filter((r) => selected.has(`${r.objectType}|${r.objectName}`));
 
@@ -443,6 +452,7 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
     try {
       const res = await api.post<{ data: { findings: SemanticFinding[] } }>(`/api/projects/${projectId}/al-health/ai-semantic`, {
         objects: targets.map((o) => ({ objectType: o.objectType, objectName: o.objectName, filePath: o.filePath, procedures: o.procedures })),
+        model: selectedModel,
       });
       setFindings(res.data.findings ?? []);
     } catch (e) { setError(e instanceof Error ? e.message : 'AI scan failed'); } finally { setLoading(false); }
@@ -479,7 +489,17 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
             <span className="font-semibold text-gray-900 dark:text-white">AI Semantic Analysis</span>
             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-800">{targets.length} objects</span>
           </div>
-          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:border-violet-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              title="AI Model"
+            >
+              {MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+          </div>
         </div>
 
         <div className="flex flex-1 overflow-hidden">
@@ -530,6 +550,7 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
               <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
                 <Brain size={36} className="text-gray-300 dark:text-gray-600" />
                 <p className="text-sm text-gray-500">Scan {targets.length} objects to detect semantic duplicates, naming inconsistencies, and patterns that static rules can&apos;t find.</p>
+                <p className="text-xs text-gray-400">Model: <span className="font-medium text-violet-500">{MODELS.find((m) => m.value === selectedModel)?.label ?? selectedModel}</span></p>
                 <button onClick={scan} disabled={targets.length === 0} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
                   <Brain size={14} /> Scan {targets.length} Objects
                 </button>
