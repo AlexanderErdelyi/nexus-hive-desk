@@ -22,9 +22,12 @@ function levenshtein(a: string, b: string): number {
 }
 
 function similarity(a: string, b: string): number {
+  if (a === b) return 1;                        // exact case-sensitive match → 100%
   const maxLen = Math.max(a.length, b.length);
   if (maxLen === 0) return 1;
-  return 1 - levenshtein(a.toLowerCase(), b.toLowerCase()) / maxLen;
+  // Case-insensitive fuzzy score, capped at 0.99 so it never shows as "100%" when case differs
+  const fuzzy = 1 - levenshtein(a.toLowerCase(), b.toLowerCase()) / maxLen;
+  return Math.min(fuzzy, 0.99);
 }
 
 const FUZZY_THRESHOLD = 0.75;
