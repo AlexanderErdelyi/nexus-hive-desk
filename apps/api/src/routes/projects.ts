@@ -258,14 +258,20 @@ export async function projectRoutes(app: FastifyInstance) {
         const adoProject = repoParts[repoParts.length - 2];
         const repoName = repoParts[repoParts.length - 1];
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
-        const encodedPath = encodeURIComponent(file.remotePath);
-        // download=true bypasses ADO's inline size limit for large files (>~4MB)
-        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodedPath}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&$format=text&download=true&api-version=7.1`;
-        const res = await fetch(url, {
-          headers: { Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}` },
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
-        remoteXml = await res.text();
+        const authHeader = `Basic ${Buffer.from(`:${pat}`).toString('base64')}`;
+
+        // Step 1: get item metadata (JSON) to retrieve the blob objectId
+        const metaUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodeURIComponent(file.remotePath)}&versionDescriptor.version=${encodeURIComponent(file.remoteBranch)}&versionDescriptor.versionType=branch&includeContent=false&api-version=7.1`;
+        const metaRes = await fetch(metaUrl, { headers: { Authorization: authHeader, Accept: 'application/json' } });
+        if (!metaRes.ok) throw new Error(`ADO metadata HTTP ${metaRes.status}: ${await metaRes.text().catch(() => metaRes.statusText)}`);
+        const meta = await metaRes.json() as { objectId?: string };
+        if (!meta.objectId) throw new Error('ADO did not return objectId for file');
+
+        // Step 2: download blob by objectId — no size limit, always returns raw bytes
+        const blobUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/blobs/${meta.objectId}?download=true&api-version=7.1`;
+        const blobRes = await fetch(blobUrl, { headers: { Authorization: authHeader } });
+        if (!blobRes.ok) throw new Error(`ADO blob HTTP ${blobRes.status}: ${await blobRes.text().catch(() => blobRes.statusText)}`);
+        remoteXml = await blobRes.text();
       } else {
         const [owner, repoName] = repoParts;
         const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/contents/${file.remotePath}?ref=${encodeURIComponent(file.remoteBranch)}`;
