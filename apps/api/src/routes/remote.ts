@@ -1299,6 +1299,8 @@ export async function remoteRoutes(app: FastifyInstance) {
             prTitle: pr.title,
             prDescription: pr.description,
             totalFiles: fileEntries.length,
+            sourceCommit,
+            targetCommit,
           },
         };
       } catch (error) {
@@ -1362,6 +1364,47 @@ export async function remoteRoutes(app: FastifyInstance) {
             totalFiles: files.length,
           },
         };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Fetch before/after content of a single file for side-by-side diff ─
+  app.get<{
+    Params: { connId: string; project: string; repoId: string };
+    Querystring: { path: string; before?: string; after?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/file-diff-content',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+      const { project, repoId } = req.params;
+      const { path: filePath, before, after } = req.query;
+      if (!filePath) return reply.status(400).send({ error: 'validation', message: 'path is required' });
+
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+      const repoEnc = encodeURIComponent(repoId);
+      const projEnc = encodeURIComponent(project);
+
+      async function fetchText(commitId: string): Promise<string> {
+        const url = `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/items?path=${encodeURIComponent(filePath)}&versionDescriptor.versionType=commit&versionDescriptor.version=${encodeURIComponent(commitId)}&api-version=7.1`;
+        const resp = await fetch(url, { headers: azureHeaders(conn!.pat) });
+        if (!resp.ok) return '';
+        const text = await resp.text();
+        // Truncate very large files to avoid sending megabytes to the browser
+        return text.length > 200_000 ? text.slice(0, 200_000) + '\n... (truncated)' : text;
+      }
+
+      try {
+        const [beforeContent, afterContent] = await Promise.all([
+          before ? fetchText(before) : Promise.resolve(''),
+          after ? fetchText(after) : Promise.resolve(''),
+        ]);
+        return { data: { beforeContent, afterContent } };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         return reply.status(502).send({ error: 'remote_error', message });

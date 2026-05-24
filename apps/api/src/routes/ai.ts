@@ -458,13 +458,15 @@ Return a JSON object with this structure:
       "file": "path/to/file",
       "line": null,
       "severity": "info" | "warning" | "error",
-      "comment": "concise actionable comment"
+      "comment": "concise actionable comment",
+      "codeSnippet": "1-4 lines of the problematic code quoted verbatim from the diff, or null",
+      "suggestion": "1-4 lines showing how the code should be changed, or null if no code fix needed"
     }
   ],
   "summary": "1-2 sentence overall review summary"
 }
 
-Focus on: bugs, security issues, performance problems, missing error handling, and code quality. Skip style comments. Limit to the 8 most important suggestions.`;
+Focus on: bugs, security issues, performance problems, missing error handling, and code quality. Skip style comments. Limit to the 8 most important suggestions. Include codeSnippet whenever you are referencing a specific piece of code. Include suggestion when you can propose a concrete code fix.`;
 
     try {
       const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
@@ -478,7 +480,7 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
           ],
           temperature: 0.3,
           response_format: { type: 'json_object' },
-          max_tokens: 2000,
+          max_tokens: 3000,
         }),
       });
 

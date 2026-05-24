@@ -14,6 +14,7 @@ import {
   GitBranch,
   GitPullRequest,
   Info,
+  Lightbulb,
   Link2,
   Link2Off,
   Loader2,
@@ -26,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
+import { diffLines } from 'diff';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -96,6 +98,8 @@ interface DiffResponse {
   prTitle?: string;
   prDescription?: string;
   totalFiles?: number;
+  sourceCommit?: string;
+  targetCommit?: string;
 }
 
 interface AISuggestion {
@@ -103,6 +107,8 @@ interface AISuggestion {
   line?: number | null;
   severity: 'info' | 'warning' | 'error';
   comment: string;
+  codeSnippet?: string | null;
+  suggestion?: string | null;
 }
 
 interface AIReviewResponse {
@@ -556,11 +562,260 @@ function severityIcon(severity: AISuggestion['severity']) {
   return <Info size={12} className="text-blue-500" />;
 }
 
+// ── Side-by-side diff helpers ──────────────────────────────────────────────────
+
+const DIFF_CONTEXT = 3;
+
+interface DiffRow {
+  type: 'context' | 'add' | 'delete' | 'change' | 'collapsed';
+  left: { no: number; text: string } | null;
+  right: { no: number; text: string } | null;
+  collapsedCount?: number;
+}
+
+function splitLines(s: string): string[] {
+  const lines = s.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+function computeDiffRows(before: string, after: string): DiffRow[] {
+  const changes = diffLines(before, after);
+  type Seg = { kind: 'change'; rows: DiffRow[] } | { kind: 'ctx'; lines: string[]; l0: number; r0: number };
+  const segs: Seg[] = [];
+  let ln = 1, rn = 1, i = 0;
+
+  while (i < changes.length) {
+    const c = changes[i];
+    if (!c.added && !c.removed) {
+      const lines = splitLines(c.value);
+      segs.push({ kind: 'ctx', lines, l0: ln, r0: rn });
+      ln += lines.length; rn += lines.length; i++;
+    } else if (c.removed) {
+      const rem = splitLines(c.value);
+      const rows: DiffRow[] = [];
+      if (i + 1 < changes.length && changes[i + 1].added) {
+        const add = splitLines(changes[i + 1].value);
+        const mx = Math.max(rem.length, add.length);
+        for (let j = 0; j < mx; j++)
+          rows.push({ type: 'change', left: j < rem.length ? { no: ln++, text: rem[j] } : null, right: j < add.length ? { no: rn++, text: add[j] } : null });
+        i += 2;
+      } else {
+        for (const l of rem) rows.push({ type: 'delete', left: { no: ln++, text: l }, right: null });
+        i++;
+      }
+      segs.push({ kind: 'change', rows });
+    } else {
+      const lines = splitLines(c.value);
+      segs.push({ kind: 'change', rows: lines.map(l => ({ type: 'add' as const, left: null, right: { no: rn++, text: l } })) });
+      i++;
+    }
+  }
+
+  const result: DiffRow[] = [];
+  for (let si = 0; si < segs.length; si++) {
+    const seg = segs[si];
+    if (seg.kind === 'change') { result.push(...seg.rows); continue; }
+    const { lines, l0, r0 } = seg;
+    const hasPrev = si > 0;
+    const hasNext = si < segs.length - 1;
+    const showStart = hasPrev ? Math.min(DIFF_CONTEXT, lines.length) : 0;
+    const showEnd = hasNext ? Math.min(DIFF_CONTEXT, lines.length - showStart) : 0;
+    const hidden = lines.length - showStart - showEnd;
+    for (let j = 0; j < showStart; j++)
+      result.push({ type: 'context', left: { no: l0 + j, text: lines[j] }, right: { no: r0 + j, text: lines[j] } });
+    if (hidden > 0)
+      result.push({ type: 'collapsed', left: null, right: null, collapsedCount: hidden });
+    for (let j = lines.length - showEnd; j < lines.length; j++)
+      result.push({ type: 'context', left: { no: l0 + j, text: lines[j] }, right: { no: r0 + j, text: lines[j] } });
+  }
+  return result;
+}
+
+function SideBySideDiff({ before, after }: { before: string; after: string }) {
+  const rows = computeDiffRows(before, after);
+  if (rows.length === 0) return <p className="p-3 text-xs text-gray-400">No changes detected.</p>;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[600px] border-collapse font-mono text-xs">
+        <thead>
+          <tr className="border-b border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800">
+            <th className="w-9 py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>Before</th>
+            <th className="w-px bg-gray-200 dark:bg-gray-700" />
+            <th className="w-9 py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>After</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => {
+            if (row.type === 'collapsed')
+              return (
+                <tr key={idx} className="bg-gray-50/80 dark:bg-gray-800/50">
+                  <td colSpan={5} className="py-0.5 text-center text-[10px] text-gray-400 dark:text-gray-600">
+                    ··· {row.collapsedCount} unchanged lines ···
+                  </td>
+                </tr>
+              );
+
+            const leftBg =
+              row.type === 'delete' || (row.type === 'change' && row.left)
+                ? 'bg-red-50 dark:bg-red-900/20'
+                : row.type === 'context'
+                ? ''
+                : 'bg-gray-50/50 dark:bg-gray-800/20';
+            const rightBg =
+              row.type === 'add' || (row.type === 'change' && row.right)
+                ? 'bg-green-50 dark:bg-green-900/20'
+                : row.type === 'context'
+                ? ''
+                : 'bg-gray-50/50 dark:bg-gray-800/20';
+
+            return (
+              <tr key={idx} className="group">
+                <td className={`w-8 select-none border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${leftBg}`}>
+                  {row.left?.no}
+                </td>
+                <td className={`whitespace-pre px-2 py-px ${leftBg}`}>
+                  {row.left ? (
+                    <>{row.type !== 'context' && row.left && <span className="select-none text-red-400 dark:text-red-500">-</span>}{row.left.text}</>
+                  ) : null}
+                </td>
+                <td className="w-px bg-gray-200 dark:bg-gray-700" />
+                <td className={`w-8 select-none border-l border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${rightBg}`}>
+                  {row.right?.no}
+                </td>
+                <td className={`whitespace-pre px-2 py-px ${rightBg}`}>
+                  {row.right ? (
+                    <>{row.type !== 'context' && row.right && <span className="select-none text-green-500">+</span>}{row.right.text}</>
+                  ) : null}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ExpandableFileDiff({
+  file, pr, sourceCommit, targetCommit,
+}: {
+  file: DiffFile; pr: PullRequest; sourceCommit?: string; targetCommit?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const { data: contentData, isLoading: contentLoading } = useQuery({
+    queryKey: ['file-content', pr.connectionId, pr.adoProjectName, pr.repoSlug, file.path, targetCommit, sourceCommit],
+    queryFn: () => {
+      const params = new URLSearchParams({ path: file.path });
+      if (targetCommit) params.set('before', targetCommit);
+      if (sourceCommit) params.set('after', sourceCommit);
+      return api.get<{ data: { beforeContent: string; afterContent: string } }>(
+        `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName ?? '')}/repos/${encodeURIComponent(pr.repoSlug)}/file-diff-content?${params}`
+      );
+    },
+    enabled: open && pr.provider === 'azure-devops' && !!sourceCommit && !!targetCommit,
+  });
+
+  const content = contentData?.data;
+
+  return (
+    <li className="overflow-hidden rounded border border-gray-100 dark:border-gray-800">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 bg-gray-50 px-2 py-1.5 text-left text-xs hover:bg-gray-100 dark:bg-gray-800/60 dark:hover:bg-gray-800"
+      >
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <FileCode size={11} className="shrink-0 text-gray-400" />
+        <span className="flex-1 truncate font-mono text-gray-700 dark:text-gray-300">{file.path}</span>
+        {changeTypeBadge(file.changeType)}
+      </button>
+
+      {open && (
+        <div className="border-t border-gray-100 dark:border-gray-800">
+          {contentLoading && (
+            <div className="flex items-center gap-2 p-3 text-xs text-gray-400">
+              <Loader2 size={12} className="animate-spin" /> Loading diff…
+            </div>
+          )}
+          {content && (
+            <SideBySideDiff before={content.beforeContent} after={content.afterContent} />
+          )}
+          {!contentLoading && !content && file.patch && (
+            <pre className="overflow-x-auto whitespace-pre p-2 text-[11px] text-gray-600 dark:text-gray-400">{file.patch}</pre>
+          )}
+          {!contentLoading && !content && !file.patch && pr.provider !== 'azure-devops' && (
+            <p className="p-3 text-xs text-gray-400">Diff view not available for this provider.</p>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+// ── AI suggestion card ─────────────────────────────────────────────────────────
+
+function SuggestionCard({
+  s, idx, pr, onPost, isPosting,
+}: {
+  s: AISuggestion; idx: number; pr: PullRequest;
+  onPost: (s: AISuggestion, idx: number) => void; isPosting: boolean;
+}) {
+  const [showCode, setShowCode] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-gray-100 bg-white dark:border-gray-700 dark:bg-gray-900">
+      <div className="flex items-start gap-2 p-2.5">
+        <span className="mt-0.5 shrink-0">{severityIcon(s.severity)}</span>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-xs text-indigo-600 dark:text-indigo-400">{s.file}</p>
+          <p className="mt-0.5 text-xs text-gray-700 dark:text-gray-300">{s.comment}</p>
+          {(s.codeSnippet || s.suggestion) && (
+            <button
+              onClick={() => setShowCode((v) => !v)}
+              className="mt-1 flex items-center gap-1 text-[10px] text-gray-400 hover:text-indigo-500"
+            >
+              <Code2 size={10} />
+              {showCode ? 'Hide code' : 'Show code'}
+            </button>
+          )}
+        </div>
+        <button
+          onClick={() => onPost(s, idx)}
+          disabled={isPosting}
+          title="Post as PR comment"
+          className="shrink-0 rounded p-1 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-50 dark:hover:bg-indigo-900/20"
+        >
+          {isPosting ? <Loader2 size={12} className="animate-spin" /> : <MessageSquare size={12} />}
+        </button>
+      </div>
+      {showCode && (
+        <div className="border-t border-gray-100 px-2.5 pb-2.5 pt-2 dark:border-gray-700">
+          {s.codeSnippet && (
+            <div className="mb-2">
+              <p className="mb-1 text-[10px] font-medium text-gray-400">Problematic code</p>
+              <pre className="overflow-x-auto rounded bg-red-50 px-3 py-2 text-[11px] text-red-800 dark:bg-red-900/20 dark:text-red-300">{s.codeSnippet}</pre>
+            </div>
+          )}
+          {s.suggestion && (
+            <div>
+              <p className="mb-1 text-[10px] font-medium text-gray-400">Suggested fix</p>
+              <pre className="overflow-x-auto rounded bg-green-50 px-3 py-2 text-[11px] text-green-800 dark:bg-green-900/20 dark:text-green-300">{s.suggestion}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
   const [open, setOpen] = useState(false);
   const [aiReview, setAiReview] = useState<AIReviewResponse | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [postingIdx, setPostingIdx] = useState<number | null>(null);
+  const [showInfo, setShowInfo] = useState(false);
 
   const diffApiPath =
     pr.provider === 'azure-devops'
@@ -617,6 +872,9 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
     }
   }
 
+  const criticalSuggestions = aiReview?.suggestions.filter((s) => s.severity !== 'info') ?? [];
+  const infoSuggestions = aiReview?.suggestions.filter((s) => s.severity === 'info') ?? [];
+
   return (
     <div className="mt-2 border-t border-gray-100 dark:border-gray-800">
       <button
@@ -629,7 +887,7 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
       </button>
 
       {open && (
-        <div className="overflow-x-auto pb-3">
+        <div className="pb-3">
           {diffLoading && (
             <div className="flex items-center gap-2 py-4 text-xs text-gray-400">
               <Loader2 size={13} className="animate-spin" />
@@ -654,22 +912,15 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
                 </button>
               </div>
 
-              <ul className="mb-3 space-y-1 rounded-lg border border-gray-100 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
+              <ul className="mb-3 space-y-1">
                 {diff.files.map((f) => (
-                  <li key={f.path} className="flex items-center gap-2 text-xs">
-                    <FileCode size={11} className="shrink-0 text-gray-400" />
-                    <span className="flex-1 truncate font-mono text-gray-700 dark:text-gray-300" title={f.path}>
-                      {f.path}
-                    </span>
-                    {changeTypeBadge(f.changeType)}
-                    {(f.additions !== undefined || f.patch) && (
-                      <span className="shrink-0 text-gray-400">
-                        {f.patch
-                          ? `${(f.patch.match(/^\+/gm) ?? []).length}+ ${(f.patch.match(/^-/gm) ?? []).length}-`
-                          : `${f.additions ?? 0}+ ${f.deletions ?? 0}-`}
-                      </span>
-                    )}
-                  </li>
+                  <ExpandableFileDiff
+                    key={f.path}
+                    file={f}
+                    pr={pr}
+                    sourceCommit={diff.sourceCommit}
+                    targetCommit={diff.targetCommit}
+                  />
                 ))}
               </ul>
 
@@ -681,29 +932,48 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
                       {aiReview.summary}
                     </p>
                   )}
-                  {aiReview.suggestions.length === 0 && (
+
+                  {criticalSuggestions.length === 0 && infoSuggestions.length === 0 && (
                     <p className="text-xs text-gray-400">No issues found — looks good!</p>
                   )}
-                  {aiReview.suggestions.map((s, i) => (
-                    <div
-                      key={i}
-                      className="flex items-start gap-2 rounded-lg border border-gray-100 bg-white p-2.5 dark:border-gray-700 dark:bg-gray-900"
-                    >
-                      <span className="mt-0.5 shrink-0">{severityIcon(s.severity)}</span>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-mono text-xs text-indigo-600 dark:text-indigo-400">{s.file}</p>
-                        <p className="mt-0.5 text-xs text-gray-700 dark:text-gray-300">{s.comment}</p>
-                      </div>
-                      <button
-                        onClick={() => postSuggestion(s, i)}
-                        disabled={postingIdx === i}
-                        title="Post as PR comment"
-                        className="shrink-0 rounded p-1 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-50 dark:hover:bg-indigo-900/20"
-                      >
-                        {postingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <MessageSquare size={12} />}
-                      </button>
-                    </div>
+
+                  {criticalSuggestions.map((s, i) => (
+                    <SuggestionCard
+                      key={`crit-${i}`}
+                      s={s}
+                      idx={aiReview.suggestions.indexOf(s)}
+                      pr={pr}
+                      onPost={postSuggestion}
+                      isPosting={postingIdx === aiReview.suggestions.indexOf(s)}
+                    />
                   ))}
+
+                  {infoSuggestions.length > 0 && (
+                    <div>
+                      <button
+                        onClick={() => setShowInfo((v) => !v)}
+                        className="flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                      >
+                        <Lightbulb size={11} />
+                        {showInfo ? 'Hide' : 'Show'} {infoSuggestions.length} informational suggestion{infoSuggestions.length !== 1 ? 's' : ''}
+                        {showInfo ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                      </button>
+                      {showInfo && (
+                        <div className="mt-2 space-y-2">
+                          {infoSuggestions.map((s, i) => (
+                            <SuggestionCard
+                              key={`info-${i}`}
+                              s={s}
+                              idx={aiReview.suggestions.indexOf(s)}
+                              pr={pr}
+                              onPost={postSuggestion}
+                              isPosting={postingIdx === aiReview.suggestions.indexOf(s)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </>

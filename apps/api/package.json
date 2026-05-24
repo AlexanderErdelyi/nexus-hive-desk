@@ -21,11 +21,13 @@
     "@nexus/xliff": "workspace:*",
     "axios": "^1.16.1",
     "bcryptjs": "^3.0.3",
+    "diff": "^9.0.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
+    "@types/diff": "^8.0.0",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
