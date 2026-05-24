@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Brain, CheckCircle2, ChevronDown, ChevronRight,
   Code2, Download, FileCode2, FolderOpen, FolderTree, GitBranch,
-  Info, List, Loader2, Sparkles, Ticket, X, Zap,
+  Info, List, Loader2, Plus, Sparkles, Ticket, Trash2, Wand2, X, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -267,7 +267,7 @@ function AiExplainModal({ issue, object, projectId, onClose }: {
           <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
             <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">{issue.ruleId} · {object.objectType} {object.objectName}{issue.procedure ? ` · ${issue.procedure}` : ''}</div>
             <div className="text-sm text-gray-800 dark:text-gray-200">{issue.message}</div>
-            {issue.detail && <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-500 truncate">{issue.detail}</div>}
+            {issue.detail && <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-500 truncate">{typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)}</div>}
           </div>
 
           {!result && !loading && !error && (
@@ -300,7 +300,8 @@ function WorkItemModal({ issue, object, projectId, onClose }: {
 }) {
   const [type, setType] = useState('Task');
   const [title, setTitle] = useState(`[AL Health] ${issue.ruleId}: ${object.objectType} "${object.objectName}"${issue.procedure ? ` - ${issue.procedure}` : ''}`);
-  const [desc, setDesc] = useState(`## AL Code Health Issue\n\n**Rule:** ${issue.ruleId} — ${RULES[issue.ruleId]?.label ?? ''}\n**Object:** ${object.objectType} "${object.objectName}"\n${issue.procedure ? `**Procedure:** ${issue.procedure}\n` : ''}${issue.line ? `**Line:** ${issue.line}\n` : ''}\n**Issue:** ${issue.message}\n${issue.detail ? `\n\`\`\`al\n${issue.detail}\n\`\`\`` : ''}\n\n## Steps to Fix\n\n1. Open the file: \`${object.filePath}\`\n2. Review the ${issue.procedure ? `\`${issue.procedure}\` procedure` : 'object'}\n3. Apply the fix as described`);
+  const detailStr = issue.detail ? (typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)) : '';
+  const [desc, setDesc] = useState(`## AL Code Health Issue\n\n**Rule:** ${issue.ruleId} — ${RULES[issue.ruleId]?.label ?? ''}\n**Object:** ${object.objectType} "${object.objectName}"\n${issue.procedure ? `**Procedure:** ${issue.procedure}\n` : ''}${issue.line ? `**Line:** ${issue.line}\n` : ''}\n**Issue:** ${issue.message}\n${detailStr ? `\n\`\`\`al\n${detailStr}\n\`\`\`` : ''}\n\n## Steps to Fix\n\n1. Open the file: \`${object.filePath}\`\n2. Review the ${issue.procedure ? `\`${issue.procedure}\` procedure` : 'object'}\n3. Apply the fix as described`);
   const [saving, setSaving] = useState(false);
 
   async function create() {
@@ -347,6 +348,212 @@ function WorkItemModal({ issue, object, projectId, onClose }: {
             <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300">Cancel</button>
             <button onClick={create} disabled={saving} className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Refactor Modal ────────────────────────────────────────────────────────
+
+function AiRefactorModal({ issue, object, projectId, onClose }: {
+  issue: HealthIssue; object: ObjectResult; projectId: string; onClose: () => void;
+}) {
+  const [result, setResult] = useState<{ before?: string; after?: string; explanation?: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function refactor() {
+    setLoading(true); setError('');
+    try {
+      const res = await api.post<{ data: { before?: string; after?: string; explanation?: string } }>(
+        `/api/projects/${projectId}/al-health/ai-refactor`,
+        { ruleId: issue.ruleId, message: issue.message, detail: typeof issue.detail === 'string' ? issue.detail : undefined, procedure: issue.procedure, objectType: object.objectType, objectName: object.objectName }
+      );
+      setResult(res.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI call failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+          <div className="flex items-center gap-2">
+            <Code2 size={16} className="text-emerald-500" />
+            <span className="font-semibold text-gray-900 dark:text-white">AI Refactor Suggestion</span>
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">{issue.ruleId} · {object.objectType} {object.objectName}{issue.procedure ? ` · ${issue.procedure}` : ''}</div>
+            <div className="text-sm text-gray-800 dark:text-gray-200">{issue.message}</div>
+          </div>
+          {!result && !loading && !error && (
+            <button onClick={refactor} className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+              <Code2 size={14} /> Generate Refactored Code
+            </button>
+          )}
+          {loading && <div className="flex items-center justify-center gap-2 py-4 text-sm text-gray-500"><Loader2 size={16} className="animate-spin" /> Generating…</div>}
+          {error && <div className="text-sm text-red-600 dark:text-red-400">{error}</div>}
+          {result && (
+            <div className="space-y-3">
+              {result.explanation && (
+                <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200">{result.explanation}</div>
+              )}
+              {result.before && (
+                <div>
+                  <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-red-600 dark:text-red-400">❌ Before</div>
+                  <pre className="overflow-x-auto rounded-lg bg-red-950 p-3 text-xs text-red-200 whitespace-pre-wrap">{result.before}</pre>
+                </div>
+              )}
+              {result.after && (
+                <div>
+                  <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-green-600 dark:text-green-400">✅ After</div>
+                  <pre className="overflow-x-auto rounded-lg bg-gray-900 p-3 text-xs text-green-300 whitespace-pre-wrap">{result.after}</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Code View Modal ──────────────────────────────────────────────────────────
+
+function CodeViewModal({ object, issue, repoId, branch, projectId, onClose }: {
+  object: ObjectResult; issue?: HealthIssue; repoId: string; branch: string; projectId: string; onClose: () => void;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['al-file-content', repoId, object.filePath, branch],
+    queryFn: () => api.get<{ data: string }>(`/api/projects/${projectId}/al-health/repos/${repoId}/file?path=${encodeURIComponent(object.filePath)}&branch=${encodeURIComponent(branch)}`),
+    staleTime: 120_000,
+  });
+
+  const content = data?.data ?? '';
+  const lines = content.split('\n');
+  const targetLine = issue?.line ?? 1;
+  const start = Math.max(0, targetLine - 15);
+  const end = Math.min(lines.length, targetLine + 15);
+  const snippet = lines.slice(start, end);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="flex w-full max-w-3xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" style={{ maxHeight: '85vh' }}>
+        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+          <div className="flex items-center gap-2">
+            <FileCode2 size={16} className="text-amber-500" />
+            <span className="font-semibold text-gray-900 dark:text-white truncate">{object.filePath.split('/').pop()}</span>
+            {issue?.line && <span className="text-xs text-gray-400">:{issue.line}</span>}
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+        </div>
+        <div className="overflow-auto flex-1 p-4">
+          {isLoading && <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 size={16} className="animate-spin" /> Loading file…</div>}
+          {error && <div className="text-sm text-red-500">Failed to load file content</div>}
+          {content && (
+            <pre className="text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre leading-5">
+              {snippet.map((line, i) => {
+                const lineNo = start + i + 1;
+                const isTarget = lineNo === targetLine;
+                return (
+                  <div key={lineNo} className={cn('flex gap-3 px-2 rounded', isTarget ? 'bg-amber-100 dark:bg-amber-900/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/30')}>
+                    <span className="shrink-0 w-8 text-right text-gray-400 select-none">{lineNo}</span>
+                    <span className={isTarget ? 'text-amber-800 dark:text-amber-200 font-semibold' : ''}>{line}</span>
+                  </div>
+                );
+              })}
+            </pre>
+          )}
+        </div>
+        <div className="border-t border-gray-100 p-3 dark:border-gray-800 text-xs text-gray-400 font-mono truncate">{object.filePath}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Work Item Queue Modal ────────────────────────────────────────────────────
+
+interface QueuedIssue { issue: HealthIssue; object: ObjectResult; key: string }
+
+function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
+  queued: QueuedIssue[]; projectId: string; onClose: () => void; onClear: () => void;
+}) {
+  const [type, setType] = useState('Task');
+  const [title, setTitle] = useState(`[AL Health] ${queued.length} issues queued for review`);
+  const [saving, setSaving] = useState(false);
+
+  const desc = `## AL Code Health Issues\n\n${queued.map((q, i) =>
+    `### ${i + 1}. ${q.issue.ruleId}: ${q.object.objectType} "${q.object.objectName}"${q.issue.procedure ? ` · ${q.issue.procedure}` : ''}\n**Issue:** ${q.issue.message}${q.issue.line ? ` (line ${q.issue.line})` : ''}\n\`${q.object.filePath}\``
+  ).join('\n\n')}`;
+
+  async function create() {
+    setSaving(true);
+    try {
+      await api.post(`/api/projects/${projectId}/work-items`, { type, title, description: desc });
+      toast.success('Work item created with all queued issues');
+      onClear();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to create work item');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="flex w-full max-w-2xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" style={{ maxHeight: '85vh' }}>
+        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+          <div className="flex items-center gap-2">
+            <Ticket size={16} className="text-sky-500" />
+            <span className="font-semibold text-gray-900 dark:text-white">Create Work Item from Queue</span>
+            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-bold text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">{queued.length}</span>
+          </div>
+          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {/* Queued issues list */}
+          <div className="divide-y divide-gray-100 dark:divide-gray-800 max-h-64 overflow-y-auto">
+            {queued.map((q) => (
+              <div key={q.key} className="flex items-start gap-2 px-4 py-2 text-xs">
+                <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400">{q.issue.ruleId}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-gray-800 dark:text-gray-200 truncate">{q.object.objectType} &ldquo;{q.object.objectName}&rdquo;{q.issue.procedure ? ` · ${q.issue.procedure}` : ''}</div>
+                  <div className="text-gray-500 dark:text-gray-400 truncate">{q.issue.message}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-3 p-4 border-t border-gray-100 dark:border-gray-800">
+            <div className="flex gap-3">
+              <div className="w-32">
+                <label className="mb-1 block text-xs font-semibold text-gray-500">Type</label>
+                <select value={type} onChange={(e) => setType(e.target.value)} className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+                  <option>Task</option><option>Bug</option><option>User Story</option>
+                </select>
+              </div>
+              <div className="flex-1">
+                <label className="mb-1 block text-xs font-semibold text-gray-500">Title</label>
+                <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-sky-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-between border-t border-gray-100 p-4 dark:border-gray-800">
+          <button onClick={onClear} className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400">
+            <Trash2 size={13} /> Clear Queue
+          </button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300">Cancel</button>
+            <button onClick={create} disabled={saving} className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create Work Item
             </button>
           </div>
         </div>
@@ -424,8 +631,14 @@ function ProcComparePanel({ matches }: { matches: ProcMatch[] }) {
   );
 }
 
-function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
-  results: ObjectResult[]; projectId: string; localWorkspacePath?: string; onClose: () => void;
+function AiSemanticModal({ results, projectId, localWorkspacePath, lastFetchedRepoId, lastFetchedBranch, onClose, onAddToQueue }: {
+  results: ObjectResult[];
+  projectId: string;
+  localWorkspacePath?: string;
+  lastFetchedRepoId?: string;
+  lastFetchedBranch?: string;
+  onClose: () => void;
+  onAddToQueue?: (issue: HealthIssue, object: ObjectResult, key: string) => void;
 }) {
   const [findings, setFindings] = useState<SemanticFinding[]>([]);
   const [loading, setLoading] = useState(false);
@@ -436,6 +649,10 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [expandedFinding, setExpandedFinding] = useState<number | null>(null);
   const [selectedModel, setSelectedModel] = useState('gpt-4o');
+  // Local sub-modal state (self-contained)
+  const [localRefactor, setLocalRefactor] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
+  const [localCode, setLocalCode] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
+  const [localWi, setLocalWi] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
 
   const MODELS = [
     { value: 'gpt-4o',       label: 'GPT-4o (Recommended)' },
@@ -460,6 +677,28 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
 
   function toggle(key: string) { setSelected((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; }); }
   function toggleType(t: string) { setExpandedTypes((p) => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n; }); }
+
+  /** Convert a SemanticFinding to a HealthIssue for use in action modals */
+  function findingToIssue(f: SemanticFinding): HealthIssue {
+    return {
+      severity: f.severity === 'info' ? 'info' : 'warning',
+      ruleId: `semantic-${f.type}`,
+      message: f.message,
+      detail: f.suggestion,
+    };
+  }
+
+  /** Find the first ObjectResult that matches one of the finding's affectedObjects */
+  function findingToObject(f: SemanticFinding): ObjectResult | null {
+    if (!f.affectedObjects?.length) return results[0] ?? null;
+    const cleanName = (s: string) => { const m = s.match(/"([^"]+)"/); return (m ? m[1] : s).toLowerCase(); };
+    for (const ao of f.affectedObjects) {
+      const name = cleanName(ao);
+      const match = results.find((r) => r.objectName.toLowerCase() === name || r.objectName.toLowerCase().includes(name) || name.includes(r.objectName.toLowerCase()));
+      if (match) return match;
+    }
+    return results[0] ?? null;
+  }
 
   // Group objects by objectType for tree view
   const objectsByType = results.reduce<Record<string, ObjectResult[]>>((acc, r) => {
@@ -566,7 +805,7 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
                 </div>
                 <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
                   {findings.map((f, i) => {
-                    const isExpandable = (f.type === 'duplicate' || f.type === 'naming') && (f.affectedProcedures?.length ?? 0) > 0;
+                    const isExpandable = (f.affectedProcedures?.length ?? 0) > 0;
                     const isExpanded = expandedFinding === i;
                     const procMatches = isExpanded
                       ? findProcMatches(results, f.affectedObjects ?? [], f.affectedProcedures ?? [], localWorkspacePath)
@@ -603,6 +842,51 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
 
                         {f.suggestion && <p className="text-xs text-gray-500 dark:text-gray-400">{f.suggestion}</p>}
 
+                        {/* Action buttons — always rendered */}
+                        {(() => {
+                          const issue = findingToIssue(f);
+                          const obj = findingToObject(f);
+                          if (!obj) return null;
+                          const qKey = `semantic:${f.type}:${f.message.slice(0, 60)}`;
+                          return (
+                            <div className="flex flex-wrap gap-1.5 pt-1" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                title="AI Refactor suggestion"
+                                onClick={() => setLocalRefactor({ issue, object: obj })}
+                                className="flex items-center gap-1 rounded border border-orange-200 bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300"
+                              >
+                                <Wand2 size={10} /> AI Refactor
+                              </button>
+                              {lastFetchedRepoId && (
+                                <button
+                                  title="View source code"
+                                  onClick={() => setLocalCode({ issue, object: obj })}
+                                  className="flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-2 py-0.5 text-[10px] font-medium text-teal-700 hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-900/20 dark:text-teal-300"
+                                >
+                                  <Code2 size={10} /> View Code
+                                </button>
+                              )}
+                              <button
+                                title="Create Work Item"
+                                onClick={() => setLocalWi({ issue, object: obj })}
+                                className="flex items-center gap-1 rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300"
+                              >
+                                <Ticket size={10} /> Work Item
+                              </button>
+                              <button
+                                title="Add to work item queue"
+                                onClick={() => {
+                                  onAddToQueue?.(issue, obj, qKey);
+                                  toast.success('Added to queue');
+                                }}
+                                className="flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+                              >
+                                <Plus size={10} /> Add to Queue
+                              </button>
+                            </div>
+                          );
+                        })()}
+
                         {/* Comparison panel (inline, shown when expanded) */}
                         {isExpanded && <ProcComparePanel matches={procMatches} />}
                       </div>
@@ -614,6 +898,17 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, onClose }: {
           </div>
         </div>
       </div>
+
+      {/* Self-contained sub-modals stacked over the semantic modal */}
+      {localRefactor && (
+        <AiRefactorModal issue={localRefactor.issue} object={localRefactor.object} projectId={projectId} onClose={() => setLocalRefactor(null)} />
+      )}
+      {localCode && lastFetchedRepoId && (
+        <CodeViewModal object={localCode.object} issue={localCode.issue} repoId={lastFetchedRepoId} branch={lastFetchedBranch ?? ''} projectId={projectId} onClose={() => setLocalCode(null)} />
+      )}
+      {localWi && (
+        <WorkItemModal issue={localWi.issue} object={localWi.object} projectId={projectId} onClose={() => setLocalWi(null)} />
+      )}
     </div>
   );
 }
@@ -638,12 +933,19 @@ export function ALCodeHealthView({ projectId }: Props) {
   const [showNew, setShowNew] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('flat');
   const [aiModal, setAiModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
+  const [refactorModal, setRefactorModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
+  const [codeModal, setCodeModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
   const [wiModal, setWiModal] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
   const [semanticModal, setSemanticModal] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState('');
   const [repoBranch, setRepoBranch] = useState('');
+  const [repoBranchOptions, setRepoBranchOptions] = useState<string[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
   const [fetchingRepo, setFetchingRepo] = useState(false);
   const [lastFetchedRepoId, setLastFetchedRepoId] = useState('');
+  const [lastFetchedBranch, setLastFetchedBranch] = useState('');
+  const [queuedIssues, setQueuedIssues] = useState<QueuedIssue[]>([]);
+  const [queueModal, setQueueModal] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // ── Project data (repos + localWorkspacePath) ─────────────────────────────
@@ -661,6 +963,20 @@ export function ALCodeHealthView({ projectId }: Props) {
   }
   function saveBaseline(repoId: string, baseline: Record<string, string>) {
     try { localStorage.setItem(`nhd-al-baseline-${projectId}-${repoId}`, JSON.stringify(baseline)); } catch { /* noop */ }
+  }
+
+  // ── Branch loading ─────────────────────────────────────────────────────────
+  async function loadBranches(repoId: string) {
+    setBranchesLoading(true);
+    setRepoBranchOptions([]);
+    try {
+      const res = await api.get<{ data: string[] }>(`/api/projects/${projectId}/al-health/repos/${repoId}/branches`);
+      setRepoBranchOptions(res.data ?? []);
+    } catch {
+      setRepoBranchOptions([]);
+    } finally {
+      setBranchesLoading(false);
+    }
   }
 
   // ── Reviews ────────────────────────────────────────────────────────────────
@@ -712,7 +1028,7 @@ export function ALCodeHealthView({ projectId }: Props) {
   }, [runLocalAnalysis]);
 
   // ── Repo fetch analysis ────────────────────────────────────────────────────
-  async function fetchFromRepo() {
+  async function fetchFromRepo(changedOnly = false) {
     if (!selectedRepo) { toast.error('Select a repository first'); return; }
     setFetchingRepo(true);
     try {
@@ -726,11 +1042,14 @@ export function ALCodeHealthView({ projectId }: Props) {
       setResults(res.data);
       setExpanded(new Set());
       setLastFetchedRepoId(selectedRepo);
+      setLastFetchedBranch(res.meta.branch);
       saveBaseline(selectedRepo, res.newBaseline ?? {});
       const newCount = res.data.filter((r) => r.isNew).length;
       const changedCount = res.data.filter((r) => r.isChanged).length;
       const diffMsg = hasBaseline && (newCount || changedCount) ? ` · ${newCount} new, ${changedCount} changed` : hasBaseline ? ' · no structural changes' : '';
       toast.success(`Fetched ${res.meta.filesScanned} files from ${res.meta.branch} — ${res.meta.totalIssues} issues${diffMsg}`);
+      // Auto-activate "changed only" filter when requested
+      if (changedOnly && hasBaseline) setShowNew(true);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Fetch failed');
     } finally { setFetchingRepo(false); }
@@ -794,7 +1113,7 @@ export function ALCodeHealthView({ projectId }: Props) {
             {issue.line && <span className="text-[10px] text-gray-400">:{issue.line}</span>}
             {reviewed && <span className="text-[10px] text-green-600 dark:text-green-400">✓ Reviewed</span>}
           </div>
-          {issue.detail && <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-600" title={issue.detail}>{issue.detail}</p>}
+          {issue.detail && <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-600" title={typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)}>{typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)}</p>}
         </div>
         {/* Actions */}
         <div className="flex shrink-0 items-center gap-1">
@@ -817,9 +1136,30 @@ export function ALCodeHealthView({ projectId }: Props) {
           <button title="AI Explain" onClick={() => setAiModal({ issue, object: r })} className="rounded p-1.5 text-gray-400 hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-900/30">
             <Sparkles size={14} />
           </button>
+          <button title="AI Refactor suggestion" onClick={() => setRefactorModal({ issue, object: r })} className="rounded p-1.5 text-gray-400 hover:bg-orange-50 hover:text-orange-600 dark:hover:bg-orange-900/30">
+            <Wand2 size={14} />
+          </button>
+          {lastFetchedRepoId && issue.line != null && (
+            <button title="View source code" onClick={() => setCodeModal({ issue, object: r })} className="rounded p-1.5 text-gray-400 hover:bg-teal-50 hover:text-teal-600 dark:hover:bg-teal-900/30">
+              <Code2 size={14} />
+            </button>
+          )}
           <button title="Create Work Item" onClick={() => setWiModal({ issue, object: r })} className="rounded p-1.5 text-gray-400 hover:bg-sky-50 hover:text-sky-600 dark:hover:bg-sky-900/30">
             <Ticket size={14} />
           </button>
+          {(() => {
+            const qKey = `${r.objectType}:${r.objectName}:${issue.ruleId}:${issue.line ?? 0}`;
+            const inQueue = queuedIssues.some((q) => q.key === qKey);
+            return (
+              <button
+                title={inQueue ? 'Remove from queue' : 'Add to work item queue'}
+                onClick={() => setQueuedIssues((p) => inQueue ? p.filter((q) => q.key !== qKey) : [...p, { issue, object: r, key: qKey }])}
+                className={cn('rounded p-1.5 transition-colors', inQueue ? 'text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/30' : 'text-gray-400 hover:bg-amber-50 hover:text-amber-600 dark:hover:bg-amber-900/30')}
+              >
+                <Plus size={14} />
+              </button>
+            );
+          })()}
         </div>
       </div>
     );
@@ -862,8 +1202,13 @@ export function ALCodeHealthView({ projectId }: Props) {
           <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">Detect performance issues, long procedures, DB operations in loops, and more.</p>
         </div>
         {results.length > 0 && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button onClick={() => setSemanticModal(true)} className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/20 dark:text-violet-300"><Brain size={13} /> AI Semantic</button>
+            {queuedIssues.length > 0 && (
+              <button onClick={() => setQueueModal(true)} className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                <Ticket size={13} /> Queue ({queuedIssues.length})
+              </button>
+            )}
             <button onClick={() => { setResults([]); setExpanded(new Set()); }} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"><X size={13} /> Clear</button>
             <button onClick={exportCsv} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"><Download size={13} /> CSV</button>
           </div>
@@ -896,14 +1241,47 @@ export function ALCodeHealthView({ projectId }: Props) {
             <p className="text-xs text-gray-400 dark:text-gray-600">No repositories configured. Add one in Project Setup.</p>
           ) : (
             <div className="space-y-2">
-              <select value={selectedRepo} onChange={(e) => { setSelectedRepo(e.target.value); const r = repos.find((r) => r.id === e.target.value); if (r) setRepoBranch(r.defaultBranch ?? ''); }} className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+              <select
+                value={selectedRepo}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSelectedRepo(val);
+                  const r = repos.find((r) => r.id === val);
+                  if (r) setRepoBranch(r.defaultBranch ?? '');
+                  if (val) loadBranches(val);
+                  else setRepoBranchOptions([]);
+                }}
+                className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              >
                 <option value="">Select repository…</option>
                 {repos.map((r) => <option key={r.id} value={r.id}>{r.label ?? r.repoName}</option>)}
               </select>
-              <input value={repoBranch} onChange={(e) => setRepoBranch(e.target.value)} placeholder="Branch (default: main)" className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-              <button onClick={fetchFromRepo} disabled={!selectedRepo || fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+              {repoBranchOptions.length > 0 ? (
+                <select
+                  value={repoBranch}
+                  onChange={(e) => setRepoBranch(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                >
+                  <option value="">Default branch</option>
+                  {repoBranchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                </select>
+              ) : (
+                <input
+                  value={repoBranch}
+                  onChange={(e) => setRepoBranch(e.target.value)}
+                  placeholder={branchesLoading ? 'Loading branches…' : 'Branch (default: main)'}
+                  disabled={branchesLoading}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-60"
+                />
+              )}
+              <button onClick={() => fetchFromRepo()} disabled={!selectedRepo || fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
                 {fetchingRepo ? <><Loader2 size={14} className="animate-spin" /> Fetching…</> : <><GitBranch size={14} /> Fetch & Analyse</>}
               </button>
+              {lastFetchedRepoId && (
+                <button onClick={() => fetchFromRepo(true)} disabled={fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-400 dark:hover:bg-indigo-900/20 disabled:opacity-50">
+                  <GitBranch size={12} /> Fetch recently changed
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1008,10 +1386,47 @@ export function ALCodeHealthView({ projectId }: Props) {
       )}
 
       {/* AI Semantic modal */}
-      {semanticModal && <AiSemanticModal results={results} projectId={projectId} localWorkspacePath={localWorkspacePath} onClose={() => setSemanticModal(false)} />}
+      {semanticModal && (
+        <AiSemanticModal
+          results={results}
+          projectId={projectId}
+          localWorkspacePath={localWorkspacePath}
+          lastFetchedRepoId={lastFetchedRepoId}
+          lastFetchedBranch={lastFetchedBranch || repoBranch}
+          onClose={() => setSemanticModal(false)}
+          onAddToQueue={(issue, obj, key) => {
+            setQueuedIssues((p) => p.some((q) => q.key === key) ? p : [...p, { issue, object: obj, key }]);
+          }}
+        />
+      )}
 
       {/* AI Explain modal */}
       {aiModal && <AiExplainModal issue={aiModal.issue} object={aiModal.object} projectId={projectId} onClose={() => setAiModal(null)} />}
+
+      {/* AI Refactor modal */}
+      {refactorModal && <AiRefactorModal issue={refactorModal.issue} object={refactorModal.object} projectId={projectId} onClose={() => setRefactorModal(null)} />}
+
+      {/* Code View modal */}
+      {codeModal && lastFetchedRepoId && (
+        <CodeViewModal
+          object={codeModal.object}
+          issue={codeModal.issue}
+          repoId={lastFetchedRepoId}
+          branch={lastFetchedBranch || repoBranch}
+          projectId={projectId}
+          onClose={() => setCodeModal(null)}
+        />
+      )}
+
+      {/* Work Item Queue modal */}
+      {queueModal && (
+        <WorkItemQueueModal
+          queued={queuedIssues}
+          projectId={projectId}
+          onClose={() => setQueueModal(false)}
+          onClear={() => { setQueuedIssues([]); setQueueModal(false); }}
+        />
+      )}
 
       {/* Work Item modal */}
       {wiModal && <WorkItemModal issue={wiModal.issue} object={wiModal.object} projectId={projectId} onClose={() => setWiModal(null)} />}

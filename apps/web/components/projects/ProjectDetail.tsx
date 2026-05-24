@@ -128,7 +128,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   // ── Staleness check: ping remote metadata for all remote-connected files on load ────────────
   useEffect(() => {
-    const hasRemoteFiles = project?.xliffFiles?.some((f) => f.remoteRepo && f.remoteConnectionId);
+    const hasRemoteFiles = data?.data?.xliffFiles?.some((f) => f.remoteRepo && f.remoteConnectionId);
     if (!hasRemoteFiles) return;
     api.post<{ data: Array<{ fileId: string; isStale: boolean; neverSynced: boolean }> }>(
       `/api/projects/${projectId}/xliff-files/check-staleness`, {}
@@ -140,7 +140,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       setStaleFiles(map);
     }).catch(() => { /* silently ignore network errors */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, project?.xliffFiles?.map((f) => f.id).join(',')]);
+  }, [projectId, data?.data?.xliffFiles?.map((f) => f.id).join(',')]);
 
   const syncFromRemote = useCallback(
     async (file: Project['xliffFiles'][0]) => {

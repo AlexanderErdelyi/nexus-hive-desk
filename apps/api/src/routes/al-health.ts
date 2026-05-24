@@ -455,5 +455,116 @@ If there are no genuine issues, return { "findings": [] }.`;
       return { data: JSON.parse(raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim()) };
     } catch { return reply.status(502).send({ error: 'parse_error', message: 'AI returned invalid JSON' }); }
   });
+
+  // GET branches for a repository
+  app.get<{ Params: { projectId: string; repoId: string } }>(
+    '/:projectId/al-health/repos/:repoId/branches',
+    async (req, reply) => {
+      const repo = await prisma.projectRepository.findUnique({ where: { id: req.params.repoId } });
+      if (!repo) return reply.status(404).send({ error: 'not_found', message: 'Repo not found' });
+      const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+      if (!conn) return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      try {
+        if (conn.type === 'github') {
+          const [owner, repoName] = repo.repoName.split('/');
+          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/branches?per_page=100`, {
+            headers: { Authorization: `Bearer ${conn.pat}`, Accept: 'application/vnd.github+json' },
+          });
+          if (!res.ok) throw new Error(`GitHub ${res.status}`);
+          const data = await res.json() as Array<{ name: string }>;
+          return { data: data.map((b) => b.name) };
+        } else {
+          const baseUrl = (conn.baseUrl ?? '').replace(/\/$/, '');
+          const adoProject = repo.adoProjectName ?? '';
+          const repoName = repo.repoName.split('/').pop() || repo.repoName;
+          const auth = Buffer.from(`:${conn.pat}`).toString('base64');
+          const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/refs?filter=heads/&api-version=7.1`;
+          const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+          if (!res.ok) throw new Error(`ADO ${res.status}`);
+          const data = await res.json() as { value?: Array<{ name: string }> };
+          return { data: (data.value ?? []).map((r) => r.name.replace('refs/heads/', '')) };
+        }
+      } catch (e) {
+        return reply.status(502).send({ error: 'fetch_failed', message: e instanceof Error ? e.message : 'Failed to list branches' });
+      }
+    }
+  );
+
+  // GET single file content from a repository
+  app.get<{
+    Params: { projectId: string; repoId: string };
+    Querystring: { path: string; branch?: string };
+  }>('/:projectId/al-health/repos/:repoId/file', async (req, reply) => {
+    const { path: filePath, branch } = req.query;
+    if (!filePath) return reply.status(400).send({ error: 'validation', message: 'path required' });
+    const repo = await prisma.projectRepository.findUnique({ where: { id: req.params.repoId } });
+    if (!repo) return reply.status(404).send({ error: 'not_found', message: 'Repo not found' });
+    const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+    if (!conn) return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+    const targetBranch = branch ?? repo.defaultBranch ?? 'main';
+    try {
+      if (conn.type === 'github') {
+        const [owner, repoName] = repo.repoName.split('/');
+        const res = await fetch(
+          `https://api.github.com/repos/${owner}/${repoName}/contents/${encodeURIComponent(filePath.replace(/^\//, ''))}?ref=${encodeURIComponent(targetBranch)}`,
+          { headers: { Authorization: `Bearer ${conn.pat}`, Accept: 'application/vnd.github.raw+json' } }
+        );
+        if (!res.ok) throw new Error(`GitHub ${res.status}`);
+        return { data: await res.text() };
+      } else {
+        const baseUrl = (conn.baseUrl ?? '').replace(/\/$/, '');
+        const adoProject = repo.adoProjectName ?? '';
+        const repoName = repo.repoName.split('/').pop() || repo.repoName;
+        const auth = Buffer.from(`:${conn.pat}`).toString('base64');
+        const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?path=${encodeURIComponent(filePath)}&versionDescriptor.version=${encodeURIComponent(targetBranch)}&versionDescriptor.versionType=branch&$format=text&api-version=7.1`;
+        const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` } });
+        if (!res.ok) throw new Error(`ADO ${res.status}`);
+        return { data: await res.text() };
+      }
+    } catch (e) {
+      return reply.status(502).send({ error: 'fetch_failed', message: e instanceof Error ? e.message : 'Failed to fetch file' });
+    }
+  });
+
+  // POST ai-refactor — suggest refactored version of a code fragment
+  app.post<{
+    Params: { projectId: string };
+    Body: { ruleId: string; message: string; detail?: string; procedure?: string; objectType: string; objectName: string; codeContext?: string };
+  }>('/:projectId/al-health/ai-refactor', async (req, reply) => {
+    const { ruleId, message, detail, procedure, objectType, objectName, codeContext } = req.body;
+    const token = process.env.GITHUB_TOKEN;
+    const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
+    if (!token) return reply.status(503).send({ error: 'no_ai_token', message: 'AI token not configured' });
+
+    const userPrompt = `You are an expert Business Central AL developer. An AL code health analyser detected this issue:
+
+Object: ${objectType} "${objectName}"
+Rule: ${ruleId}
+Issue: ${message}
+${procedure ? `Procedure: ${procedure}` : ''}
+${detail ? `Flagged code: ${detail}` : ''}
+${codeContext ? `\nCode context:\n\`\`\`al\n${codeContext}\n\`\`\`` : ''}
+
+Provide a concrete refactored version of the code that resolves this issue.
+Return JSON: { "before": "original problematic code snippet", "after": "refactored code snippet", "explanation": "brief explanation of changes" }
+Keep code snippets concise (show only the relevant portion, not the entire procedure unless necessary).`;
+
+    const aiRes = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: 'You are an expert Business Central AL developer. Respond with valid JSON only.' }, { role: 'user', content: userPrompt }],
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    if (!aiRes.ok) return reply.status(502).send({ error: 'ai_error', message: `AI call failed: ${aiRes.status}` });
+    const aiData = await aiRes.json() as { choices?: Array<{ message: { content: string } }> };
+    const raw = aiData.choices?.[0]?.message?.content ?? '{}';
+    try {
+      return { data: JSON.parse(raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim()) };
+    } catch { return reply.status(502).send({ error: 'parse_error', message: 'AI returned invalid JSON' }); }
+  });
 }
 
