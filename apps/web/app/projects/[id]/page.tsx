@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { ProjectDetail } from '@/components/projects/ProjectDetail';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 
@@ -5,7 +6,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const { id } = await params;
   return (
     <ErrorBoundary>
-      <ProjectDetail projectId={id} />
+      <Suspense>
+        <ProjectDetail projectId={id} />
+      </Suspense>
     </ErrorBoundary>
   );
 }

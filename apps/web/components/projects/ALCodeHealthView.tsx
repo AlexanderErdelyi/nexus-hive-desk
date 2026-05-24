@@ -259,15 +259,15 @@ function AiExplainModal({ issue, object, projectId, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-xl rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
-        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+      <div className="flex w-full max-w-xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" style={{ maxHeight: 'calc(100vh - 2rem)' }}>
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-purple-500" />
             <span className="font-semibold text-gray-900 dark:text-white">AI Explanation</span>
           </div>
           <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="overflow-y-auto p-4 space-y-3">
           <div className="rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
             <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">{issue.ruleId} · {object.objectType} {object.objectName}{issue.procedure ? ` · ${issue.procedure}` : ''}</div>
             <div className="text-sm text-gray-800 dark:text-gray-200">{issue.message}</div>
@@ -323,15 +323,15 @@ function WorkItemModal({ issue, object, projectId, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900">
-        <div className="flex items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
+      <div className="flex w-full max-w-2xl flex-col rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900" style={{ maxHeight: 'calc(100vh - 2rem)' }}>
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-4 dark:border-gray-800">
           <div className="flex items-center gap-2">
             <Ticket size={16} className="text-sky-500" />
             <span className="font-semibold text-gray-900 dark:text-white">Create Work Item</span>
           </div>
           <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
         </div>
-        <div className="space-y-4 p-4">
+        <div className="overflow-y-auto space-y-4 p-4">
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="mb-1 block text-xs font-semibold text-gray-500">Type</label>

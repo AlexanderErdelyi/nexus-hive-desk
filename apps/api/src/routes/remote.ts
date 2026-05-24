@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { serializeXliff } from '@nexus/xliff';
 import type { TranslationState } from '@nexus/types';
@@ -1240,7 +1240,7 @@ export async function remoteRoutes(app: FastifyInstance) {
         const changes = await fetchJson<{
           changeEntries?: Array<{
             changeType: string;
-            item?: { path?: string; gitObjectType?: string };
+            item?: { path?: string; gitObjectType?: string; isFolder?: boolean };
           }>;
         }>(
           `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/pullRequests/${encodeURIComponent(prId)}/iterations/${latestIteration.id}/changes?$top=100&api-version=7.1`,
@@ -1251,7 +1251,9 @@ export async function remoteRoutes(app: FastifyInstance) {
         const targetCommit = pr.lastMergeTargetCommit?.commitId;
 
         const fileEntries = (changes.changeEntries ?? []).filter(
-          (c) => c.item?.gitObjectType === 'blob' && c.item?.path
+          (c) => c.item?.path && !c.item?.isFolder &&
+            (c.item?.gitObjectType === undefined ||
+             c.item.gitObjectType.toLowerCase() === 'blob')
         );
 
         // Fetch diff blocks for each file (up to 20 files)
@@ -1297,6 +1299,8 @@ export async function remoteRoutes(app: FastifyInstance) {
             prTitle: pr.title,
             prDescription: pr.description,
             totalFiles: fileEntries.length,
+            sourceCommit,
+            targetCommit,
           },
         };
       } catch (error) {
@@ -1367,43 +1371,40 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ÔöÇÔöÇÔöÇ GitHub: Get Pull Request status ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  // ─── ADO: Fetch before/after content of a single file for side-by-side diff ─
   app.get<{
-    Params: { connId: string; owner: string; repo: string; prId: string };
+    Params: { connId: string; project: string; repoId: string };
+    Querystring: { path: string; before?: string; after?: string };
   }>(
-    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId',
+    '/connections/:connId/azure/projects/:project/repos/:repoId/file-diff-content',
     async (req, reply) => {
       const conn = await getConnection(req.params.connId);
-      if (!conn || conn.type !== 'github') {
+      if (!conn || conn.type !== 'azure-devops') {
         return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+      const { project, repoId } = req.params;
+      const { path: filePath, before, after } = req.query;
+      if (!filePath) return reply.status(400).send({ error: 'validation', message: 'path is required' });
+
+      const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+      const repoEnc = encodeURIComponent(repoId);
+      const projEnc = encodeURIComponent(project);
+
+      async function fetchText(commitId: string): Promise<string> {
+        const url = `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/items?path=${encodeURIComponent(filePath)}&versionDescriptor.versionType=commit&versionDescriptor.version=${encodeURIComponent(commitId)}&api-version=7.1`;
+        const resp = await fetch(url, { headers: azureHeaders(conn!.pat) });
+        if (!resp.ok) return '';
+        const text = await resp.text();
+        // Truncate very large files to avoid sending megabytes to the browser
+        return text.length > 200_000 ? text.slice(0, 200_000) + '\n... (truncated)' : text;
       }
 
       try {
-        const result = await fetchJson<{
-          number: number;
-          title: string;
-          state: string;
-          merged: boolean;
-          html_url: string;
-          user?: { login: string };
-          created_at: string;
-          closed_at?: string;
-        }>(
-          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}`,
-          githubHeaders(conn.pat)
-        );
-
-        return {
-          data: {
-            prId: result.number,
-            title: result.title,
-            status: result.merged ? 'completed' : result.state, // map to same shape as ADO
-            createdBy: result.user?.login,
-            createdAt: result.created_at,
-            closedAt: result.closed_at,
-            webUrl: result.html_url,
-          },
-        };
+        const [beforeContent, afterContent] = await Promise.all([
+          before ? fetchText(before) : Promise.resolve(''),
+          after ? fetchText(after) : Promise.resolve(''),
+        ]);
+        return { data: { beforeContent, afterContent } };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         return reply.status(502).send({ error: 'remote_error', message });

@@ -6,7 +6,7 @@ import {
   FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
@@ -74,6 +74,7 @@ function getErrorMessage(error: unknown) {
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [uploading, setUploading] = useState(false);
   const [syncingFile, setSyncingFile] = useState<string | null>(null);
   const [staleFiles, setStaleFiles] = useState<Map<string, { isStale: boolean; neverSynced: boolean }>>(new Map());
@@ -81,7 +82,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
   const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
-  const [view, setView] = useState<ProjectView>('hub');
+  const initialView = (searchParams.get('view') as ProjectView | null) ?? 'hub';
+  const [view, setView] = useState<ProjectView>(initialView);
   const [savingCaps, setSavingCaps] = useState(false);
   const [savingWorkspacePath, setSavingWorkspacePath] = useState(false);
   const [workspacePath, setWorkspacePath] = useState<string | undefined>(undefined);
