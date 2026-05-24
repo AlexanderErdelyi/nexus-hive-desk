@@ -1,7 +1,8 @@
-import { createProvider } from '@nexus/ai';
+﻿import { createProvider } from '@nexus/ai';
 import { prisma } from '@nexus/db';
 import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
+import { requireAuth } from '../lib/auth';
 
 const BATCH_SIZE = 20;
 const REVIEW_BATCH_SIZE = 10;
@@ -28,7 +29,7 @@ async function translateTranslations(options: {
   if (!project) throw new Error('Project not found');
 
   const glossaryEntries = await prisma.glossaryEntry.findMany({
-    where: { projectId, sourceLanguage: project.sourceLanguage, targetLanguage: project.targetLanguage },
+    where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
   });
   const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -44,8 +45,8 @@ async function translateTranslations(options: {
     const batch = translations.slice(i, i + BATCH_SIZE);
     const response = await provider.translate({
       units: batch.map((t) => ({ id: t.id, source: t.source })),
-      sourceLanguage: project.sourceLanguage,
-      targetLanguage: project.targetLanguage,
+      sourceLanguage: project.sourceLanguage ?? 'en',
+      targetLanguage: project.targetLanguage ?? 'de',
       glossary,
     });
     allResults.push(...response.results.map((r) => ({ id: r.id, suggestedTarget: r.translatedText })));
@@ -67,7 +68,9 @@ async function translateTranslations(options: {
   return { suggestions: allResults, translated: allResults.length };
 }
 
+
 export async function aiRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   app.post<{
     Body: { translationIds: string[]; projectId: string; provider?: AIProviderType; model?: string };
   }>('/translate', async (req, reply) => {
@@ -115,6 +118,97 @@ export async function aiRoutes(app: FastifyInstance) {
     }
   });
 
+  // ÔöÇÔöÇÔöÇ SSE streaming bulk translate ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  // Streams translation suggestions in batches; client collects them all and
+  // calls PATCH /translations/bulk when ready to save.
+  app.post<{
+    Body: {
+      projectId: string;
+      xliffFileId?: string;
+      translationIds?: string[];
+      provider?: AIProviderType;
+      model?: string;
+    };
+  }>('/translate-stream', async (req, reply) => {
+    const { projectId, xliffFileId, translationIds, provider, model } = req.body;
+    if (!projectId) {
+      return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
+    }
+
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    // Resolve the list of IDs to translate
+    let ids: string[];
+    if (translationIds?.length) {
+      ids = translationIds;
+    } else if (xliffFileId) {
+      const rows = await prisma.translation.findMany({
+        where: { xliffFileId, OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }] },
+        select: { id: true },
+        orderBy: { unitId: 'asc' },
+      });
+      ids = rows.map((r) => r.id);
+    } else {
+      return reply.status(400).send({ error: 'validation', message: 'xliffFileId or translationIds required' });
+    }
+
+    if (!ids.length) {
+      reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      reply.raw.write(`data: ${JSON.stringify({ type: 'complete', done: 0, total: 0 })}\n\n`);
+      reply.raw.end();
+      return;
+    }
+
+    const translations = await prisma.translation.findMany({
+      where: { id: { in: ids } },
+      orderBy: { unitId: 'asc' },
+    });
+    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
+
+    const glossaryEntries = await prisma.glossaryEntry.findMany({
+      where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+    });
+    const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
+
+    const providerInstance = createProvider({
+      type: provider ?? (process.env.AI_PROVIDER as AIProviderType) ?? 'github-models',
+      token,
+      model: model ?? process.env.AI_MODEL,
+    });
+
+    const total = translations.length;
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    reply.raw.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
+
+    let done = 0;
+    try {
+      for (let i = 0; i < translations.length; i += BATCH_SIZE) {
+        const batch = translations.slice(i, i + BATCH_SIZE);
+        const response = await providerInstance.translate({
+          units: batch.map((t) => ({ id: t.id, source: t.source })),
+          sourceLanguage: project.sourceLanguage ?? 'en',
+          targetLanguage: project.targetLanguage ?? 'de',
+          glossary,
+        });
+        done += batch.length;
+        const results = response.results.map((r) => ({
+          id: r.id,
+          suggestedTarget: r.translatedText,
+          confidenceScore: r.confidenceScore ?? 85,
+          confidence: r.confidence ?? 'high',
+        }));
+        reply.raw.write(`data: ${JSON.stringify({ type: 'progress', done, total, results })}\n\n`);
+      }
+      reply.raw.write(`data: ${JSON.stringify({ type: 'complete', done, total })}\n\n`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      reply.raw.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`);
+    }
+    reply.raw.end();
+  });
+
   app.post<{
     Body: {
       translationIds: string[];
@@ -141,7 +235,7 @@ export async function aiRoutes(app: FastifyInstance) {
       if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
 
       const glossaryEntries = await prisma.glossaryEntry.findMany({
-        where: { projectId, sourceLanguage: project.sourceLanguage, targetLanguage: project.targetLanguage },
+        where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
       });
       const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -161,8 +255,8 @@ export async function aiRoutes(app: FastifyInstance) {
             target: t.target,
             context: t.note ?? undefined,
           })),
-          sourceLanguage: project.sourceLanguage,
-          targetLanguage: project.targetLanguage,
+          sourceLanguage: project.sourceLanguage ?? 'en',
+          targetLanguage: project.targetLanguage ?? 'de',
           glossary,
           additionalContext,
         });
@@ -180,7 +274,7 @@ export async function aiRoutes(app: FastifyInstance) {
     }
   });
 
-  // ─── Generative AI: generate Agent / Skill / MCP config from description ─────
+  // ÔöÇÔöÇÔöÇ Generative AI: generate Agent / Skill / MCP config from description ÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Body: { type: 'agent' | 'skill' | 'mcp' | 'work-item'; description: string; workItemType?: string };
   }>('/generate', async (req, reply) => {
@@ -215,7 +309,7 @@ For model: use "gpt-4o" for complex orchestration, "gpt-4o-mini" for simple task
 For description: follow this exact pattern from the example:
   "Use when: <trigger phrase 1>, <trigger phrase 2>, ..., <trigger phrase N>. <One sentence about what the agent coordinates/does and what spec/skill it reads first>."
 
-Write a thorough, professional systemPrompt with clear constraints, step-by-step approach, and output format — similar to production-quality agent definitions.`,
+Write a thorough, professional systemPrompt with clear constraints, step-by-step approach, and output format ÔÇö similar to production-quality agent definitions.`,
 
       skill: `You are an AI skill designer for the GitHub Copilot / NexusHiveDesk platform. Given a plain-text description of a skill, generate a skill configuration as JSON matching the VS Code Copilot skill spec.
 
@@ -224,10 +318,10 @@ Return ONLY valid JSON with these fields:
   "name": "PascalCase or Title Case name (e.g. 'TranslateXliff', 'ReviewTranslation', 'CreateUserStory')",
   "description": "Multi-sentence description. Start with 'Use when:' then list 4-8 trigger phrases, followed by '. ' and what the skill does step by step.",
   "type": "prompt",
-  "promptTemplate": "The full prompt template. Use {{variable_name}} placeholders for dynamic values. Must be detailed and production-quality — include role, task, input format, output format, and any constraints. At least 150 words for non-trivial skills."
+  "promptTemplate": "The full prompt template. Use {{variable_name}} placeholders for dynamic values. Must be detailed and production-quality ÔÇö include role, task, input format, output format, and any constraints. At least 150 words for non-trivial skills."
 }
 For type: use 'prompt' for LLM-based skills, 'code' for scripted logic, 'mcp-tool' for MCP protocol tools.
-For promptTemplate: write a thorough template that actually makes the skill work — include clear instructions, output format, and examples where helpful. Use {{variable}} syntax for all dynamic inputs.`,
+For promptTemplate: write a thorough template that actually makes the skill work ÔÇö include clear instructions, output format, and examples where helpful. Use {{variable}} syntax for all dynamic inputs.`,
 
       mcp: `You are an MCP (Model Context Protocol) connection designer. Given a description of what service to connect to, generate an MCP connection config as JSON.
 Return ONLY valid JSON with these fields:
@@ -250,7 +344,7 @@ Return ONLY valid JSON with these fields:
   "priority": 2,
   "tags": "comma-separated relevant tags or empty string"
 }
-Write professional, clear, testable content. Respond in the same language as the user's input. Do NOT use HTML tags — use plain text or markdown only.`,
+Write professional, clear, testable content. Respond in the same language as the user's input. Do NOT use HTML tags ÔÇö use plain text or markdown only.`,
     };
 
     try {
@@ -287,7 +381,45 @@ Write professional, clear, testable content. Respond in the same language as the
     }
   });
 
-  // ─── PR code review — analyze diff and return suggestions ────────────────
+  // ÔöÇÔöÇÔöÇ Quick suggest ÔÇö lightweight single-turn AI call ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  app.post<{ Body: { prompt: string } }>('/quick-suggest', async (req, reply) => {
+    const { prompt } = req.body;
+    if (!prompt?.trim()) {
+      return reply.status(400).send({ error: 'validation', message: 'prompt is required' });
+    }
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    try {
+      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.AI_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant. Respond only with valid JSON.' },
+            { role: 'user', content: prompt.trim() },
+          ],
+          temperature: 0.7,
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
+      }
+
+      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+      return { data: JSON.parse(content) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(500).send({ error: 'ai_error', message });
+    }
+  });
+
+  // ÔöÇÔöÇÔöÇ PR code review ÔÇö analyze diff and return suggestions ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Body: {
       prTitle: string;
@@ -365,7 +497,7 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
     }
   });
 
-  // ─── Quick suggest — lightweight single-turn AI call ──────────────────────
+  // ÔöÇÔöÇÔöÇ Quick suggest ÔÇö lightweight single-turn AI call ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{ Body: { prompt: string } }>('/quick-suggest', async (req, reply) => {
     const { prompt } = req.body;
     if (!prompt?.trim()) {
