@@ -22,6 +22,7 @@ import { userTokenRoutes } from './routes/user-tokens';
 import { workItemRoutes } from './routes/work-items';
 import { alHealthRoutes } from './routes/al-health';
 import { inviteRoutes } from './routes/invites';
+import { dashboardRoutes } from './routes/dashboard';
 
 async function bootstrap() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 }); // 10 MB body limit
@@ -85,6 +86,7 @@ async function bootstrap() {
   await app.register(workItemRoutes, { prefix: '/api/projects' });
   await app.register(alHealthRoutes, { prefix: '/api/projects' });
   await app.register(inviteRoutes, { prefix: '/api' });
+  await app.register(dashboardRoutes, { prefix: '/api/dashboard' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 
