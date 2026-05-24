@@ -468,11 +468,15 @@ export async function projectRoutes(app: FastifyInstance) {
       status: string;
       sourceBranch: string;
       targetBranch: string;
-      reviewers: string[];
+      reviewers: Array<{ name: string; vote: number }>;
       createdAt: string;
       url: string;
       repoLabel: string;
       provider: 'github' | 'azure-devops';
+      // metadata needed for action endpoints
+      connectionId: string;
+      adoProjectName?: string;
+      repoSlug: string;
     }
 
     interface RepoError {
@@ -529,11 +533,16 @@ export async function projectRoutes(app: FastifyInstance) {
                 status: pr.status,
                 sourceBranch: pr.sourceRefName.replace('refs/heads/', ''),
                 targetBranch: pr.targetRefName.replace('refs/heads/', ''),
-                reviewers: (pr.reviewers ?? []).map((r) => r.displayName ?? '').filter(Boolean),
+                reviewers: (pr.reviewers ?? [])
+                  .filter((r) => r.displayName)
+                  .map((r) => ({ name: r.displayName!, vote: r.vote ?? 0 })),
                 createdAt: pr.creationDate,
                 url: pr._links?.web?.href ?? '',
                 repoLabel,
                 provider: 'azure-devops',
+                connectionId: conn.id,
+                adoProjectName: adoProject,
+                repoSlug: repoName,
               });
             }
           } else {
@@ -568,11 +577,15 @@ export async function projectRoutes(app: FastifyInstance) {
                 status: pr.state,
                 sourceBranch: pr.head?.ref ?? '',
                 targetBranch: pr.base?.ref ?? '',
-                reviewers: (pr.requested_reviewers ?? []).map((r) => r.login ?? '').filter(Boolean),
+                reviewers: (pr.requested_reviewers ?? [])
+                  .filter((r) => r.login)
+                  .map((r) => ({ name: r.login!, vote: 0 })),
                 createdAt: pr.created_at,
                 url: pr.html_url,
                 repoLabel,
                 provider: 'github',
+                connectionId: conn.id,
+                repoSlug: `${owner}/${repoSlug}`,
               });
             }
           }
