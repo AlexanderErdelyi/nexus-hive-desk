@@ -11,6 +11,7 @@ import {
   Code2,
   ExternalLink,
   FileCode,
+  GitBranch,
   GitPullRequest,
   Info,
   Link2,
@@ -28,6 +29,8 @@ import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { CreateBranchModal } from '@/components/shared/CreateBranchModal';
+import type { ProjectRepo } from '@/components/shared/CreateBranchModal';
 
 interface Reviewer {
   name: string;
@@ -773,6 +776,15 @@ export function PullRequestsView({ projectId, hasRepositories }: { projectId: st
     enabled: hasRepositories,
   });
 
+  const [showCreateBranch, setShowCreateBranch] = useState(false);
+  const { data: projectData } = useQuery({
+    queryKey: ['project-repos', projectId],
+    queryFn: () => api.get<{ data: { repositories: ProjectRepo[] } }>(`/api/projects/${projectId}`),
+    enabled: hasRepositories,
+    staleTime: 60_000,
+  });
+  const repos = projectData?.data.repositories ?? [];
+
   if (!hasRepositories) {
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 py-16 text-center dark:border-gray-700">
@@ -831,6 +843,14 @@ export function PullRequestsView({ projectId, hasRepositories }: { projectId: st
           <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
           Refresh
         </button>
+        {repos.length > 0 && (
+          <button
+            onClick={() => setShowCreateBranch(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+          >
+            <GitBranch size={13} /> New Branch
+          </button>
+        )}
       </div>
 
       {repoErrors.map((e) => (
@@ -871,6 +891,10 @@ export function PullRequestsView({ projectId, hasRepositories }: { projectId: st
           </div>
         </div>
       ))}
+
+      {showCreateBranch && repos.length > 0 && (
+        <CreateBranchModal repos={repos} onClose={() => setShowCreateBranch(false)} />
+      )}
     </div>
   );
 }

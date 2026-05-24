@@ -9,6 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { CreateBranchModal } from '@/components/shared/CreateBranchModal';
+import type { ProjectRepo } from '@/components/shared/CreateBranchModal';
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Request failed';
@@ -2249,6 +2251,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [search, setSearch] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showCreateBranch, setShowCreateBranch] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'backlog' | 'board'>('list');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [expandLevel, setExpandLevel] = useState(0);
@@ -2280,6 +2283,13 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
     queryFn: () => api.get<{ data: Agent[] }>('/api/agents'),
     staleTime: 60 * 1000,
   });
+
+  const { data: projectData } = useQuery({
+    queryKey: ['project-repos', projectId],
+    queryFn: () => api.get<{ data: { repositories: ProjectRepo[] } }>(`/api/projects/${projectId}`),
+    staleTime: 60_000,
+  });
+  const repos = projectData?.data.repositories ?? [];
 
   const items = data?.data ?? [];
   const agents = agentsData?.data ?? [];
@@ -2431,6 +2441,14 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           >
             <Plus size={14} /> New Work Item
           </button>
+          {repos.length > 0 && (
+            <button
+              onClick={() => setShowCreateBranch(true)}
+              className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300"
+            >
+              <GitBranch size={14} /> New Branch
+            </button>
+          )}
         </div>
 
         {/* Items list / backlog */}
@@ -2624,6 +2642,14 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
             void refetch();
           }}
+        />
+      )}
+
+      {showCreateBranch && repos.length > 0 && (
+        <CreateBranchModal
+          repos={repos}
+          suggestedBranchName={selectedItem ? `feature/#${selectedItem.id}-${selectedItem.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : undefined}
+          onClose={() => setShowCreateBranch(false)}
         />
       )}
     </div>
