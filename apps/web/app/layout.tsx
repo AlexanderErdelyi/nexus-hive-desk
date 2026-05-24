@@ -32,6 +32,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
               <span className="text-gray-300 dark:text-gray-700">|</span>
               <Link
+                href="/dashboard"
+                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+              >
+                Dashboard
+              </Link>
+              <Link
                 href="/projects"
                 data-tour="nav-projects"
                 className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
