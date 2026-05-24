@@ -1061,7 +1061,16 @@ export async function projectRoutes(app: FastifyInstance) {
 
     pullRequests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-    return { data: pullRequests, errors: errors.length > 0 ? errors : undefined };
+    // Deduplicate by PR id (same repo added multiple times produces duplicates)
+    const seen = new Set<string>();
+    const unique = pullRequests.filter((pr) => {
+      const key = `${pr.provider}:${pr.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return { data: unique, errors: errors.length > 0 ? errors : undefined };
   });
 
   // ─── ADO Access Config ───────────────────────────────────────────────────────
