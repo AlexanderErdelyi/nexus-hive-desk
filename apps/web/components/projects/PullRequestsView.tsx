@@ -4,11 +4,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   Check,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   GitPullRequest,
+  Link2,
+  Link2Off,
   Loader2,
   MessageSquare,
   RefreshCw,
+  Search,
   ThumbsDown,
   ThumbsUp,
   User,
@@ -44,6 +49,22 @@ interface PullRequest {
 interface RepoError {
   repoLabel: string;
   error: string;
+}
+
+interface WorkItem {
+  id: number;
+  title: string;
+  state: string;
+  type: string;
+  url: string;
+}
+
+interface WorkItemSearchResult {
+  id: number;
+  title: string;
+  state: string;
+  type: string;
+  workItemType: string;
 }
 
 interface PRResponse {
@@ -317,6 +338,170 @@ function ActionBtn({ icon, label, busy, onClick, variant, active }: ActionBtnPro
   );
 }
 
+// ── Work items panel (ADO only) ────────────────────────────────────────────────
+
+function workItemTypeCls(type: string): string {
+  const t = type.toLowerCase();
+  if (t === 'bug') return 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+  if (t === 'task') return 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+  if (t === 'feature' || t === 'epic') return 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400';
+  if (t.includes('story') || t === 'user story') return 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400';
+  return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
+}
+
+function WorkItemsPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const qc = useQueryClient();
+
+  const { data: wiData, isLoading: wiLoading } = useQuery({
+    queryKey: ['pr-work-items', pr.connectionId, pr.adoProjectName, pr.repoSlug, pr.id],
+    queryFn: () =>
+      api.get<{ data: WorkItem[] }>(
+        `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName!)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/work-items`
+      ),
+    enabled: expanded,
+  });
+
+  const { data: searchData, isLoading: searchLoading } = useQuery({
+    queryKey: ['wi-search', pr.connectionId, pr.adoProjectName, searchText],
+    queryFn: () =>
+      api.get<{ data: WorkItemSearchResult[] }>(
+        `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName!)}/work-items/search?q=${encodeURIComponent(searchText)}`
+      ),
+    enabled: expanded && searchText.trim().length >= 2,
+  });
+
+  const linkMutation = useMutation({
+    mutationFn: (workItemId: number) =>
+      api.post(
+        `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName!)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/work-items`,
+        { workItemId }
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['pr-work-items', pr.connectionId, pr.adoProjectName, pr.repoSlug, pr.id] });
+      setSearchText('');
+      toast.success('Work item linked');
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Failed to link work item'),
+  });
+
+  const unlinkMutation = useMutation({
+    mutationFn: (wiId: number) =>
+      api.delete(
+        `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName!)}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/work-items/${wiId}`
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['pr-work-items', pr.connectionId, pr.adoProjectName, pr.repoSlug, pr.id] });
+      toast.success('Work item unlinked');
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Failed to unlink work item'),
+  });
+
+  const linkedIds = new Set((wiData?.data ?? []).map((w) => w.id));
+  const searchResults = (searchData?.data ?? []).filter((r) => !linkedIds.has(r.id));
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+      >
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <Link2 size={12} />
+        Work items
+        {wiData && wiData.data.length > 0 && (
+          <span className="ml-1 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400">
+            {wiData.data.length}
+          </span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-2">
+          {wiLoading ? (
+            <div className="flex items-center gap-1 text-xs text-gray-400">
+              <Loader2 size={12} className="animate-spin" /> Loading…
+            </div>
+          ) : (wiData?.data ?? []).length === 0 ? (
+            <p className="text-xs text-gray-400 dark:text-gray-600">No work items linked yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {(wiData?.data ?? []).map((wi) => (
+                <li key={wi.id} className="flex items-center gap-2 text-xs">
+                  <span className={`rounded px-1.5 py-0.5 font-medium ${workItemTypeCls(wi.type)}`}>{wi.type}</span>
+                  <a
+                    href={wi.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-w-0 flex-1 truncate text-gray-700 hover:text-indigo-600 dark:text-gray-300 dark:hover:text-indigo-400"
+                  >
+                    #{wi.id} {wi.title}
+                  </a>
+                  <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                    {wi.state}
+                  </span>
+                  <button
+                    onClick={() => unlinkMutation.mutate(wi.id)}
+                    disabled={unlinkMutation.isPending}
+                    title="Unlink"
+                    className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20"
+                  >
+                    <Link2Off size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="relative">
+            <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search work items to link…"
+              className="w-full rounded border border-gray-200 py-1.5 pl-7 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-500"
+            />
+          </div>
+
+          {searchLoading && (
+            <div className="flex items-center gap-1 text-xs text-gray-400">
+              <Loader2 size={12} className="animate-spin" /> Searching…
+            </div>
+          )}
+
+          {!searchLoading && searchText.length >= 2 && searchResults.length === 0 && (
+            <p className="text-xs text-gray-400">No results.</p>
+          )}
+
+          {searchResults.length > 0 && (
+            <ul className="space-y-1 rounded border border-gray-100 p-1 dark:border-gray-800">
+              {searchResults.map((r) => (
+                <li key={r.id} className="flex items-center gap-2 text-xs">
+                  <span className={`rounded px-1.5 py-0.5 font-medium ${workItemTypeCls(r.workItemType ?? r.type)}`}>
+                    {r.workItemType ?? r.type}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-gray-700 dark:text-gray-300">
+                    #{r.id} {r.title}
+                  </span>
+                  <button
+                    onClick={() => linkMutation.mutate(r.id)}
+                    disabled={linkMutation.isPending}
+                    title="Link"
+                    className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20"
+                  >
+                    <Link2 size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PR card ────────────────────────────────────────────────────────────────────
 
 function PRCard({ pr, projectId }: { pr: PullRequest; projectId: string }) {
@@ -359,6 +544,9 @@ function PRCard({ pr, projectId }: { pr: PullRequest; projectId: string }) {
           )}
 
           <PRActions pr={pr} projectId={projectId} />
+          {pr.provider === 'azure-devops' && pr.adoProjectName && (
+            <WorkItemsPanel pr={pr} projectId={projectId} />
+          )}
         </div>
 
         <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-mono text-indigo-500 dark:bg-indigo-900/30 dark:text-indigo-400">
