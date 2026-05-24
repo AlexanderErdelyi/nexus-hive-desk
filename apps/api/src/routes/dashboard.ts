@@ -5,24 +5,19 @@ import { requireAuth } from '../lib/auth';
 export async function dashboardRoutes(app: FastifyInstance) {
   app.addHook('onRequest', requireAuth(app));
 
-  /** GET /api/dashboard — aggregate per-project stats for the current user */
+  /** GET /api/dashboard — aggregate per-project stats for all projects */
   app.get('/', async (req) => {
     const userId = req.user.sub;
 
-    // Projects the user is a member of
+    // Optional membership roles — show all projects regardless
     const memberships = await prisma.projectMember.findMany({
       where: { userId },
       select: { projectId: true, role: true },
     });
-    const projectIds = memberships.map((m) => m.projectId);
     const roleMap = Object.fromEntries(memberships.map((m) => [m.projectId, m.role]));
 
-    if (projectIds.length === 0) {
-      return { data: [] };
-    }
-
     const projects = await prisma.project.findMany({
-      where: { id: { in: projectIds } },
+      where: {},
       orderBy: { updatedAt: 'desc' },
       include: {
         customer: { select: { id: true, name: true } },
@@ -42,6 +37,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
         },
       },
     });
+
+    const projectIds = projects.map((p) => p.id);
 
     // Batch translation counts per project
     const translationCounts = await prisma.translation.groupBy({
