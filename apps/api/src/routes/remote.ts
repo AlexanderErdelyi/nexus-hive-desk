@@ -703,6 +703,7 @@ export async function remoteRoutes(app: FastifyInstance) {
       sourceBranch: string;
       targetBranch: string;
       workItemIds?: number[];
+      reviewerIds?: string[];
     };
   }>(
     '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests',
@@ -714,7 +715,7 @@ export async function remoteRoutes(app: FastifyInstance) {
 
       try {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
-        const { title, description, sourceBranch, targetBranch, workItemIds } = req.body;
+        const { title, description, sourceBranch, targetBranch, workItemIds, reviewerIds } = req.body;
 
         const body: Record<string, unknown> = {
           title,
@@ -728,6 +729,10 @@ export async function remoteRoutes(app: FastifyInstance) {
             id: String(id),
             url: `${baseUrl}/_apis/wit/workitems/${id}`,
           }));
+        }
+
+        if (reviewerIds && reviewerIds.length > 0) {
+          body.reviewers = reviewerIds.map((id) => ({ id }));
         }
 
         const result = await fetchJsonWithInit<{
@@ -806,7 +811,7 @@ export async function remoteRoutes(app: FastifyInstance) {
   // ─── GitHub: Create Pull Request ──────────────────────────────────────────
   app.post<{
     Params: { connId: string; owner: string; repo: string };
-    Body: { title: string; description?: string; sourceBranch: string; targetBranch: string };
+    Body: { title: string; description?: string; sourceBranch: string; targetBranch: string; reviewerLogins?: string[] };
   }>(
     '/connections/:connId/github/repos/:owner/:repo/pull-requests',
     async (req, reply) => {
@@ -816,7 +821,7 @@ export async function remoteRoutes(app: FastifyInstance) {
       }
 
       try {
-        const { title, description, sourceBranch, targetBranch } = req.body;
+        const { title, description, sourceBranch, targetBranch, reviewerLogins } = req.body;
         const result = await fetchJsonWithInit<{
           number: number;
           title: string;
@@ -831,9 +836,65 @@ export async function remoteRoutes(app: FastifyInstance) {
           }
         );
 
+        if (reviewerLogins && reviewerLogins.length > 0) {
+          await fetchJsonWithInit(
+            `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${result.number}/requested_reviewers`,
+            {
+              method: 'POST',
+              headers: githubHeaders(conn.pat),
+              body: JSON.stringify({ reviewers: reviewerLogins }),
+            }
+          ).catch(() => { /* non-fatal: reviewer assignment may fail due to permissions */ });
+        }
+
         return reply.status(201).send({
           data: { prId: result.number, title: result.title, status: result.state, webUrl: result.html_url },
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Search project members (for reviewer assignment) ───────────────
+  app.get<{
+    Params: { connId: string; project: string };
+    Querystring: { q?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/members/search',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const q = req.query.q ?? '';
+
+        // Derive vssps base URL (handles both dev.azure.com and legacy *.visualstudio.com)
+        let vsspsBase: string;
+        const devAzureMatch = /https:\/\/dev\.azure\.com\/([^/]+)/.exec(baseUrl);
+        const vstsMatch = /https:\/\/([^.]+)\.visualstudio\.com/.exec(baseUrl);
+        if (devAzureMatch) {
+          vsspsBase = `https://vssps.dev.azure.com/${devAzureMatch[1]}`;
+        } else if (vstsMatch) {
+          vsspsBase = `https://${vstsMatch[1]}.vssps.visualstudio.com`;
+        } else {
+          vsspsBase = baseUrl;
+        }
+
+        const data = await fetchJson<{ value?: Array<{ id: string; providerDisplayName: string; subjectDescriptor?: string }> }>(
+          `${vsspsBase}/_apis/identities?searchFilter=General&filterValue=${encodeURIComponent(q)}&queryMembership=None&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const members = (data.value ?? [])
+          .filter((m) => m.providerDisplayName && !m.providerDisplayName.startsWith('['))
+          .map((m) => ({ id: m.id, name: m.providerDisplayName }));
+
+        return { data: members };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         return reply.status(502).send({ error: 'remote_error', message });

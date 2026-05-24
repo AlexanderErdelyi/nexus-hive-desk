@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   X, GitBranch, GitCommit, GitPullRequest, Search, Plus, Loader2,
-  CheckCircle2, XCircle, Clock, ExternalLink, Sparkles, ChevronRight,
+  CheckCircle2, XCircle, Clock, ExternalLink, Sparkles, ChevronRight, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -26,6 +26,11 @@ interface PrStatus {
   createdAt?: string;
   closedAt?: string;
   webUrl?: string;
+}
+
+interface AdoMember {
+  id: string;
+  name: string;
 }
 
 interface XliffFile {
@@ -110,6 +115,16 @@ export function CommitModal({
   const [targetBranch, setTargetBranch] = useState(file.remoteBranch ?? 'main');
   const [creatingPr, setCreatingPr] = useState(false);
   const [prInfo, setPrInfo] = useState<PrStatus | null>(null);
+  const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [aiSuggestingPr, setAiSuggestingPr] = useState(false);
+  // Reviewers: ADO uses id+name objects; GitHub uses plain logins
+  const [reviewerSearch, setReviewerSearch] = useState('');
+  const [reviewerResults, setReviewerResults] = useState<AdoMember[]>([]);
+  const [reviewerSearchLoading, setReviewerSearchLoading] = useState(false);
+  const [selectedReviewers, setSelectedReviewers] = useState<AdoMember[]>([]);
+  const [githubReviewerText, setGithubReviewerText] = useState('');
+  const reviewerDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Existing PR status ───────────────────────────────────────────────────────
   const [prStatus, setPrStatus] = useState<PrStatus | null>(null);
@@ -133,9 +148,84 @@ export function CommitModal({
       const base = selectedWi ? `#${selectedWi.id}: ${selectedWi.title}` : `Translations update: ${committedBranch}`;
       setPrTitle(base);
       setTargetBranch(file.remoteBranch ?? 'main');
+      void fetchRemoteBranches();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
+
+  // ── Remote branches ─────────────────────────────────────────────────────────
+
+  async function fetchRemoteBranches() {
+    setLoadingBranches(true);
+    try {
+      let url: string;
+      if (isAdo) {
+        url = `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(adoProject)}/repos/${encodeURIComponent(repoId)}/branches`;
+      } else {
+        url = `/api/remote/connections/${connId}/github/repos/${githubOwner}/${githubRepo}/branches`;
+      }
+      const res = await api.get<{ data: Array<{ name: string }> }>(url);
+      setRemoteBranches(res.data.map((b) => b.name));
+    } catch {
+      // swallow — fall back to text input
+    } finally {
+      setLoadingBranches(false);
+    }
+  }
+
+  // ── AI suggest PR title/description ─────────────────────────────────────────
+
+  async function suggestPrWithAI() {
+    setAiSuggestingPr(true);
+    try {
+      const res = await api.post<{ data: { title?: string; description?: string } }>(
+        '/api/ai/quick-suggest',
+        {
+          prompt: `Generate a concise Pull Request title and description for XLIFF/translation changes on file "${file.filename}" committed to branch "${committedBranch || branchName}"${selectedWi ? ` (work item #${selectedWi.id}: ${selectedWi.title})` : ''}. Title should be under 80 chars. Description should summarise what translation units likely changed. Respond in JSON: {"title":"...", "description":"..."}`,
+        }
+      );
+      if (res.data.title) setPrTitle(res.data.title);
+      if (res.data.description) setPrDesc(res.data.description);
+    } catch {
+      toast.error('AI suggestion failed — fill in manually');
+    } finally {
+      setAiSuggestingPr(false);
+    }
+  }
+
+  // ── Reviewer search (ADO) ───────────────────────────────────────────────────
+
+  async function searchReviewers(q: string) {
+    if (!q.trim()) { setReviewerResults([]); return; }
+    setReviewerSearchLoading(true);
+    try {
+      const res = await api.get<{ data: AdoMember[] }>(
+        `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(adoProject)}/members/search?q=${encodeURIComponent(q)}`
+      );
+      const alreadySelected = new Set(selectedReviewers.map((r) => r.id));
+      setReviewerResults(res.data.filter((m) => !alreadySelected.has(m.id)));
+    } catch {
+      // swallow
+    } finally {
+      setReviewerSearchLoading(false);
+    }
+  }
+
+  function onReviewerSearchChange(v: string) {
+    setReviewerSearch(v);
+    if (reviewerDebounce.current) clearTimeout(reviewerDebounce.current);
+    reviewerDebounce.current = setTimeout(() => searchReviewers(v), 350);
+  }
+
+  function addReviewer(m: AdoMember) {
+    setSelectedReviewers((prev) => [...prev, m]);
+    setReviewerResults([]);
+    setReviewerSearch('');
+  }
+
+  function removeReviewer(id: string) {
+    setSelectedReviewers((prev) => prev.filter((r) => r.id !== id));
+  }
 
   // ── Work items ──────────────────────────────────────────────────────────────
 
@@ -276,15 +366,20 @@ export function CommitModal({
 
       let prRes: PrStatus;
       if (isAdo) {
+        const reviewerIds = selectedReviewers.map((r) => r.id);
         const res = await api.post<{ data: PrStatus }>(
           `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(adoProject)}/repos/${encodeURIComponent(repoId)}/pull-requests`,
-          { title: prTitle, description: prDesc, sourceBranch, targetBranch, workItemIds }
+          { title: prTitle, description: prDesc, sourceBranch, targetBranch, workItemIds, reviewerIds }
         );
         prRes = res.data;
       } else {
+        const reviewerLogins = githubReviewerText
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
         const res = await api.post<{ data: PrStatus }>(
           `/api/remote/connections/${connId}/github/repos/${githubOwner}/${githubRepo}/pull-requests`,
-          { title: prTitle, description: prDesc, sourceBranch, targetBranch }
+          { title: prTitle, description: prDesc, sourceBranch, targetBranch, reviewerLogins }
         );
         prRes = res.data;
       }
@@ -598,8 +693,19 @@ export function CommitModal({
                 Create a Pull Request to merge <span className="font-mono text-indigo-600 dark:text-indigo-400">{committedBranch}</span> into your target branch.
               </p>
 
+              {/* PR Title + AI suggest */}
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">PR Title</label>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="text-xs font-medium text-gray-700 dark:text-gray-300">PR Title</label>
+                  <button
+                    onClick={suggestPrWithAI}
+                    disabled={aiSuggestingPr}
+                    className="flex items-center gap-1 rounded border border-purple-300 bg-purple-50 px-2 py-0.5 text-[11px] text-purple-700 hover:bg-purple-100 disabled:opacity-50 dark:border-purple-700 dark:bg-purple-900/20 dark:text-purple-300"
+                  >
+                    {aiSuggestingPr ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                    AI Suggest
+                  </button>
+                </div>
                 <input
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
                   value={prTitle}
@@ -608,16 +714,34 @@ export function CommitModal({
                 />
               </div>
 
+              {/* Target branch dropdown */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">Target branch</label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                  value={targetBranch}
-                  onChange={(e) => setTargetBranch(e.target.value)}
-                  placeholder="main"
-                />
+                {loadingBranches ? (
+                  <div className="flex items-center gap-1 text-xs text-gray-400">
+                    <Loader2 size={12} className="animate-spin" /> Loading branches…
+                  </div>
+                ) : remoteBranches.length > 0 ? (
+                  <select
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    value={targetBranch}
+                    onChange={(e) => setTargetBranch(e.target.value)}
+                  >
+                    {remoteBranches.map((b) => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    value={targetBranch}
+                    onChange={(e) => setTargetBranch(e.target.value)}
+                    placeholder="main"
+                  />
+                )}
               </div>
 
+              {/* Description */}
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">Description (optional)</label>
                 <textarea
@@ -627,6 +751,66 @@ export function CommitModal({
                   onChange={(e) => setPrDesc(e.target.value)}
                   placeholder="Describe what was changed and why…"
                 />
+              </div>
+
+              {/* Reviewers */}
+              <div>
+                <label className="mb-1 flex items-center gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                  <Users size={12} /> Reviewers (optional)
+                </label>
+
+                {isAdo ? (
+                  <>
+                    {selectedReviewers.length > 0 && (
+                      <div className="mb-1.5 flex flex-wrap gap-1">
+                        {selectedReviewers.map((r) => (
+                          <span key={r.id} className="flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                            {r.name}
+                            <button onClick={() => removeReviewer(r.id)} className="hover:text-red-500">
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        className="w-full rounded-lg border border-gray-300 py-1.5 pl-8 pr-3 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        placeholder="Search team members…"
+                        value={reviewerSearch}
+                        onChange={(e) => onReviewerSearchChange(e.target.value)}
+                      />
+                    </div>
+                    {reviewerSearchLoading && (
+                      <div className="flex items-center gap-1 pt-1 text-xs text-gray-400">
+                        <Loader2 size={11} className="animate-spin" /> Searching…
+                      </div>
+                    )}
+                    {reviewerResults.length > 0 && (
+                      <ul className="mt-1 max-h-32 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                        {reviewerResults.map((m) => (
+                          <li key={m.id}>
+                            <button
+                              onClick={() => addReviewer(m)}
+                              className="flex w-full items-center gap-2 border-b border-gray-100 px-3 py-1.5 text-left text-sm last:border-0 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800"
+                            >
+                              <Users size={12} className="shrink-0 text-gray-400" />
+                              {m.name}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <input
+                    className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="GitHub usernames, comma-separated"
+                    value={githubReviewerText}
+                    onChange={(e) => setGithubReviewerText(e.target.value)}
+                  />
+                )}
               </div>
 
               {selectedWi && (
