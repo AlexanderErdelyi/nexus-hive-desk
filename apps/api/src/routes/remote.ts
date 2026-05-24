@@ -841,6 +841,105 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
+  // ─── ADO: Vote on Pull Request ────────────────────────────────────────────
+  app.put<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+    Body: { vote: number }; // 10=approved, 5=approved w/ suggestions, 0=none, -5=waiting, -10=rejected
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/vote',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+
+        // Resolve current user's ADO identity ID via profile API
+        const profile = await fetchJson<{ id: string }>(
+          'https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1',
+          azureHeaders(conn.pat)
+        );
+        const userId = profile.id;
+
+        const result = await fetchJsonWithInit<{ id: string; vote: number; displayName?: string }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}/reviewers/${userId}?api-version=7.1`,
+          { method: 'PUT', headers: azureHeaders(conn.pat), body: JSON.stringify({ vote: req.body.vote }) }
+        );
+
+        return { data: { vote: result.vote, reviewerId: result.id } };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Post comment thread on Pull Request ─────────────────────────────
+  app.post<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+    Body: { content: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/threads',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const result = await fetchJsonWithInit<{ id: number }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}/threads?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: azureHeaders(conn.pat),
+            body: JSON.stringify({
+              comments: [{ parentCommentId: 0, content: req.body.content, commentType: 1 }],
+              status: 1,
+            }),
+          }
+        );
+
+        return reply.status(201).send({ data: { threadId: result.id } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── GitHub: Submit Pull Request review ───────────────────────────────────
+  app.post<{
+    Params: { connId: string; owner: string; repo: string; prId: string };
+    Body: { event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'; body?: string };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId/review',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const result = await fetchJsonWithInit<{ id: number; state: string; html_url: string }>(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}/reviews`,
+          {
+            method: 'POST',
+            headers: githubHeaders(conn.pat),
+            body: JSON.stringify({ event: req.body.event, body: req.body.body ?? '' }),
+          }
+        );
+
+        return reply.status(201).send({ data: { id: result.id, state: result.state, url: result.html_url } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
   // ─── GitHub: Get Pull Request status ──────────────────────────────────────
   app.get<{
     Params: { connId: string; owner: string; repo: string; prId: string };
