@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Brain, CheckCircle2, ChevronDown, ChevronRight,
-  Code2, Download, FileCode2, FolderOpen, FolderTree, GitBranch,
+  Clock, Code2, Download, EyeOff, FileCode2, FolderOpen, FolderTree, GitBranch,
   Info, List, Loader2, Plus, Sparkles, Ticket, Trash2, Wand2, X, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -489,23 +489,57 @@ function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
 }) {
   const [type, setType] = useState('Task');
   const [title, setTitle] = useState(`[AL Health] ${queued.length} issues queued for review`);
+  const [createMode, setCreateMode] = useState<'combined' | 'per-finding' | 'per-file'>('combined');
   const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const desc = `## AL Code Health Issues\n\n${queued.map((q, i) =>
     `### ${i + 1}. ${q.issue.ruleId}: ${q.object.objectType} "${q.object.objectName}"${q.issue.procedure ? ` · ${q.issue.procedure}` : ''}\n**Issue:** ${q.issue.message}${q.issue.line ? ` (line ${q.issue.line})` : ''}\n\`${q.object.filePath}\``
   ).join('\n\n')}`;
 
-  async function create() {
+  async function createCombined() {
     setSaving(true);
     try {
       await api.post(`/api/projects/${projectId}/work-items`, { type, title, description: desc });
       toast.success('Work item created with all queued issues');
-      onClear();
-      onClose();
+      onClear(); onClose();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to create work item');
     } finally { setSaving(false); }
   }
+
+  async function createAll() {
+    let items: Array<{ title: string; description: string }> = [];
+    if (createMode === 'per-finding') {
+      items = queued.map((q) => ({
+        title: `[AL ${q.issue.ruleId}] ${q.object.objectType} "${q.object.objectName}"${q.issue.procedure ? ` · ${q.issue.procedure}` : ''}`,
+        description: `## AL Code Health Finding\n\n**Rule:** ${q.issue.ruleId}\n**Object:** ${q.object.objectType} "${q.object.objectName}"\n**Issue:** ${q.issue.message}${q.issue.line ? ` (line ${q.issue.line})` : ''}${q.issue.detail ? `\n**Detail:** ${q.issue.detail}` : ''}\n\`${q.object.filePath}\``,
+      }));
+    } else {
+      const byFile = new Map<string, QueuedIssue[]>();
+      for (const q of queued) { if (!byFile.has(q.object.filePath)) byFile.set(q.object.filePath, []); byFile.get(q.object.filePath)!.push(q); }
+      items = [...byFile.entries()].map(([filePath, qs]) => ({
+        title: `[AL Health] ${filePath.split('/').pop()} — ${qs.length} issue${qs.length === 1 ? '' : 's'}`,
+        description: `## AL Code Health Issues in \`${filePath}\`\n\n${qs.map((q, i) => `### ${i + 1}. ${q.issue.ruleId}: ${q.object.objectType} "${q.object.objectName}"${q.issue.procedure ? ` · ${q.issue.procedure}` : ''}\n**Issue:** ${q.issue.message}${q.issue.line ? ` (line ${q.issue.line})` : ''}`).join('\n\n')}`,
+      }));
+    }
+    setSaving(true);
+    setProgress({ done: 0, total: items.length });
+    let successCount = 0; let failCount = 0;
+    for (const item of items) {
+      try {
+        await api.post(`/api/projects/${projectId}/work-items`, { type, title: item.title, description: item.description });
+        successCount++;
+      } catch { failCount++; }
+      setProgress({ done: successCount + failCount, total: items.length });
+    }
+    setProgress(null); setSaving(false);
+    if (failCount === 0) toast.success(`${successCount} work item${successCount === 1 ? '' : 's'} created`);
+    else toast.warning(`${successCount} created, ${failCount} failed`);
+    if (successCount > 0) { onClear(); onClose(); }
+  }
+
+  const uniqueFiles = new Set(queued.map((q) => q.object.filePath)).size;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -519,8 +553,7 @@ function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
           <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          {/* Queued issues list */}
-          <div className="divide-y divide-gray-100 dark:divide-gray-800 max-h-64 overflow-y-auto">
+          <div className="divide-y divide-gray-100 dark:divide-gray-800 max-h-48 overflow-y-auto">
             {queued.map((q) => (
               <div key={q.key} className="flex items-start gap-2 px-4 py-2 text-xs">
                 <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400">{q.issue.ruleId}</span>
@@ -532,6 +565,22 @@ function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
             ))}
           </div>
           <div className="space-y-3 p-4 border-t border-gray-100 dark:border-gray-800">
+            {/* Create mode */}
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-gray-500">Create Mode</label>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { id: 'combined', label: '1 work item (all issues)' },
+                  { id: 'per-finding', label: `${queued.length} items (per finding)` },
+                  { id: 'per-file', label: `${uniqueFiles} items (per file)` },
+                ] as const).map((m) => (
+                  <button key={m.id} onClick={() => setCreateMode(m.id)}
+                    className={cn('rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', createMode === m.id ? 'border-sky-400 bg-sky-50 text-sky-700 dark:border-sky-600 dark:bg-sky-900/30 dark:text-sky-300' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400')}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-3">
               <div className="w-32">
                 <label className="mb-1 block text-xs font-semibold text-gray-500">Type</label>
@@ -539,11 +588,25 @@ function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
                   <option>Task</option><option>Bug</option><option>User Story</option>
                 </select>
               </div>
-              <div className="flex-1">
-                <label className="mb-1 block text-xs font-semibold text-gray-500">Title</label>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-sky-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-              </div>
+              {createMode === 'combined' && (
+                <div className="flex-1">
+                  <label className="mb-1 block text-xs font-semibold text-gray-500">Title</label>
+                  <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-sky-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+                </div>
+              )}
             </div>
+            {/* Progress */}
+            {progress && (
+              <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-800 dark:bg-sky-900/20">
+                <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-sky-700 dark:text-sky-300">
+                  <span className="flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Creating work items…</span>
+                  <span>{progress.done} / {progress.total}</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-sky-200 dark:bg-sky-800">
+                  <div className="h-full rounded-full bg-sky-500 transition-all duration-300" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex justify-between border-t border-gray-100 p-4 dark:border-gray-800">
@@ -552,9 +615,15 @@ function WorkItemQueueModal({ queued, projectId, onClose, onClear }: {
           </button>
           <div className="flex gap-2">
             <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300">Cancel</button>
-            <button onClick={create} disabled={saving} className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create Work Item
-            </button>
+            {createMode === 'combined' ? (
+              <button onClick={createCombined} disabled={saving} className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create Work Item
+              </button>
+            ) : (
+              <button onClick={createAll} disabled={saving} className="flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create All
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -946,6 +1015,11 @@ export function ALCodeHealthView({ projectId }: Props) {
   const [lastFetchedBranch, setLastFetchedBranch] = useState('');
   const [queuedIssues, setQueuedIssues] = useState<QueuedIssue[]>([]);
   const [queueModal, setQueueModal] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [loadingChangedFiles, setLoadingChangedFiles] = useState(false);
+  const [changedFiles, setChangedFiles] = useState<string[]>([]);
+  const [selectedChangedFiles, setSelectedChangedFiles] = useState<Set<string>>(new Set());
+  const [showChangedPicker, setShowChangedPicker] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // ── Project data (repos + localWorkspacePath) ─────────────────────────────
@@ -996,6 +1070,26 @@ export function ALCodeHealthView({ projectId }: Props) {
     onError: (e) => toast.error(e instanceof Error ? e.message : 'Failed to update review'),
   });
 
+  // ── Dismissed findings (Issue #35) ────────────────────────────────────────
+  const { data: dismissedData } = useQuery({
+    queryKey: ['al-health-dismissed', projectId, lastFetchedRepoId],
+    queryFn: () => api.get<{ data: Array<{ findingHash: string; filePath: string; repoId: string }> }>(
+      `/api/projects/${projectId}/al-health/dismissed?repoId=${lastFetchedRepoId}`
+    ),
+    enabled: !!lastFetchedRepoId,
+    staleTime: 30_000,
+  });
+  const dismissedHashes = new Set((dismissedData?.data ?? []).map((d) => d.findingHash));
+
+  const dismissMutation = useMutation({
+    mutationFn: ({ findingHash, filePath, remove }: { findingHash: string; filePath: string; remove?: boolean }) =>
+      remove
+        ? api.delete(`/api/projects/${projectId}/al-health/dismissed/${encodeURIComponent(findingHash)}?repoId=${lastFetchedRepoId}`)
+        : api.post(`/api/projects/${projectId}/al-health/dismissed`, { repoId: lastFetchedRepoId, filePath, findingHash }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['al-health-dismissed', projectId, lastFetchedRepoId] }),
+    onError: (e) => toast.error(e instanceof Error ? e.message : 'Failed to update dismissal'),
+  });
+
   // ── Local folder analysis ──────────────────────────────────────────────────
   const runLocalAnalysis = useCallback(async (files: File[]) => {
     setLoading(true);
@@ -1028,7 +1122,7 @@ export function ALCodeHealthView({ projectId }: Props) {
   }, [runLocalAnalysis]);
 
   // ── Repo fetch analysis ────────────────────────────────────────────────────
-  async function fetchFromRepo(changedOnly = false) {
+  async function fetchFromRepo(changedOnly = false, filePaths?: string[]) {
     if (!selectedRepo) { toast.error('Select a repository first'); return; }
     setFetchingRepo(true);
     try {
@@ -1036,6 +1130,7 @@ export function ALCodeHealthView({ projectId }: Props) {
       const hasBaseline = Object.keys(baseline).length > 0;
       const body: Record<string, unknown> = { repositoryId: selectedRepo, baseline };
       if (repoBranch) body.branch = repoBranch;
+      if (filePaths && filePaths.length > 0) body.filePaths = filePaths;
       const res = await api.post<{ data: ObjectResult[]; meta: { filesScanned: number; objectsFound: number; totalIssues: number; branch: string }; newBaseline: Record<string, string> }>(
         `/api/projects/${projectId}/al-health/fetch-analyse`, body
       );
@@ -1043,16 +1138,34 @@ export function ALCodeHealthView({ projectId }: Props) {
       setExpanded(new Set());
       setLastFetchedRepoId(selectedRepo);
       setLastFetchedBranch(res.meta.branch);
-      saveBaseline(selectedRepo, res.newBaseline ?? {});
+      if (!filePaths) saveBaseline(selectedRepo, res.newBaseline ?? {});
       const newCount = res.data.filter((r) => r.isNew).length;
       const changedCount = res.data.filter((r) => r.isChanged).length;
       const diffMsg = hasBaseline && (newCount || changedCount) ? ` · ${newCount} new, ${changedCount} changed` : hasBaseline ? ' · no structural changes' : '';
       toast.success(`Fetched ${res.meta.filesScanned} files from ${res.meta.branch} — ${res.meta.totalIssues} issues${diffMsg}`);
-      // Auto-activate "changed only" filter when requested
       if (changedOnly && hasBaseline) setShowNew(true);
+      setShowChangedPicker(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Fetch failed');
     } finally { setFetchingRepo(false); }
+  }
+
+  // ── Load recently changed files (Issue #33) ────────────────────────────────
+  async function loadChangedFiles() {
+    if (!selectedRepo) { toast.error('Select a repository first'); return; }
+    setLoadingChangedFiles(true);
+    try {
+      const params = new URLSearchParams();
+      if (repoBranch) params.set('branch', repoBranch);
+      const res = await api.get<{ data: string[] }>(`/api/projects/${projectId}/al-health/repos/${selectedRepo}/changed-files?${params}`);
+      const files = res.data ?? [];
+      setChangedFiles(files);
+      setSelectedChangedFiles(new Set(files));
+      setShowChangedPicker(true);
+      if (!files.length) toast.info('No recently changed .al files found');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load changed files');
+    } finally { setLoadingChangedFiles(false); }
   }
 
   // ── CSV export ─────────────────────────────────────────────────────────────
@@ -1076,6 +1189,10 @@ export function ALCodeHealthView({ projectId }: Props) {
     const r = results.find((o) => o.issues.includes(allIssues[idx]))!;
     return r && reviewedKeys.has(makeIssueKey(r, allIssues[idx]));
   }).length;
+  const dismissedCount = allIssues.filter((_, idx) => {
+    const r = results.find((o) => o.issues.includes(allIssues[idx]))!;
+    return r && dismissedHashes.has(makeIssueKey(r, allIssues[idx]));
+  }).length;
   const presentRules = [...new Set(allIssues.map((i) => i.ruleId))].sort();
 
   const filteredResults = results
@@ -1085,6 +1202,7 @@ export function ALCodeHealthView({ projectId }: Props) {
     issues: r.issues.filter((i) => {
       const key = makeIssueKey(r, i);
       if (!showReviewed && reviewedKeys.has(key)) return false;
+      if (!showDismissed && dismissedHashes.has(key)) return false;
       if (filterSev !== 'all' && i.severity !== filterSev) return false;
       if (filterRule !== 'all' && i.ruleId !== filterRule) return false;
       if (search) { const q = search.toLowerCase(); return r.objectName.toLowerCase().includes(q) || i.message.toLowerCase().includes(q) || (i.procedure?.toLowerCase().includes(q) ?? false); }
@@ -1096,6 +1214,7 @@ export function ALCodeHealthView({ projectId }: Props) {
   function renderIssueRow(r: ObjectResult, issue: HealthIssue) {
     const key = makeIssueKey(r, issue);
     const reviewed = reviewedKeys.has(key);
+    const dismissed = dismissedHashes.has(key);
     const cfg = SEV[issue.severity];
 
     // VS Code link: combine workspace path + file path + line number
@@ -1104,7 +1223,7 @@ export function ALCodeHealthView({ projectId }: Props) {
       : null;
 
     return (
-      <div key={key} className={cn('flex items-start gap-3 px-4 py-3 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0', reviewed ? 'opacity-50' : issue.severity === 'error' ? 'bg-red-50/30 dark:bg-red-900/10' : issue.severity === 'warning' ? 'bg-amber-50/30 dark:bg-amber-900/10' : '')}>
+      <div key={key} className={cn('flex items-start gap-3 px-4 py-3 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0', reviewed ? 'opacity-50' : dismissed ? 'opacity-40' : issue.severity === 'error' ? 'bg-red-50/30 dark:bg-red-900/10' : issue.severity === 'warning' ? 'bg-amber-50/30 dark:bg-amber-900/10' : '')}>
         <span className={cn('mt-0.5 flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold', cfg.color)}>{cfg.icon} {issue.ruleId}</span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -1112,6 +1231,7 @@ export function ALCodeHealthView({ projectId }: Props) {
             {issue.procedure && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-mono dark:bg-gray-800 dark:text-gray-400">{issue.procedure}</span>}
             {issue.line && <span className="text-[10px] text-gray-400">:{issue.line}</span>}
             {reviewed && <span className="text-[10px] text-green-600 dark:text-green-400">✓ Reviewed</span>}
+            {dismissed && <span className="text-[10px] text-orange-500 dark:text-orange-400">Dismissed</span>}
           </div>
           {issue.detail && <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-600" title={typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)}>{typeof issue.detail === 'string' ? issue.detail : JSON.stringify(issue.detail)}</p>}
         </div>
@@ -1133,6 +1253,15 @@ export function ALCodeHealthView({ projectId }: Props) {
           >
             <CheckCircle2 size={14} />
           </button>
+          {lastFetchedRepoId && (
+            <button
+              title={dismissed ? 'Undismiss finding' : 'Dismiss finding'}
+              onClick={() => dismissMutation.mutate({ findingHash: key, filePath: r.filePath, remove: dismissed })}
+              className={cn('rounded p-1.5 text-xs transition-colors', dismissed ? 'text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/30' : 'text-gray-400 hover:bg-orange-50 hover:text-orange-500 dark:hover:bg-orange-900/30')}
+            >
+              <EyeOff size={14} />
+            </button>
+          )}
           <button title="AI Explain" onClick={() => setAiModal({ issue, object: r })} className="rounded p-1.5 text-gray-400 hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-900/30">
             <Sparkles size={14} />
           </button>
@@ -1277,10 +1406,36 @@ export function ALCodeHealthView({ projectId }: Props) {
               <button onClick={() => fetchFromRepo()} disabled={!selectedRepo || fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
                 {fetchingRepo ? <><Loader2 size={14} className="animate-spin" /> Fetching…</> : <><GitBranch size={14} /> Fetch & Analyse</>}
               </button>
-              {lastFetchedRepoId && (
-                <button onClick={() => fetchFromRepo(true)} disabled={fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-400 dark:hover:bg-indigo-900/20 disabled:opacity-50">
-                  <GitBranch size={12} /> Fetch recently changed
-                </button>
+              <button onClick={loadChangedFiles} disabled={!selectedRepo || loadingChangedFiles || fetchingRepo} className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-400 dark:hover:bg-indigo-900/20 disabled:opacity-50">
+                {loadingChangedFiles ? <><Loader2 size={12} className="animate-spin" /> Loading…</> : <><Clock size={12} /> Recently Changed Files</>}
+              </button>
+              {/* Recently changed file picker (Issue #33) */}
+              {showChangedPicker && changedFiles.length > 0 && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/50 p-3 dark:border-indigo-800 dark:bg-indigo-900/10">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">{changedFiles.length} changed .al file{changedFiles.length === 1 ? '' : 's'}</span>
+                    <div className="flex gap-2 text-xs">
+                      <button onClick={() => setSelectedChangedFiles(new Set(changedFiles))} className="text-indigo-600 hover:underline dark:text-indigo-400">All</button>
+                      <button onClick={() => setSelectedChangedFiles(new Set())} className="text-indigo-600 hover:underline dark:text-indigo-400">None</button>
+                    </div>
+                  </div>
+                  <div className="max-h-36 space-y-0.5 overflow-y-auto">
+                    {changedFiles.map((f) => (
+                      <label key={f} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900/30">
+                        <input type="checkbox" checked={selectedChangedFiles.has(f)} onChange={(e) => setSelectedChangedFiles((p) => { const n = new Set(p); e.target.checked ? n.add(f) : n.delete(f); return n; })} className="accent-indigo-600" />
+                        <span className="truncate font-mono text-gray-700 dark:text-gray-300" title={f}>{f.split('/').pop()}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => fetchFromRepo(false, [...selectedChangedFiles])}
+                    disabled={selectedChangedFiles.size === 0 || fetchingRepo}
+                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {fetchingRepo ? <Loader2 size={11} className="animate-spin" /> : <GitBranch size={11} />}
+                    Analyse {selectedChangedFiles.size} selected
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -1291,13 +1446,14 @@ export function ALCodeHealthView({ projectId }: Props) {
       {results.length > 0 && (
         <>
           {/* KPI */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
             {[
               { label: 'Scanned', value: results.length, bg: 'bg-gray-50 dark:bg-gray-800', color: 'text-gray-700 dark:text-gray-200' },
               { label: 'Errors',   value: errorCount,     bg: 'bg-red-50 dark:bg-red-900/20',     color: 'text-red-600 dark:text-red-400' },
               { label: 'Warnings', value: warnCount,      bg: 'bg-amber-50 dark:bg-amber-900/20', color: 'text-amber-600 dark:text-amber-400' },
               { label: 'Info',     value: infoCount,      bg: 'bg-blue-50 dark:bg-blue-900/20',   color: 'text-blue-600 dark:text-blue-400' },
               { label: 'Reviewed', value: reviewedCount,  bg: 'bg-green-50 dark:bg-green-900/20', color: 'text-green-600 dark:text-green-400' },
+              { label: 'Dismissed', value: dismissedCount, bg: 'bg-orange-50 dark:bg-orange-900/20', color: 'text-orange-600 dark:text-orange-400' },
             ].map((k) => (
               <div key={k.label} className={`${k.bg} rounded-xl border border-gray-100 p-3 dark:border-gray-800`}>
                 <div className={`text-2xl font-bold ${k.color}`}>{k.value}</div>
@@ -1332,6 +1488,11 @@ export function ALCodeHealthView({ projectId }: Props) {
             <button onClick={() => setShowReviewed((v) => !v)} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', showReviewed ? 'border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
               <CheckCircle2 size={12} /> {showReviewed ? 'Hiding reviewed' : 'Show reviewed'}
             </button>
+            {lastFetchedRepoId && dismissedCount > 0 && (
+              <button onClick={() => setShowDismissed((v) => !v)} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', showDismissed ? 'border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
+                <EyeOff size={12} /> {showDismissed ? 'Hiding dismissed' : `Show dismissed (${dismissedCount})`}
+              </button>
+            )}
             {results.some((r) => r.isNew || r.isChanged) && (
               <button onClick={() => setShowNew((v) => !v)} className={cn('flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors', showNew ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 bg-white text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400')}>
                 <GitBranch size={12} /> {showNew ? 'New/Changed only' : 'All objects'}
