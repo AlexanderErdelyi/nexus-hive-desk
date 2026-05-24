@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ChevronLeft, Plus, Search, Sparkles, Trash2, X } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Download, Plus, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -28,6 +28,17 @@ interface AISuggestion {
   _editedDesc?: string;
 }
 
+/** A row parsed from a CSV or Excel import file before the user confirms. */
+interface ImportPreviewRow {
+  sourceTerm: string;
+  targetTerm: string;
+  description?: string;
+  /** Whether the row is a duplicate of an existing glossary entry. */
+  isDuplicate: boolean;
+  /** Whether this row is selected for import (default true). */
+  selected: boolean;
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Request failed';
 }
@@ -37,6 +48,89 @@ const CONFIDENCE_STYLES = {
   medium: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
   low: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
 };
+
+// ─── CSV helpers ──────────────────────────────────────────────────────────────
+
+/** Escape a cell value for CSV — wraps in quotes and escapes embedded quotes. */
+function csvCell(value: string | undefined): string {
+  const v = value ?? '';
+  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
+}
+
+/** Build a CSV string from glossary entries. */
+function buildCsv(entries: GlossaryEntry[]): string {
+  const header = 'source,target,language,notes';
+  const rows = entries.map((e) =>
+    [
+      csvCell(e.sourceTerm),
+      csvCell(e.targetTerm),
+      csvCell(`${e.sourceLanguage} → ${e.targetLanguage}`),
+      csvCell(e.description),
+    ].join(',')
+  );
+  return [header, ...rows].join('\n');
+}
+
+/** Trigger a browser file download with the given content. */
+function downloadFile(filename: string, content: string | Uint8Array<ArrayBuffer>, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Parse a CSV text into rows of {sourceTerm, targetTerm, description}.
+ * Accepts header row with any casing of "source", "target", "notes"/"description".
+ * Falls back to positional (col 0 = source, col 1 = target, col 2 = notes).
+ */
+function parseCsvText(text: string): Array<{ sourceTerm: string; targetTerm: string; description?: string }> {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+
+  const splitCsv = (line: string): string[] => {
+    const result: string[] = [];
+    let inQuote = false;
+    let cell = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuote = !inQuote;
+        }
+      } else if (ch === ',' && !inQuote) {
+        result.push(cell);
+        cell = '';
+      } else {
+        cell += ch;
+      }
+    }
+    result.push(cell);
+    return result;
+  };
+
+  const header = splitCsv(lines[0]).map((h) => h.trim().toLowerCase());
+  const srcIdx = header.findIndex((h) => h === 'source') ?? 0;
+  const tgtIdx = header.findIndex((h) => h === 'target') ?? 1;
+  const notesIdx = header.findIndex((h) => h === 'notes' || h === 'description');
+
+  return lines.slice(1).flatMap((line) => {
+    const cols = splitCsv(line);
+    const source = cols[srcIdx >= 0 ? srcIdx : 0]?.trim() ?? '';
+    const target = cols[tgtIdx >= 0 ? tgtIdx : 1]?.trim() ?? '';
+    if (!source || !target) return [];
+    return [{ sourceTerm: source, targetTerm: target, description: notesIdx >= 0 ? cols[notesIdx]?.trim() : undefined }];
+  });
+}
 
 export function GlossaryManager({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
@@ -49,6 +143,11 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
+
+  // Import state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreviewRow[] | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
 
   const { data: projectData } = useQuery({
     queryKey: ['project-info', projectId],
@@ -97,13 +196,13 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
 
   const importMutation = useMutation({
     mutationFn: (entriesToImport: Array<{ sourceTerm: string; targetTerm: string; description?: string }>) =>
-      api.post('/api/glossary/import', {
+      api.post<{ data: unknown[]; meta?: { imported?: number } }>('/api/glossary/import', {
         projectId,
         entries: entriesToImport,
         sourceLanguage: project?.sourceLanguage ?? 'en-US',
         targetLanguage: project?.targetLanguage ?? 'de-DE',
       }),
-    onSuccess: (res: { meta?: { imported?: number } }) => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['glossary', projectId] });
       toast.success(`${res.meta?.imported ?? 0} terms added to glossary`);
       setSuggestions([]);
@@ -182,6 +281,93 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
 
   const acceptedCount = suggestions.filter((s) => s._accepted).length;
 
+  // ─── Export handlers ───────────────────────────────────────────────────────
+
+  function exportCsv() {
+    if (!entries.length) { toast.error('No entries to export'); return; }
+    downloadFile('glossary.csv', buildCsv(entries), 'text/csv;charset=utf-8;');
+    toast.success('Glossary exported as CSV');
+  }
+
+  async function exportExcel() {
+    if (!entries.length) { toast.error('No entries to export'); return; }
+    const xlsx = await import('xlsx');
+    const ws = xlsx.utils.json_to_sheet(
+      entries.map((e) => ({
+        source: e.sourceTerm,
+        target: e.targetTerm,
+        language: `${e.sourceLanguage} → ${e.targetLanguage}`,
+        notes: e.description ?? '',
+      }))
+    );
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, ws, 'Glossary');
+    const buf = xlsx.write(wb, { type: 'array', bookType: 'xlsx' }) as Uint8Array<ArrayBuffer>;
+    downloadFile('glossary.xlsx', buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    toast.success('Glossary exported as Excel');
+  }
+
+  // ─── Import handlers ───────────────────────────────────────────────────────
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset so the same file can be re-selected
+    e.target.value = '';
+    setImportLoading(true);
+    try {
+      const existingTerms = new Set((entries ?? []).map((en) => en.sourceTerm.toLowerCase()));
+      let rows: Array<{ sourceTerm: string; targetTerm: string; description?: string }> = [];
+
+      if (file.name.endsWith('.csv') || file.type === 'text/csv') {
+        const text = await file.text();
+        rows = parseCsvText(text);
+      } else {
+        // Excel (.xlsx / .xls)
+        const xlsx = await import('xlsx');
+        const buf = await file.arrayBuffer();
+        const wb = xlsx.read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = xlsx.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' });
+        rows = raw.flatMap((row) => {
+          // Flexible column name detection (case-insensitive)
+          const keys = Object.keys(row);
+          const srcKey = keys.find((k) => k.toLowerCase() === 'source') ?? keys[0];
+          const tgtKey = keys.find((k) => k.toLowerCase() === 'target') ?? keys[1];
+          const notesKey = keys.find((k) => k.toLowerCase() === 'notes' || k.toLowerCase() === 'description');
+          const source = row[srcKey]?.trim() ?? '';
+          const target = row[tgtKey]?.trim() ?? '';
+          if (!source || !target) return [];
+          return [{ sourceTerm: source, targetTerm: target, description: notesKey ? row[notesKey]?.trim() : undefined }];
+        });
+      }
+
+      if (!rows.length) { toast.error('No valid rows found in file'); return; }
+
+      setImportPreview(
+        rows.map((r) => ({
+          ...r,
+          isDuplicate: existingTerms.has(r.sourceTerm.toLowerCase()),
+          selected: true,
+        }))
+      );
+    } catch (err) {
+      toast.error(`Failed to parse file: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  function confirmImport() {
+    const toImport = (importPreview ?? [])
+      .filter((r) => r.selected)
+      .map(({ sourceTerm, targetTerm, description }) => ({ sourceTerm, targetTerm, description }));
+    if (!toImport.length) { toast.error('No rows selected'); return; }
+    importMutation.mutate(toImport, {
+      onSuccess: () => setImportPreview(null),
+    });
+  }
+
   return (
     <div>
       {/* Header */}
@@ -194,6 +380,37 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
           <p className="text-sm text-gray-500 dark:text-gray-400">Define how specific terms should always be translated</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Export buttons */}
+          <button
+            onClick={exportCsv}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            title="Export as CSV"
+          >
+            <Download size={14} /> CSV
+          </button>
+          <button
+            onClick={exportExcel}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            title="Export as Excel"
+          >
+            <Download size={14} /> Excel
+          </button>
+          {/* Import button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importLoading}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            title="Import CSV or Excel"
+          >
+            <Upload size={14} /> {importLoading ? 'Reading…' : 'Import'}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={handleFileSelect}
+          />
           <button
             onClick={() => { setAiMode(aiMode === 'generate' ? 'none' : 'generate'); setSuggestions([]); }}
             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
@@ -470,6 +687,98 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
           </table>
         )}
       </div>
+
+      {/* Import Preview Modal */}
+      {importPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-gray-900">
+            {/* Modal header */}
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700">
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Import Preview</h3>
+                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {importPreview.filter((r) => r.selected).length} of {importPreview.length} rows selected.
+                  {importPreview.some((r) => r.isDuplicate) && (
+                    <span className="ml-1 text-amber-600 dark:text-amber-400">
+                      ⚠ Yellow rows are duplicates and will be updated.
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button onClick={() => setImportPreview(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 border-b border-gray-100 bg-gray-50 dark:border-gray-800 dark:bg-gray-800">
+                  <tr>
+                    <th className="w-10 p-2">
+                      <input
+                        type="checkbox"
+                        checked={importPreview.every((r) => r.selected)}
+                        onChange={(e) =>
+                          setImportPreview((prev) => prev!.map((r) => ({ ...r, selected: e.target.checked })))
+                        }
+                        className="h-4 w-4 rounded border-gray-300 accent-indigo-600"
+                      />
+                    </th>
+                    <th className="p-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Source</th>
+                    <th className="p-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Target</th>
+                    <th className="p-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {importPreview.map((row, i) => (
+                    <tr
+                      key={i}
+                      className={`${
+                        row.isDuplicate ? 'bg-amber-50 dark:bg-amber-900/10' : ''
+                      } ${!row.selected ? 'opacity-40' : ''}`}
+                    >
+                      <td className="p-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={row.selected}
+                          onChange={(e) =>
+                            setImportPreview((prev) =>
+                              prev!.map((r, j) => (j === i ? { ...r, selected: e.target.checked } : r))
+                            )
+                          }
+                          className="h-4 w-4 rounded border-gray-300 accent-indigo-600"
+                        />
+                      </td>
+                      <td className="p-2 font-medium text-gray-900 dark:text-white">{row.sourceTerm}</td>
+                      <td className="p-2 text-indigo-700 dark:text-indigo-400">{row.targetTerm}</td>
+                      <td className="p-2 text-xs text-gray-500 dark:text-gray-400">{row.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Modal footer */}
+            <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-5 py-4 dark:border-gray-700">
+              <button
+                onClick={() => setImportPreview(null)}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmImport}
+                disabled={importMutation.isPending || !importPreview.some((r) => r.selected)}
+                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                <Check size={14} />
+                {importMutation.isPending ? 'Importing…' : `Import ${importPreview.filter((r) => r.selected).length} terms`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

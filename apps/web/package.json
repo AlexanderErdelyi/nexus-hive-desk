@@ -24,7 +24,8 @@
     "react-dropzone": "^14.3.5",
     "react-joyride": "^3.1.0",
     "sonner": "^1.7.2",
-    "tailwind-merge": "^2.6.0"
+    "tailwind-merge": "^2.6.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
