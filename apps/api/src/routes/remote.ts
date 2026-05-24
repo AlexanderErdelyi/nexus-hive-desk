@@ -1,7 +1,8 @@
-import type { FastifyInstance } from 'fastify';
+﻿import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { requireAuth } from '../lib/auth';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 async function getConnection(connId: string) {
   return prisma.customerConnection.findUnique({ where: { id: connId } });
@@ -42,10 +43,12 @@ async function fetchJsonWithInit<T = any>(url: string, init: RequestInit): Promi
   return res.json() as Promise<T>;
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ÔöÇÔöÇÔöÇ Routes ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+
 
 export async function remoteRoutes(app: FastifyInstance) {
-  // ─── Azure DevOps: List projects in organization ──────────────────────────
+  app.addHook('onRequest', requireAuth(app));
+  // ÔöÇÔöÇÔöÇ Azure DevOps: List projects in organization ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string } }>(
     '/connections/:connId/azure/projects',
     async (req, reply) => {
@@ -75,7 +78,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: List repos in project ──────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: List repos in project ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string; project: string } }>(
     '/connections/:connId/azure/projects/:project/repos',
     async (req, reply) => {
@@ -106,7 +109,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: List branches ──────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: List branches ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string; project: string; repoId: string } }>(
     '/connections/:connId/azure/projects/:project/repos/:repoId/branches',
     async (req, reply) => {
@@ -134,7 +137,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: List files (tree) ──────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: List files (tree) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string; repoId: string };
     Querystring: { branch?: string; path?: string };
@@ -172,7 +175,49 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: Get file content ───────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: Scan repo for XLIFF files ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  app.get<{
+    Params: { connId: string; project: string; repoId: string };
+    Querystring: { branch?: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/xliff-scan',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { branch } = req.query;
+
+        // Full recursive tree ÔÇö returns all items in the repo
+        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?recursionLevel=full&api-version=7.1`;
+        if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
+
+        const data = await fetchJson(url, azureHeaders(conn.pat));
+
+        const xliffFiles = (data.value ?? [])
+          .filter((item: { path: string; isFolder: boolean }) => {
+            if (item.isFolder) return false;
+            const lower = item.path.toLowerCase();
+            return lower.endsWith('.xlf') || lower.endsWith('.xliff');
+          })
+          .map((item: { path: string }) => ({
+            path: item.path,
+            name: item.path.split('/').pop() ?? item.path,
+            type: 'file' as const,
+          }));
+
+        return { data: xliffFiles };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ÔöÇÔöÇÔöÇ Azure DevOps: Get file content ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string; repoId: string };
     Querystring: { branch?: string; path: string };
@@ -188,11 +233,12 @@ export async function remoteRoutes(app: FastifyInstance) {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const { branch, path: filePath } = req.query;
 
-        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&api-version=7.1`;
+        // download=true bypasses ADO's inline size limit for large XLIFF files
+        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&download=true&api-version=7.1`;
         if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
 
-        // Get as text
-        const res = await fetch(url, { headers: azureHeaders(conn.pat) });
+        // Get as text ÔÇö omit Content-Type on GET so ADO returns raw file bytes
+        const res = await fetch(url, { headers: { Authorization: azureHeaders(conn.pat).Authorization } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const content = await res.text();
 
@@ -214,7 +260,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: Commit file ────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: Commit file ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; repoId: string };
     Body: { branch: string; path: string; content: string; message: string; oldObjectId?: string };
@@ -280,7 +326,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── Azure DevOps: Create branch ──────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ Azure DevOps: Create branch ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; repoId: string };
     Body: { name: string; sourceBranch: string };
@@ -332,11 +378,11 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
   // GitHub Routes
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 
-  // ─── GitHub: List repos for authenticated user ────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: List repos for authenticated user ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string }; Querystring: { org?: string } }>(
     '/connections/:connId/github/repos',
     async (req, reply) => {
@@ -368,7 +414,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: List orgs ────────────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: List orgs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string } }>(
     '/connections/:connId/github/orgs',
     async (req, reply) => {
@@ -396,7 +442,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: List branches ────────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: List branches ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{ Params: { connId: string; owner: string; repo: string } }>(
     '/connections/:connId/github/repos/:owner/:repo/branches',
     async (req, reply) => {
@@ -423,7 +469,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: List files (tree) ────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: List files (tree) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; owner: string; repo: string };
     Querystring: { branch?: string; path?: string };
@@ -462,7 +508,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Get file content ─────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Get file content ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; owner: string; repo: string };
     Querystring: { branch?: string; path: string };
@@ -500,7 +546,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Commit file ──────────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Commit file ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; owner: string; repo: string };
     Body: { branch: string; path: string; content: string; message: string; sha: string };
@@ -542,7 +588,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Create branch ────────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Create branch ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; owner: string; repo: string };
     Body: { name: string; sourceBranch: string };
@@ -585,11 +631,11 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
   // Azure DevOps: Work Items
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 
-  // ─── ADO: Search work items ───────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Search work items ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string };
     Querystring: { q?: string; top?: string };
@@ -643,7 +689,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Create work item ─────────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Create work item ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; type: string };
     Body: { title: string; description?: string };
@@ -690,11 +736,11 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
   // Azure DevOps: Pull Requests
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 
-  // ─── ADO: Create Pull Request ─────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Create Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; repoId: string };
     Body: {
@@ -703,7 +749,6 @@ export async function remoteRoutes(app: FastifyInstance) {
       sourceBranch: string;
       targetBranch: string;
       workItemIds?: number[];
-      reviewerIds?: string[];
     };
   }>(
     '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests',
@@ -715,7 +760,7 @@ export async function remoteRoutes(app: FastifyInstance) {
 
       try {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
-        const { title, description, sourceBranch, targetBranch, workItemIds, reviewerIds } = req.body;
+        const { title, description, sourceBranch, targetBranch, workItemIds } = req.body;
 
         const body: Record<string, unknown> = {
           title,
@@ -729,10 +774,6 @@ export async function remoteRoutes(app: FastifyInstance) {
             id: String(id),
             url: `${baseUrl}/_apis/wit/workitems/${id}`,
           }));
-        }
-
-        if (reviewerIds && reviewerIds.length > 0) {
-          body.reviewers = reviewerIds.map((id) => ({ id }));
         }
 
         const result = await fetchJsonWithInit<{
@@ -760,7 +801,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Get Pull Request status ─────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Get Pull Request status ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string; repoId: string; prId: string };
   }>(
@@ -804,14 +845,14 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
   // GitHub: Pull Requests
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 
-  // ─── GitHub: Create Pull Request ──────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Create Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; owner: string; repo: string };
-    Body: { title: string; description?: string; sourceBranch: string; targetBranch: string; reviewerLogins?: string[] };
+    Body: { title: string; description?: string; sourceBranch: string; targetBranch: string };
   }>(
     '/connections/:connId/github/repos/:owner/:repo/pull-requests',
     async (req, reply) => {
@@ -821,7 +862,7 @@ export async function remoteRoutes(app: FastifyInstance) {
       }
 
       try {
-        const { title, description, sourceBranch, targetBranch, reviewerLogins } = req.body;
+        const { title, description, sourceBranch, targetBranch } = req.body;
         const result = await fetchJsonWithInit<{
           number: number;
           title: string;
@@ -836,17 +877,6 @@ export async function remoteRoutes(app: FastifyInstance) {
           }
         );
 
-        if (reviewerLogins && reviewerLogins.length > 0) {
-          await fetchJsonWithInit(
-            `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${result.number}/requested_reviewers`,
-            {
-              method: 'POST',
-              headers: githubHeaders(conn.pat),
-              body: JSON.stringify({ reviewers: reviewerLogins }),
-            }
-          ).catch(() => { /* non-fatal: reviewer assignment may fail due to permissions */ });
-        }
-
         return reply.status(201).send({
           data: { prId: result.number, title: result.title, status: result.state, webUrl: result.html_url },
         });
@@ -857,7 +887,51 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Search project members (for reviewer assignment) ───────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Get Pull Request status ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+  app.get<{
+    Params: { connId: string; owner: string; repo: string; prId: string };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const result = await fetchJson<{
+          number: number;
+          title: string;
+          state: string;
+          merged: boolean;
+          html_url: string;
+          user?: { login: string };
+          created_at: string;
+          closed_at?: string;
+        }>(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}`,
+          githubHeaders(conn.pat)
+        );
+
+        return {
+          data: {
+            prId: result.number,
+            title: result.title,
+            status: result.merged ? 'completed' : result.state, // map to same shape as ADO
+            createdBy: result.user?.login,
+            createdAt: result.created_at,
+            closedAt: result.closed_at,
+            webUrl: result.html_url,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ÔöÇÔöÇÔöÇ ADO: Search project members (for reviewer assignment) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string };
     Querystring: { q?: string };
@@ -902,7 +976,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Vote on Pull Request ────────────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Vote on Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.put<{
     Params: { connId: string; project: string; repoId: string; prId: string };
     Body: { vote: number }; // 10=approved, 5=approved w/ suggestions, 0=none, -5=waiting, -10=rejected
@@ -937,7 +1011,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Post comment thread on Pull Request ─────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Post comment thread on Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; repoId: string; prId: string };
     Body: { content: string };
@@ -971,7 +1045,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Submit Pull Request review ───────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Submit Pull Request review ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; owner: string; repo: string; prId: string };
     Body: { event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'; body?: string };
@@ -1001,7 +1075,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: List work items linked to a Pull Request ────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: List work items linked to a Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string; repoId: string; prId: string };
   }>(
@@ -1043,7 +1117,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Link a work item to a Pull Request ──────────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Link a work item to a Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.post<{
     Params: { connId: string; project: string; repoId: string; prId: string };
     Body: { workItemId: number };
@@ -1089,7 +1163,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Unlink a work item from a Pull Request ──────────────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Unlink a work item from a Pull Request ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.delete<{
     Params: { connId: string; project: string; repoId: string; prId: string; wiId: string };
   }>(
@@ -1123,7 +1197,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── ADO: Get Pull Request diff (changed files + patches) ────────────────
+  // ÔöÇÔöÇÔöÇ ADO: Get Pull Request diff (changed files + patches) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; project: string; repoId: string; prId: string };
   }>(
@@ -1230,7 +1304,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Get Pull Request diff (changed files + patches) ─────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Get Pull Request diff (changed files + patches) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; owner: string; repo: string; prId: string };
   }>(
@@ -1291,7 +1365,7 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
-  // ─── GitHub: Get Pull Request status ──────────────────────────────────────
+  // ÔöÇÔöÇÔöÇ GitHub: Get Pull Request status ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
   app.get<{
     Params: { connId: string; owner: string; repo: string; prId: string };
   }>(

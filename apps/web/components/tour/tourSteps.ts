@@ -56,16 +56,16 @@ export const tourSteps: TourStep[] = [
     placement: 'center',
     title: '🌍 XLIFF Translations',
     content:
-      'Open a project and go to the Translations tab. Upload your .xlf/.xliff file — NexusHiveDesk extracts all translation units into a searchable, filterable table.',
+      'Open a project and go to the Translations tab. Upload your .xlf/.xliff file — NexusHiveDesk extracts all translation units into a searchable, filterable table with filters for state, object type, and more.',
     skipBeacon: true,
   },
   // ── 7. AI Translation ─────────────────────────────────────────────────────────
   {
     target: 'body',
     placement: 'center',
-    title: '✨ AI Translation',
+    title: '✨ AI Translation & Glossary',
     content:
-      'Select untranslated entries and click "AI Translate" to auto-fill them. Add a Glossary to enforce specific terms — e.g. Customer → Debitor in German.',
+      'Run AI Translation on any untranslated strings. Add a Glossary to enforce domain-specific terms — e.g. Customer → Debitor in German. AI Review checks quality across your whole file.',
     skipBeacon: true,
   },
   // ── 8. Work Items ─────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ export const tourSteps: TourStep[] = [
     placement: 'center',
     title: '🔀 AI Refine & Decompose',
     content:
-      'Open any work item and use the "Refine" tab to improve descriptions with AI, or the "Split" tab to decompose a User Story into tasks, sub-stories, or a full Feature → Stories → Tasks hierarchy.',
+      'Open any work item → "Refine" tab to improve descriptions with AI, or "Split" tab to decompose a User Story into tasks, sub-stories, or a full Feature → Stories → Tasks hierarchy.',
     skipBeacon: true,
   },
   // ── 10. Wiki & Documentation ──────────────────────────────────────────────────
@@ -96,13 +96,16 @@ export const tourSteps: TourStep[] = [
     skipBeacon: true,
   },
   // ── 11. Branch & PR workflow ──────────────────────────────────────────────────
+  // Note: branch-selector only exists inside a project detail page.
+  // We navigate back to /projects so the tour doesn't silently skip this step.
   {
-    target: '[data-tour="branch-selector"]',
-    placement: 'bottom',
+    target: '[data-tour="nav-projects"]',
+    placement: 'right',
     title: '🌿 Branch & PR workflow',
     content:
-      'Switch branches, commit translation changes, link to ADO work items, and open Pull Requests — all without leaving NexusHiveDesk.',
+      'Inside a project, switch branches, commit translation changes, link to ADO work items, and open Pull Requests — all without leaving NexusHiveDesk.',
     skipBeacon: true,
+    navigate: '/projects',
   },
   // ── 12. Done ──────────────────────────────────────────────────────────────────
   {

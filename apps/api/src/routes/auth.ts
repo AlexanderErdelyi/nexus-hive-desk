@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
-import { hashPassword, verifyPassword } from '../lib/auth';
+import { hashPassword, verifyPassword, requireAuth } from '../lib/auth';
 
 export async function authRoutes(app: FastifyInstance) {
   // ─── Sign up ────────────────────────────────────────────────────────────────
@@ -109,4 +109,49 @@ export async function authRoutes(app: FastifyInstance) {
 
     return { data: user };
   });
+
+  // ─── Update current user profile ──────────────────────────────────────────
+  app.patch<{ Body: { name?: string } }>(
+    '/me',
+    { onRequest: [requireAuth(app)] },
+    async (req, reply) => {
+      const { name } = req.body;
+      if (!name?.trim()) {
+        return reply.status(400).send({ error: 'validation', message: 'name is required' });
+      }
+      const user = await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { name: name.trim() },
+        select: { id: true, email: true, name: true },
+      });
+      return { data: user };
+    }
+  );
+
+  // ─── Change password ───────────────────────────────────────────────────────
+  app.post<{ Body: { currentPassword: string; newPassword: string } }>(
+    '/change-password',
+    { onRequest: [requireAuth(app)] },
+    async (req, reply) => {
+      const { currentPassword, newPassword } = req.body;
+      if (!currentPassword || !newPassword) {
+        return reply.status(400).send({ error: 'validation', message: 'currentPassword and newPassword are required' });
+      }
+      if (newPassword.length < 8) {
+        return reply.status(400).send({ error: 'validation', message: 'New password must be at least 8 characters' });
+      }
+      const user = await prisma.user.findUnique({ where: { id: req.user.sub } });
+      if (!user) return reply.status(404).send({ error: 'not_found' });
+
+      const valid = await verifyPassword(currentPassword, user.hashedPassword);
+      if (!valid) {
+        return reply.status(401).send({ error: 'unauthorized', message: 'Current password is incorrect' });
+      }
+      await prisma.user.update({
+        where: { id: req.user.sub },
+        data: { hashedPassword: await hashPassword(newPassword) },
+      });
+      return { data: { ok: true } };
+    }
+  );
 }

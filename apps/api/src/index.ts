@@ -13,12 +13,15 @@ import { glossaryRoutes } from './routes/glossary';
 import { projectRoutes } from './routes/projects';
 import { projectMemberRoutes } from './routes/project-members';
 import { remoteRoutes } from './routes/remote';
+import { translationMemoryRoutes } from './routes/translation-memory';
 import { translationRoutes } from './routes/translations';
 import { agentRoutes } from './routes/agents';
 import { skillRoutes } from './routes/skills';
 import { mcpConnectionRoutes } from './routes/mcp-connections';
 import { userTokenRoutes } from './routes/user-tokens';
 import { workItemRoutes } from './routes/work-items';
+import { alHealthRoutes } from './routes/al-health';
+import { inviteRoutes } from './routes/invites';
 
 async function bootstrap() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 }); // 10 MB body limit
@@ -71,6 +74,7 @@ async function bootstrap() {
   await app.register(projectRoutes, { prefix: '/api/projects' });
   await app.register(projectMemberRoutes, { prefix: '/api/projects' });
   await app.register(translationRoutes, { prefix: '/api/translations' });
+  await app.register(translationMemoryRoutes, { prefix: '/api/translation-memory' });
   await app.register(glossaryRoutes, { prefix: '/api/glossary' });
   await app.register(aiRoutes, { prefix: '/api/ai' });
   await app.register(remoteRoutes, { prefix: '/api/remote' });
@@ -79,6 +83,8 @@ async function bootstrap() {
   await app.register(agentRoutes, { prefix: '/api/agents' });
   await app.register(userTokenRoutes, { prefix: '/api/user/tokens' });
   await app.register(workItemRoutes, { prefix: '/api/projects' });
+  await app.register(alHealthRoutes, { prefix: '/api/projects' });
+  await app.register(inviteRoutes, { prefix: '/api' });
 
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
 

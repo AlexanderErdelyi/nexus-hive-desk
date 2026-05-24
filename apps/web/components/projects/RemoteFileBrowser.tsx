@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronRight, Folder, FileCode2, Loader2, X, ArrowLeft } from 'lucide-react';
+import { ChevronRight, Folder, FileCode2, Loader2, X, ArrowLeft, GitBranch } from 'lucide-react';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
@@ -11,11 +11,23 @@ interface Repo         { id: string; name: string; defaultBranch?: string }
 interface Branch       { name: string }
 interface FileEntry    { path: string; name: string; type: 'file' | 'directory' }
 
-type Step = 'connection' | 'adoProject' | 'repo' | 'branch' | 'files';
+/** A repo as stored in project settings — carries its own ADO project context */
+interface ConfiguredRepo {
+  id: string;
+  label?: string | null;
+  connectionId: string;
+  adoProjectName?: string | null;
+  repoName: string;
+  defaultBranch?: string | null;
+}
+
+type Step = 'repo-select' | 'connection' | 'adoProject' | 'repo' | 'branch' | 'files';
 
 interface Props {
   projectId: string;
   customerId?: string | null;
+  /** Repos already configured in project settings — shown as quick-pick before manual navigation */
+  configuredRepos?: ConfiguredRepo[];
   /** Pre-configured values — when all four are set, skip straight to file browsing */
   preConnId?: string;
   preADOProject?: string;
@@ -27,12 +39,18 @@ interface Props {
 
 export function RemoteFileBrowser({
   projectId, customerId,
+  configuredRepos,
   preConnId, preADOProject, preRepo, preBranch,
   onImported, onClose,
 }: Props) {
+  const hasConfiguredRepos = !!(configuredRepos && configuredRepos.length > 0);
   const allPreConfigured = !!(preConnId && preADOProject && preRepo && preBranch);
 
-  const [step, setStep] = useState<Step>(allPreConfigured ? 'files' : 'connection');
+  const [step, setStep] = useState<Step>(() => {
+    if (hasConfiguredRepos) return 'repo-select';
+    if (allPreConfigured) return 'files';
+    return 'connection';
+  });
   const [loading, setLoading] = useState(false);
 
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -53,16 +71,44 @@ export function RemoteFileBrowser({
 
   const [importing, setImporting] = useState(false);
 
-  // ─── Mount: load connections or jump straight to file browsing ────────────
+  // ─── Mount ────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (allPreConfigured) {
-      // Resolve the connection object, then browse immediately
+    if (hasConfiguredRepos) {
+      // Show configured repo picker — nothing to load
+    } else if (allPreConfigured) {
       resolvePreConfiguredAndBrowse();
     } else {
       loadConnections();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ─── Select a configured repo (uses its own ADO project, not the connection default) ─
+  async function selectConfiguredRepo(cfgRepo: ConfiguredRepo) {
+    if (!customerId) return;
+    setLoading(true);
+    try {
+      const res = await api.get<{ data: { connections: Connection[] } }>(`/api/customers/${customerId}`);
+      const conn = (res.data.connections ?? []).find((c) => c.id === cfgRepo.connectionId);
+      if (!conn) {
+        toast.error('Connection for this repo not found. Please reconfigure it in Setup.');
+        loadConnections();
+        return;
+      }
+      setSelectedConn(conn);
+      const adoProj = cfgRepo.adoProjectName ?? '';
+      setSelectedADOProject({ id: adoProj, name: adoProj });
+      setSelectedRepo({ id: cfgRepo.repoName, name: cfgRepo.repoName });
+      const branch = cfgRepo.defaultBranch ?? 'main';
+      await browsePathWithContext(conn, adoProj, cfgRepo.repoName, branch, '/');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load repo';
+      toast.error(msg);
+      setStep('repo-select');
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function resolvePreConfiguredAndBrowse() {
     if (!customerId || !preConnId) return;
@@ -261,26 +307,54 @@ export function RemoteFileBrowser({
     }
   }
 
+  const [scanning, setScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<FileEntry[] | null>(null);
+
+  async function scanForXliff() {
+    if (!selectedConn || !selectedRepo) return;
+    setScanning(true);
+    setScanResults(null);
+    try {
+      const projPart = selectedADOProject ? encodeURIComponent(selectedADOProject.name) : '_';
+      const repoRef = selectedRepo.id && selectedRepo.id !== selectedRepo.name
+        ? selectedRepo.id
+        : encodeURIComponent(selectedRepo.name);
+      const params = selectedBranch ? `?branch=${encodeURIComponent(selectedBranch)}` : '';
+      const res = await api.get<{ data: FileEntry[] }>(
+        `/api/remote/connections/${selectedConn.id}/azure/projects/${projPart}/repos/${repoRef}/xliff-scan${params}`
+      );
+      setScanResults(res.data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setScanning(false);
+    }
+  }
+
   // ─── Navigation helpers ─────────────────────────────────────────────────────
   function goBack() {
     if (step === 'files') {
-      // If pre-configured, there's nowhere to go back to — just close
-      if (allPreConfigured && currentPath === '/') { onClose(); return; }
+      if (hasConfiguredRepos && currentPath === '/') { setStep('repo-select'); setFiles([]); setSelectedConn(null); setSelectedADOProject(null); setSelectedRepo(null); return; }
+      if (allPreConfigured && !hasConfiguredRepos && currentPath === '/') { onClose(); return; }
       if (currentPath !== '/') { browsePath(selectedBranch, currentPath.split('/').slice(0, -1).join('/') || '/'); return; }
       setStep('branch'); return;
     }
     if (step === 'branch')      { setStep('repo'); return; }
     if (step === 'repo')        { setStep(selectedConn?.type === 'azure-devops' ? 'adoProject' : 'connection'); return; }
     if (step === 'adoProject')  { setStep('connection'); return; }
+    if (step === 'connection')  { if (hasConfiguredRepos) setStep('repo-select'); return; }
   }
 
   const stepLabel: Record<Step, string> = {
-    connection: 'Select Connection',
-    adoProject: 'Select Project',
-    repo:       'Select Repository',
-    branch:     'Select Branch',
-    files:      'Select File',
+    'repo-select': 'Select Repository',
+    connection:    'Select Connection',
+    adoProject:    'Select Project',
+    repo:          'Select Repository',
+    branch:        'Select Branch',
+    files:         'Select File',
   };
+
+  const canGoBack = step !== 'repo-select' && !(step === 'connection' && !hasConfiguredRepos);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -288,7 +362,7 @@ export function RemoteFileBrowser({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
           <div className="flex items-center gap-2">
-            {step !== 'connection' && (
+            {canGoBack && (
               <button onClick={goBack} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
                 <ArrowLeft size={16} />
               </button>
@@ -319,6 +393,37 @@ export function RemoteFileBrowser({
             </div>
           ) : (
             <>
+              {/* Configured repo picker */}
+              {step === 'repo-select' && (
+                <ul className="space-y-1">
+                  {(configuredRepos ?? []).map((r) => (
+                    <li key={r.id}>
+                      <button
+                        onClick={() => selectConfiguredRepo(r)}
+                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+                      >
+                        <GitBranch size={15} className="shrink-0 text-indigo-500" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">{r.label || r.repoName}</p>
+                          <p className="text-xs text-gray-400 truncate">
+                            {r.adoProjectName ? `${r.adoProjectName} / ` : ''}{r.repoName}
+                            {r.defaultBranch ? ` · ${r.defaultBranch}` : ''}
+                          </p>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                  <li className="border-t border-gray-100 dark:border-gray-800 pt-1 mt-1">
+                    <button
+                      onClick={() => loadConnections()}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-400 hover:bg-gray-50 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+                    >
+                      Browse all repositories…
+                    </button>
+                  </li>
+                </ul>
+              )}
+
               {/* Connection list */}
               {step === 'connection' && (
                 <ul className="space-y-1">
@@ -398,57 +503,115 @@ export function RemoteFileBrowser({
 
               {/* File browser */}
               {step === 'files' && (
-                <ul className="space-y-0.5">
-                  {currentPath !== '/' && (
-                    <li>
+                <>
+                  {/* Smart scan banner */}
+                  {scanResults === null ? (
+                    <div className="mb-2 flex items-center justify-between rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 dark:border-indigo-900/40 dark:bg-indigo-900/20">
+                      <span className="text-xs text-indigo-700 dark:text-indigo-300">Scan entire repo for all XLIFF files at once</span>
                       <button
-                        onClick={() => {
-                          const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
-                          browsePath(selectedBranch, parent);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+                        onClick={scanForXliff}
+                        disabled={scanning}
+                        className="flex items-center gap-1.5 rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                       >
-                        <span className="text-sm text-gray-400">..</span>
+                        {scanning ? <Loader2 size={12} className="animate-spin" /> : <FileCode2 size={12} />}
+                        {scanning ? 'Scanning…' : 'Scan for XLIFF'}
                       </button>
-                    </li>
+                    </div>
+                  ) : (
+                    <div className="mb-2 flex items-center justify-between rounded-lg border border-green-100 bg-green-50 px-3 py-2 dark:border-green-900/40 dark:bg-green-900/20">
+                      <span className="text-xs text-green-700 dark:text-green-300">
+                        Found {scanResults.length} XLIFF file{scanResults.length !== 1 ? 's' : ''} in repo
+                      </span>
+                      <button
+                        onClick={() => setScanResults(null)}
+                        className="text-xs text-green-600 underline hover:text-green-800 dark:text-green-400"
+                      >
+                        Browse folders
+                      </button>
+                    </div>
                   )}
-                  {files.map((f) => {
-                    const isXliff = f.type === 'file' && (f.name.endsWith('.xlf') || f.name.endsWith('.xliff'));
-                    return (
-                      <li key={f.path}>
-                        <button
-                          disabled={f.type === 'file' && !isXliff || importing}
-                          onClick={() => {
-                            if (f.type === 'directory') browsePath(selectedBranch, f.path);
-                            else if (isXliff) importFile(f);
-                          }}
-                          className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors
-                            ${f.type === 'directory' ? 'hover:bg-gray-50 dark:hover:bg-gray-800' : ''}
-                            ${isXliff ? 'hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}
-                            ${f.type === 'file' && !isXliff ? 'opacity-40 cursor-not-allowed' : ''}
-                          `}
-                        >
-                          {importing && isXliff ? (
-                            <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
-                          ) : f.type === 'directory' ? (
-                            <Folder size={15} className="shrink-0 text-amber-500" />
-                          ) : (
-                            <FileCode2 size={15} className={`shrink-0 ${isXliff ? 'text-indigo-500' : 'text-gray-300'}`} />
-                          )}
-                          <span className={`text-sm ${isXliff ? 'font-medium text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'}`}>
-                            {f.name}
-                          </span>
-                          {isXliff && (
-                            <span className="ml-auto text-xs text-indigo-400">click to import</span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                  {files.length === 0 && (
-                    <p className="py-6 text-center text-sm text-gray-400">Empty folder</p>
+
+                  {/* Scan results */}
+                  {scanResults !== null ? (
+                    <ul className="space-y-0.5">
+                      {scanResults.length === 0 && (
+                        <p className="py-6 text-center text-sm text-gray-400">No XLIFF files found in this repo</p>
+                      )}
+                      {scanResults.map((f) => (
+                        <li key={f.path}>
+                          <button
+                            disabled={importing}
+                            onClick={() => importFile(f)}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                          >
+                            {importing ? (
+                              <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
+                            ) : (
+                              <FileCode2 size={15} className="shrink-0 text-indigo-500" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-indigo-700 dark:text-indigo-300">{f.name}</p>
+                              <p className="truncate font-mono text-xs text-gray-400">{f.path}</p>
+                            </div>
+                            <span className="ml-auto text-xs text-indigo-400">import</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {currentPath !== '/' && (
+                        <li>
+                          <button
+                            onClick={() => {
+                              const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
+                              browsePath(selectedBranch, parent);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800"
+                          >
+                            <span className="text-sm text-gray-400">..</span>
+                          </button>
+                        </li>
+                      )}
+                      {files.map((f) => {
+                        const isXliff = f.type === 'file' && (f.name.endsWith('.xlf') || f.name.endsWith('.xliff'));
+                        return (
+                          <li key={f.path}>
+                            <button
+                              disabled={f.type === 'file' && !isXliff || importing}
+                              onClick={() => {
+                                if (f.type === 'directory') browsePath(selectedBranch, f.path);
+                                else if (isXliff) importFile(f);
+                              }}
+                              className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors
+                                ${f.type === 'directory' ? 'hover:bg-gray-50 dark:hover:bg-gray-800' : ''}
+                                ${isXliff ? 'hover:bg-indigo-50 dark:hover:bg-indigo-900/20' : ''}
+                                ${f.type === 'file' && !isXliff ? 'opacity-40 cursor-not-allowed' : ''}
+                              `}
+                            >
+                              {importing && isXliff ? (
+                                <Loader2 size={15} className="shrink-0 animate-spin text-indigo-500" />
+                              ) : f.type === 'directory' ? (
+                                <Folder size={15} className="shrink-0 text-amber-500" />
+                              ) : (
+                                <FileCode2 size={15} className={`shrink-0 ${isXliff ? 'text-indigo-500' : 'text-gray-300'}`} />
+                              )}
+                              <span className={`text-sm ${isXliff ? 'font-medium text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'}`}>
+                                {f.name}
+                              </span>
+                              {isXliff && (
+                                <span className="ml-auto text-xs text-indigo-400">click to import</span>
+                              )}
+                            </button>
+                          </li>
+                        );
+                      })}
+                      {files.length === 0 && (
+                        <p className="py-6 text-center text-sm text-gray-400">Empty folder</p>
+                      )}
+                    </ul>
                   )}
-                </ul>
+                </>
               )}
             </>
           )}

@@ -212,6 +212,8 @@ export interface AITranslateResult {
   id: string;
   translatedText: string;
   confidence?: 'high' | 'medium' | 'low';
+  /** Numeric confidence 0–100 returned by the AI model */
+  confidenceScore?: number;
 }
 
 export interface AITranslateResponse {

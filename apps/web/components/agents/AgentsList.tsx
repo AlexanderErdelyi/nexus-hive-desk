@@ -798,6 +798,7 @@ function SkillsTab() {
 
 function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => void; onSaved: () => void }) {
   const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState<'edit' | 'test'>('edit');
   const [form, setForm] = useState({
     name: skill.name,
     description: skill.description ?? '',
@@ -806,6 +807,17 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
   });
   const [saving, setSaving] = useState(false);
   const readOnly = skill.builtIn;
+
+  // ── Test tab state ──
+  const lsKey = `nexus_skill_test_${skill.id}`;
+  const [testInput, setTestInput] = useState(() => {
+    try { return localStorage.getItem(lsKey) ?? ''; } catch { return ''; }
+  });
+  const [testModel, setTestModel] = useState('');
+  const [testRunning, setTestRunning] = useState(false);
+  const [testOutput, setTestOutput] = useState('');
+  const [testTokens, setTestTokens] = useState<number | null>(null);
+  const testOutputRef = useRef<HTMLDivElement>(null);
 
   const typeColors: Record<string, string> = {
     prompt: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -823,6 +835,50 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
       onSaved();
     } catch (e) { toast.error(getErrorMessage(e)); }
     finally { setSaving(false); }
+  }
+
+  async function runTest() {
+    if (!testInput.trim() || testRunning) return;
+    try { localStorage.setItem(lsKey, testInput); } catch { /* ignore */ }
+    setTestRunning(true);
+    setTestOutput('');
+    setTestTokens(null);
+    const token = localStorage.getItem('nexus_auth_token');
+    try {
+      const res = await fetch(`/api/skills/${skill.id}/test-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ input: testInput, model: testModel || undefined }),
+      });
+      if (!res.ok || !res.body) throw new Error(await res.text().catch(() => 'Stream failed'));
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+        for (const part of parts) {
+          let eventType = 'message'; let data = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            if (line.startsWith('data: ')) data += line.slice(6).trim();
+          }
+          if (!data) continue;
+          const parsed = JSON.parse(data) as { chunk?: string; estimatedTokens?: number; message?: string };
+          if (eventType === 'token' && parsed.chunk) setTestOutput((p) => p + parsed.chunk!);
+          if (eventType === 'done') setTestTokens(parsed.estimatedTokens ?? null);
+          if (eventType === 'error') throw new Error(parsed.message ?? 'Stream error');
+        }
+      }
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setTestRunning(false);
+      setTimeout(() => testOutputRef.current?.scrollTo(0, testOutputRef.current.scrollHeight), 50);
+    }
   }
 
   useEffect(() => {
@@ -866,75 +922,160 @@ function SkillModal({ skill, onClose, onSaved }: { skill: Skill; onClose: () => 
           </div>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-          {/* Description */}
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Description</label>
-            {readOnly ? (
-              <p className="text-sm text-gray-700 dark:text-gray-300">{skill.description || <span className="italic text-gray-400">—</span>}</p>
-            ) : (
-              <input
-                value={form.description}
-                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                placeholder="What does this skill do?"
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              />
-            )}
-          </div>
-
-          {/* Type selector (edit only) */}
-          {!readOnly && (
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Type</label>
-              <select
-                value={form.type}
-                onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as Skill['type'] }))}
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              >
-                <option value="prompt">Prompt</option>
-                <option value="instructions">Instructions</option>
-                <option value="skill">Skill</option>
-                <option value="code">Code</option>
-              </select>
-            </div>
+        {/* Tabs */}
+        <div className="flex gap-0 border-b border-gray-100 px-6 dark:border-gray-800">
+          <button
+            onClick={() => setActiveTab('edit')}
+            className={`-mb-px border-b-2 px-4 py-2.5 text-xs font-semibold transition ${activeTab === 'edit' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'}`}
+          >
+            {readOnly ? 'View' : 'Edit'}
+          </button>
+          {form.type !== 'code' && (
+            <button
+              onClick={() => setActiveTab('test')}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-xs font-semibold transition ${activeTab === 'test' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'}`}
+            >
+              <FlaskConical size={12} /> Test
+            </button>
           )}
-
-          {/* Prompt template / code */}
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">
-              {form.type === 'code' ? 'Code' : 'Prompt Template'}
-            </label>
-            {readOnly ? (
-              <pre className="min-h-[180px] rounded-xl border border-gray-100 bg-gray-50 p-4 font-mono text-sm leading-relaxed text-gray-700 whitespace-pre-wrap break-words dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
-                {skill.promptTemplate || <span className="italic text-gray-400">No template defined.</span>}
-              </pre>
-            ) : (
-              <textarea
-                rows={12}
-                value={form.promptTemplate}
-                onChange={(e) => setForm((f) => ({ ...f, promptTemplate: e.target.value }))}
-                placeholder={form.type === 'code' ? 'Write your code here...' : 'Translate the following text to {{targetLanguage}}:\n\n{{sourceText}}'}
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 font-mono text-sm leading-relaxed text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              />
-            )}
-          </div>
         </div>
 
-        {/* Footer */}
-        {!readOnly && (
-          <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4 dark:border-gray-800">
-            <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800">
-              Cancel
-            </button>
-            <button
-              onClick={save}
-              disabled={!form.name || saving}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-              Save changes
-            </button>
+        {/* Body — Edit tab */}
+        {activeTab === 'edit' && (
+          <>
+            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+              {/* Description */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Description</label>
+                {readOnly ? (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">{skill.description || <span className="italic text-gray-400">—</span>}</p>
+                ) : (
+                  <input
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    placeholder="What does this skill do?"
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  />
+                )}
+              </div>
+
+              {/* Type selector (edit only) */}
+              {!readOnly && (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Type</label>
+                  <select
+                    value={form.type}
+                    onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as Skill['type'] }))}
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  >
+                    <option value="prompt">Prompt</option>
+                    <option value="instructions">Instructions</option>
+                    <option value="skill">Skill</option>
+                    <option value="code">Code</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Prompt template / code */}
+              <div className="flex-1">
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  {form.type === 'code' ? 'Code' : 'Prompt Template'}
+                </label>
+                {readOnly ? (
+                  <pre className="min-h-[180px] rounded-xl border border-gray-100 bg-gray-50 p-4 font-mono text-sm leading-relaxed text-gray-700 whitespace-pre-wrap break-words dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+                    {skill.promptTemplate || <span className="italic text-gray-400">No template defined.</span>}
+                  </pre>
+                ) : (
+                  <textarea
+                    rows={12}
+                    value={form.promptTemplate}
+                    onChange={(e) => setForm((f) => ({ ...f, promptTemplate: e.target.value }))}
+                    placeholder={form.type === 'code' ? 'Write your code here...' : 'Translate the following text to {{targetLanguage}}:\n\n{{sourceText}}'}
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 font-mono text-sm leading-relaxed text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            {!readOnly && (
+              <div className="flex items-center justify-end gap-3 border-t border-gray-100 px-6 py-4 dark:border-gray-800">
+                <button onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800">
+                  Cancel
+                </button>
+                <button
+                  onClick={save}
+                  disabled={!form.name || saving}
+                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Save changes
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Body — Test tab */}
+        {activeTab === 'test' && (
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+              {/* Model override */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Model (optional override)</label>
+                <input
+                  value={testModel}
+                  onChange={(e) => setTestModel(e.target.value)}
+                  placeholder="e.g. gpt-4o, gpt-4.1 — blank uses server default"
+                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+
+              {/* Input */}
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-gray-400">Your input</label>
+                <textarea
+                  rows={5}
+                  value={testInput}
+                  onChange={(e) => setTestInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void runTest(); } }}
+                  placeholder="Type your test input here… (Ctrl+Enter to run)"
+                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+              </div>
+
+              {/* Output */}
+              {(testOutput || testRunning) && (
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-gray-400">Output</label>
+                    {testTokens !== null && (
+                      <span className="text-xs text-gray-400">~{testTokens} tokens</span>
+                    )}
+                  </div>
+                  <div
+                    ref={testOutputRef}
+                    className="max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 font-mono text-sm leading-relaxed text-gray-800 whitespace-pre-wrap dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200"
+                  >
+                    {testOutput}
+                    {testRunning && <span className="animate-pulse">▌</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Run footer */}
+            <div className="flex items-center justify-between border-t border-gray-100 px-6 py-3 dark:border-gray-800">
+              <p className="text-xs text-gray-400">No side effects — test does not save to DB or push to ADO.</p>
+              <button
+                onClick={() => void runTest()}
+                disabled={!testInput.trim() || testRunning}
+                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {testRunning ? <Loader2 size={14} className="animate-spin" /> : <Play size={13} />}
+                {testRunning ? 'Running…' : 'Run'}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1030,6 +1171,8 @@ function McpTab() {
     wikiUrl: '',
     scriptPath: '',
     pythonPath: '',
+    tenantId: '',
+    clientId: '',
   });
 
   const { data, isLoading } = useQuery({
@@ -1047,10 +1190,12 @@ function McpTab() {
     wikiUrl: '',
     scriptPath: '',
     pythonPath: '',
+    tenantId: '',
+    clientId: '',
   };
 
   function buildPayload(input: typeof form) {
-    const { recordingsFolder, wikiUrl, scriptPath, pythonPath, ...rest } = input;
+    const { recordingsFolder, wikiUrl, scriptPath, pythonPath, tenantId, clientId, ...rest } = input;
     const caps: Record<string, string> = {};
     if (input.type === 'teams_recorder' && recordingsFolder.trim()) caps.recordingsFolder = recordingsFolder.trim();
     if (input.type === 'wiki_js') {
@@ -1058,8 +1203,12 @@ function McpTab() {
       if (scriptPath.trim()) caps.scriptPath = scriptPath.trim();
       if (pythonPath.trim()) caps.pythonPath = pythonPath.trim();
     }
+    if (input.type === 'sharepoint') {
+      if (tenantId.trim()) caps.tenantId = tenantId.trim();
+      if (clientId.trim()) caps.clientId = clientId.trim();
+    }
     // For typed connections always send capabilities (even empty {}) so old stale values get overwritten
-    const shouldSendCaps = input.type === 'wiki_js' || input.type === 'teams_recorder';
+    const shouldSendCaps = input.type === 'wiki_js' || input.type === 'teams_recorder' || input.type === 'sharepoint';
     const capabilities = (Object.keys(caps).length > 0 || shouldSendCaps) ? JSON.stringify(caps) : undefined;
     return { ...rest, ...(capabilities !== undefined ? { capabilities } : {}) };
   }
@@ -1123,6 +1272,8 @@ function McpTab() {
       wikiUrl: String(caps.wikiUrl ?? ''),
       scriptPath: String(caps.scriptPath ?? ''),
       pythonPath: String(caps.pythonPath ?? ''),
+      tenantId: String(caps.tenantId ?? ''),
+      clientId: String(caps.clientId ?? ''),
     });
     setEditingId(c.id);
     setShowCreate(true);
@@ -1140,6 +1291,8 @@ function McpTab() {
       wikiUrl: String(data.wikiUrl ?? ''),
       scriptPath: String(data.scriptPath ?? ''),
       pythonPath: String(data.pythonPath ?? ''),
+      tenantId: String(data.tenantId ?? ''),
+      clientId: String(data.clientId ?? ''),
     });
     setEditingId(null);
     setShowAIPanel(false);
@@ -1209,10 +1362,12 @@ function McpTab() {
                 <option value="azure_devops_wiki">Azure DevOps Wiki</option>
                 <option value="github">GitHub</option>
                 <option value="azure_devops">Azure DevOps</option>
+                <option value="sharepoint">SharePoint Online</option>
                 <option value="teams_recorder">Teams Recorder (Local MCP)</option>
                 <option value="custom">Custom</option>
               </select>
             </div>
+            {form.type !== 'sharepoint' && (
             <div>
               <label className={labelClass}>{form.type === 'wiki_js' ? 'Wiki.js URL *' : 'Base URL *'}</label>
               <input
@@ -1236,7 +1391,7 @@ function McpTab() {
                 </p>
               )}
             </div>
-            <div>
+            )}            <div>
               <label className={labelClass}>Auth Type</label>
               <select
                 className={inputClass}
@@ -1250,21 +1405,54 @@ function McpTab() {
             </div>
             <div className="sm:col-span-2">
               <label className={labelClass}>
-                {form.type === 'teams_recorder' ? 'GitHub Token (GITHUB_TOKEN)' : 'Credential / Token'}
+                {form.type === 'teams_recorder' ? 'GitHub Token (GITHUB_TOKEN)' : form.type === 'sharepoint' ? 'Client Secret *' : 'Credential / Token'}
               </label>
               <input
                 className={inputClass}
                 type="password"
                 value={form.credential}
                 onChange={(e) => setForm((f) => ({ ...f, credential: e.target.value }))}
-                placeholder={form.type === 'teams_recorder' ? 'ghp_... (required for AI analysis)' : 'PAT or API key'}
+                placeholder={form.type === 'teams_recorder' ? 'ghp_... (required for AI analysis)' : form.type === 'sharepoint' ? 'Azure AD App Client Secret' : 'PAT or API key'}
               />
               {form.type === 'teams_recorder' && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   GitHub token with Copilot/models access. Required for AI analysis; list_recordings works without it.
                 </p>
               )}
+              {form.type === 'sharepoint' && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  The Client Secret for your Azure AD App Registration with SharePoint Sites.ReadWrite.All permission.
+                </p>
+              )}
             </div>
+            {form.type === 'sharepoint' && (
+              <>
+                <div>
+                  <label className={labelClass}>Tenant ID *</label>
+                  <input
+                    className={inputClass}
+                    value={form.tenantId}
+                    onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Your Azure AD Tenant (Directory) ID.
+                  </p>
+                </div>
+                <div>
+                  <label className={labelClass}>Client ID *</label>
+                  <input
+                    className={inputClass}
+                    value={form.clientId}
+                    onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    The Application (Client) ID of your Azure AD App Registration. Requires <code>Sites.ReadWrite.All</code> application permission.
+                  </p>
+                </div>
+              </>
+            )}
             {form.type === 'teams_recorder' && (
               <div className="sm:col-span-2">
                 <label className={labelClass}>Recordings Folder</label>
@@ -1316,7 +1504,7 @@ function McpTab() {
               }}
               disabled={
                 !form.name
-                || !form.baseUrl
+                || (form.type !== 'sharepoint' && !form.baseUrl)
                 || createMutation.isPending
                 || updateMutation.isPending
               }

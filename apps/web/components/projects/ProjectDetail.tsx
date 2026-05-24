@@ -2,15 +2,16 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, ArrowRight, BookOpen, ChevronRight, CloudDownload, Download,
-  FileCode2, GitCommit, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList,
+  ArrowLeft, ArrowRight, AlertTriangle, BarChart2, BookOpen, Brain, ChevronRight, CloudDownload, Download,
+  FileCode2, GitCommit, GitCompare, GitPullRequest, Loader2, Settings2, Sparkles, Trash2, Upload, ClipboardList, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useProjectRole } from '@/lib/use-project-role';
 import { ProjectMembers } from './ProjectMembers';
 import { RemoteFileBrowser } from './RemoteFileBrowser';
 import { CommitModal } from './CommitModal';
@@ -18,10 +19,14 @@ import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
 import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
+import { ALAnalyserView } from './ALAnalyserView';
+import { ALCodeHealthView } from './ALCodeHealthView';
+import { TranslationMemoryView } from './TranslationMemoryView';
+import XliffCompareView from './XliffCompareView';
 import { PullRequestsView } from './PullRequestsView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'pull-requests';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'al-analysis' | 'translation-memory' | 'compare' | 'al-code-health' | 'pull-requests';
 
 interface Customer {
   id: string;
@@ -34,13 +39,15 @@ interface Project {
   description?: string;
   customerId?: string | null;
   customer?: Customer | null;
+  capabilities?: string | null;
   connectionId?: string | null;
   adoProjectName?: string | null;
   adoAccessScope?: string;
   adoRepoName?: string | null;
   defaultBranch?: string | null;
-  sourceLanguage: string;
-  targetLanguage: string;
+  localWorkspacePath?: string | null;
+  sourceLanguage?: string | null;
+  targetLanguage?: string | null;
   xliffFiles: Array<{
     id: string;
     filename: string;
@@ -53,6 +60,8 @@ interface Project {
     remoteRepo?: string;
     remotePrId?: string | null;
     remotePrUrl?: string | null;
+    lastSyncAt?: string | null;
+    remoteObjectId?: string | null;
   }>;
   repositories: ProjectRepo[];
   _count: { glossaryEntries: number };
@@ -67,15 +76,22 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [syncingFile, setSyncingFile] = useState<string | null>(null);
+  const [staleFiles, setStaleFiles] = useState<Map<string, { isStale: boolean; neverSynced: boolean }>>(new Map());
   const [showCommitModal, setShowCommitModal] = useState<string | null>(null);
   const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
   const [remoteConfig, setRemoteConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoRepoName?: string | null; defaultBranch?: string | null }>({});
   const [adoAccessConfig, setAdoAccessConfig] = useState<{ connectionId?: string | null; adoProjectName?: string | null; adoAccessScope?: string }>({});
   const [view, setView] = useState<ProjectView>('hub');
+  const [savingCaps, setSavingCaps] = useState(false);
+  const [savingWorkspacePath, setSavingWorkspacePath] = useState(false);
+  const [workspacePath, setWorkspacePath] = useState<string | undefined>(undefined);
+
+  const { role: myRole, hasRole } = useProjectRole(projectId);
 
   const { data, isLoading } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => api.get<{ data: Project }>(`/api/projects/${projectId}`),
+    staleTime: 60_000,
   });
 
   const deleteFileMutation = useMutation({
@@ -111,25 +127,54 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     [projectId, qc, router]
   );
 
+  // ── Staleness check: ping remote metadata for all remote-connected files on load ────────────
+  useEffect(() => {
+    const hasRemoteFiles = data?.data?.xliffFiles?.some((f) => f.remoteRepo && f.remoteConnectionId);
+    if (!hasRemoteFiles) return;
+    api.post<{ data: Array<{ fileId: string; isStale: boolean; neverSynced: boolean }> }>(
+      `/api/projects/${projectId}/xliff-files/check-staleness`, {}
+    ).then((res) => {
+      const map = new Map<string, { isStale: boolean; neverSynced: boolean }>();
+      for (const entry of res.data) {
+        map.set(entry.fileId, { isStale: entry.isStale, neverSynced: entry.neverSynced });
+      }
+      setStaleFiles(map);
+    }).catch(() => { /* silently ignore network errors */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, data?.data?.xliffFiles?.map((f) => f.id).join(',')]);
+
   const syncFromRemote = useCallback(
     async (file: Project['xliffFiles'][0]) => {
       if (!file.remoteConnectionId) return;
       setSyncingFile(file.id);
       try {
-        const res = await api.post<{ data: { added: number; updated: number; obsolete: number; total: number } }>(
+        const res = await api.post<{ data: { added: number; updated: number; obsolete: number; total: number; syncAt: string } }>(
           `/api/projects/${projectId}/xliff/${file.id}/sync-from-remote`,
           {}
         );
         qc.invalidateQueries({ queryKey: ['project', projectId] });
+        qc.invalidateQueries({ queryKey: ['project-files', projectId] });
+        // Clear stale flag for this file since we just synced
+        setStaleFiles((prev) => { const m = new Map(prev); m.delete(file.id); return m; });
         const { added, updated, obsolete } = res.data;
-        toast.success(`Synced — ${added} new, ${updated} updated, ${obsolete} obsolete`);
+        if (added > 0 || updated > 0) {
+          toast.success(`Synced — ${added} new, ${updated} source changes, ${obsolete} obsolete`, {
+            action: {
+              label: 'View changes',
+              onClick: () => router.push(`/projects/${projectId}/translations?fileId=${file.id}&filter=since-last-sync`),
+            },
+            duration: 8000,
+          });
+        } else {
+          toast.success(`Synced — no changes (${obsolete} obsolete)`);
+        }
       } catch (error) {
         toast.error(getErrorMessage(error));
       } finally {
         setSyncingFile(null);
       }
     },
-    [projectId, qc]
+    [projectId, qc, router]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -168,10 +213,20 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       <div>
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{project.name}</h1>
+          {myRole && (
+            <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+              myRole === 'admin' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+              myRole === 'editor' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+              myRole === 'translator' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+              'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+            }`}>
+              {myRole}
+            </span>
+          )}
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-              {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'pull-requests':'Pull Requests'}[view]}
+                {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'al-analysis':'AL Analysis', 'translation-memory':'TM Library', compare:'Compare', 'al-code-health':'AL Code Health', 'pull-requests':'Pull Requests'}[view]}
             </span>
           )}
         </div>
@@ -188,16 +243,21 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   // ─── Hub view ───────────────────────────────────────────────────────────────
   if (view === 'hub') {
+    const caps = (project.capabilities ?? 'translation').split(',').map((c) => c.trim());
+    const hasTranslation = caps.includes('translation');
+    const hasUserStories = caps.includes('user-stories');
+    const hasDocs = caps.includes('documentation');
+
     const cards = [
       {
         key: 'translations' as ProjectView,
-        icon: <FileCode2 size={28} className="text-indigo-500" />,
+        icon: <FileCode2 size={28} className={hasTranslation ? 'text-indigo-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Translations',
         description: 'Upload, load and edit XLIFF translation files. Use AI to auto-translate and commit back to your repo.',
-        badge: project.xliffFiles.length > 0
+        badge: !hasTranslation ? 'Not enabled' : project.xliffFiles.length > 0
           ? `${project.xliffFiles.length} file${project.xliffFiles.length > 1 ? 's' : ''}`
           : 'No files yet',
-        badgeColor: project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        badgeColor: !hasTranslation ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : project.xliffFiles.length > 0 ? 'text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 dark:text-indigo-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
         dataTour: 'tab-translations',
       },
@@ -205,31 +265,61 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         key: 'setup' as ProjectView,
         icon: <Settings2 size={28} className="text-amber-500" />,
         title: 'Setup',
-        description: 'Configure remote repository, glossary, and project connections to Azure DevOps or GitHub.',
+        description: 'Configure remote repository, glossary, capabilities, and project connections to Azure DevOps or GitHub.',
         badge: hasRemoteConfig ? 'Configured' : 'Not configured',
         badgeColor: hasRemoteConfig ? 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
-        available: true,
+        available: myRole === null || hasRole('editor'),
       },
       {
         key: 'work-items' as ProjectView,
-        icon: <ClipboardList size={28} className="text-sky-500" />,
+        icon: <ClipboardList size={28} className={hasUserStories ? 'text-sky-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Work Items',
         description: 'Browse, create and manage Azure DevOps work items. Use AI agents and skills to generate user stories, bugs and tasks.',
-        badge: project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
-        badgeColor: project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        badge: !hasUserStories ? 'Not enabled' : project.connectionId && project.adoProjectName ? 'Ready' : 'Needs ADO setup',
+        badgeColor: !hasUserStories ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : project.connectionId && project.adoProjectName ? 'text-sky-600 bg-sky-50 dark:bg-sky-900/30 dark:text-sky-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
         available: true,
         dataTour: 'tab-workitems',
       },
       {
         key: 'documentation' as ProjectView,
-        icon: <BookOpen size={28} className="text-emerald-500" />,
+        icon: <BookOpen size={28} className={hasDocs ? 'text-emerald-500' : 'text-gray-300 dark:text-gray-600'} />,
         title: 'Documentation',
         description: 'Create and manage project documentation. Sync with wikis and generate docs from your codebase.',
-        badge: 'Wiki.js ready',
-        badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
+        badge: !hasDocs ? 'Not enabled' : 'Wiki.js ready',
+        badgeColor: !hasDocs ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
         available: true,
         comingSoon: false,
         dataTour: 'tab-wiki',
+      },
+      {
+        key: 'al-analysis' as ProjectView,
+        icon: <BarChart2 size={28} className={hasTranslation && project.xliffFiles.length > 0 ? 'text-teal-500' : 'text-gray-300 dark:text-gray-600'} />,
+        title: 'AL Analysis',
+        description: 'Translation coverage per AL object. Upload your AL source folder to find objects missing from XLIFF.',
+        badge: !hasTranslation ? 'Not enabled' : project.xliffFiles.length > 0 ? `${project.xliffFiles.length} file${project.xliffFiles.length > 1 ? 's' : ''}` : 'No XLIFF yet',
+        badgeColor: !hasTranslation || !project.xliffFiles.length ? 'text-gray-400 bg-gray-100 dark:bg-gray-800' : 'text-teal-600 bg-teal-50 dark:bg-teal-900/30 dark:text-teal-400',
+        available: hasTranslation && project.xliffFiles.length > 0,
+        comingSoon: false,
+      },
+      {
+        key: 'translation-memory' as ProjectView,
+        icon: <Brain size={28} className={hasTranslation ? 'text-violet-500' : 'text-gray-300 dark:text-gray-600'} />,
+        title: 'TM Library',
+        description: 'Browse, edit, import and export Translation Memory entries. Auto-populated as you translate.',
+        badge: hasTranslation ? 'Active' : 'Not enabled',
+        badgeColor: hasTranslation ? 'text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: hasTranslation,
+        comingSoon: false,
+      },
+      {
+        key: 'al-code-health' as ProjectView,
+        icon: <ShieldCheck size={28} className="text-emerald-500" />,
+        title: 'AL Code Health',
+        description: 'Drop your AL source folder to detect long procedures, DB operations in loops, deep nesting, and other quality issues.',
+        badge: 'Local scan',
+        badgeColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400',
+        available: true,
+        comingSoon: false,
       },
       {
         key: 'pull-requests' as ProjectView,
@@ -245,7 +335,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     return (
       <div>
         {header}
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {cards.map((card) => (
             <button
               key={card.key}
@@ -368,6 +458,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                                   {file.remoteRepo} / {file.remoteBranch}
                                 </p>
                               )}
+                              {staleFiles.get(file.id)?.isStale && (
+                                <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" title="Remote file has changed since last sync — click Fetch to update">
+                                  <AlertTriangle size={10} /> Update available
+                                </span>
+                              )}
+                              {staleFiles.get(file.id)?.neverSynced && (
+                                <span className="flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-600 dark:bg-sky-900/30 dark:text-sky-400" title="This file has never been synced from remote">
+                                  <AlertTriangle size={10} /> Not synced yet
+                                </span>
+                              )}
                               {prStatus && (
                                 <span className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
                                   <GitPullRequest size={10} /> PR #{prStatus.id}
@@ -392,7 +492,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                               <button
                                 onClick={() => syncFromRemote(file)}
                                 disabled={syncingFile === file.id}
-                                className="flex items-center gap-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50"
+                                className={staleFiles.get(file.id)?.isStale
+                                  ? 'flex items-center gap-1 rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-200 disabled:opacity-50 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50 ring-1 ring-amber-400 dark:ring-amber-600'
+                                  : 'flex items-center gap-1 rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-900/30 dark:text-sky-400 dark:hover:bg-sky-900/50'}
                                 title="Fetch latest from remote and merge"
                               >
                                 {syncingFile === file.id ? <Loader2 size={13} className="animate-spin" /> : <CloudDownload size={13} />}
@@ -437,6 +539,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                   })}
                 </div>
               )}
+              {/* Compare button — shown when 2+ files are loaded */}
+              {project.xliffFiles.length >= 2 && (
+                <div className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-800">
+                  <button
+                    onClick={() => setView('compare')}
+                    className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/40"
+                  >
+                    <GitCompare size={15} /> Compare Files
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -472,6 +585,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           <RemoteFileBrowser
             projectId={projectId}
             customerId={project.customerId}
+            configuredRepos={project.repositories ?? []}
             preConnId={effectiveRemoteConfig.connectionId ?? undefined}
             preADOProject={effectiveRemoteConfig.adoProjectName ?? undefined}
             preRepo={effectiveRemoteConfig.adoRepoName ?? undefined}
@@ -532,9 +646,102 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </a>
           </div>
 
+          {/* Capabilities */}
+          {(() => {
+            const currentCaps = (project.capabilities ?? 'translation').split(',').map((c) => c.trim()).filter(Boolean);
+            const allCaps = [
+              { id: 'translation', label: 'Translation', description: 'XLIFF file management and AI translation' },
+              { id: 'user-stories', label: 'Work Items', description: 'Azure DevOps work item management' },
+              { id: 'documentation', label: 'Documentation', description: 'Wiki and documentation generation' },
+            ];
+            async function saveCaps(caps: string[]) {
+              setSavingCaps(true);
+              try {
+                await api.patch(`/api/projects/${projectId}`, { capabilities: caps.join(',') });
+                qc.invalidateQueries({ queryKey: ['project', projectId] });
+                toast.success('Capabilities updated');
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : 'Failed to save');
+              } finally {
+                setSavingCaps(false);
+              }
+            }
+            function toggleCap(capId: string) {
+              const next = currentCaps.includes(capId)
+                ? currentCaps.filter((c) => c !== capId)
+                : [...currentCaps, capId];
+              saveCaps(next);
+            }
+            return (
+              <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+                <h3 className="mb-1 font-semibold text-gray-900 dark:text-white">Capabilities</h3>
+                <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">Enable or disable features for this project. Disabled capabilities are hidden from the hub.</p>
+                <div className="space-y-3">
+                  {allCaps.map((cap) => (
+                    <label key={cap.id} className="flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 dark:border-gray-600"
+                        checked={currentCaps.includes(cap.id)}
+                        onChange={() => toggleCap(cap.id)}
+                        disabled={savingCaps}
+                      />
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">{cap.label}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">{cap.description}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Members — full width */}
           <div className="lg:col-span-2">
             <ProjectMembers projectId={projectId} />
+          </div>
+
+          {/* VS Code local workspace path */}
+          <div className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
+            <h3 className="mb-1 font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <span className="text-lg">🖥</span> VS Code Navigation
+            </h3>
+            <p className="mb-4 text-sm text-gray-500 dark:text-gray-400">
+              Set your local workspace root path (e.g. <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">C:\Projects\MyBCProject</code>).
+              This enables right-click → "Open in VS Code" on any translation row to jump directly to the XLIFF file or AL source.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="C:\Projects\MyBCProject"
+                value={workspacePath ?? (project.localWorkspacePath ?? '')}
+                onChange={(e) => setWorkspacePath(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-mono focus:border-indigo-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+              />
+              <button
+                onClick={async () => {
+                  const val = (workspacePath ?? project.localWorkspacePath ?? '').trim();
+                  setSavingWorkspacePath(true);
+                  try {
+                    await api.patch(`/api/projects/${projectId}`, { localWorkspacePath: val || null });
+                    qc.invalidateQueries({ queryKey: ['project', projectId] });
+                    toast.success('Workspace path saved');
+                  } catch (e) {
+                    toast.error(e instanceof Error ? e.message : 'Failed to save');
+                  } finally {
+                    setSavingWorkspacePath(false);
+                  }
+                }}
+                disabled={savingWorkspacePath}
+                className="rounded-lg bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-300"
+              >
+                {savingWorkspacePath ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {project.localWorkspacePath && (
+              <p className="mt-2 text-xs text-green-600 dark:text-green-400">✓ Configured: <span className="font-mono">{project.localWorkspacePath}</span></p>
+            )}
           </div>
         </div>
       </div>
@@ -564,6 +771,66 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         ) : (
           <WorkItemsView projectId={projectId} customerId={project.customerId} />
         )}
+      </div>
+    );
+  }
+
+  // ─── AL Analysis view ───────────────────────────────────────────────────────
+  if (view === 'al-analysis') {
+    return (
+      <div>
+        {header}
+        <ALAnalyserView
+          projectId={projectId}
+          xliffFiles={project.xliffFiles.map((f) => ({ id: f.id, filename: f.filename }))}
+          onOpenTranslations={(xliffFileId, objectFilter) => {
+            // Navigate to translations with the object filter applied via URL
+            router.push(`/projects/${projectId}/translations?fileId=${xliffFileId}&objectFilter=${encodeURIComponent(objectFilter)}`);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // ─── AL Code Health view ──────────────────────────────────────────────────────
+  if (view === 'al-code-health') {
+    return (
+      <div>
+        {header}
+        <ALCodeHealthView projectId={projectId} />
+      </div>
+    );
+  }
+
+  // ─── Translation Memory view ─────────────────────────────────────────────────
+  if (view === 'translation-memory') {
+    return (
+      <div>
+        {header}
+        <TranslationMemoryView projectId={projectId} />
+      </div>
+    );
+  }
+
+  // ─── Compare view ────────────────────────────────────────────────────────────
+  if (view === 'compare') {
+    return (
+      <div className="h-[calc(100vh-8rem)] flex flex-col">
+        {header}
+        <div className="flex-1 overflow-auto">
+          <XliffCompareView
+            projectId={projectId}
+            files={project.xliffFiles.map((f) => ({
+              id: f.id,
+              filename: f.filename,
+              remoteBranch: f.remoteBranch,
+              remoteRepo: f.remoteRepo,
+              uploadedAt: f.uploadedAt,
+              lastSyncAt: null,
+            }))}
+            onBack={() => setView('translations')}
+          />
+        </div>
       </div>
     );
   }

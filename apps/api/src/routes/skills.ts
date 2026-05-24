@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { fetchModelStream } from '../lib/stream-ai.js';
+import { requireAuth } from '../lib/auth';
 
 const VALID_TYPES = ['prompt', 'code', 'mcp-tool', 'wiki-style'] as const;
 
@@ -45,6 +47,7 @@ const BUILT_IN_SKILLS = [
 ] as const;
 
 export async function skillRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List skills (optional ?type= filter) ────────────────────────────────
   app.get<{ Querystring: { type?: string } }>('/', async (req) => {
     const typeFilter = req.query.type?.trim();
@@ -177,4 +180,52 @@ export async function skillRoutes(app: FastifyInstance) {
 
     return reply.status(201).send({ data: results });
   });
+
+  // ─── Test-run skill (SSE stream) ──────────────────────────────────────────
+  app.post<{ Params: { id: string }; Body: { input: string; model?: string } }>(
+    '/:id/test-stream',
+    async (req, reply) => {
+      const skill = await prisma.skill.findUnique({ where: { id: req.params.id } });
+      if (!skill) return reply.status(404).send({ error: 'not_found', message: 'Skill not found' });
+
+      const { input, model: modelOverride } = req.body;
+      if (!input?.trim()) return reply.status(400).send({ error: 'validation', message: 'input is required' });
+
+      const token = process.env.GITHUB_TOKEN ?? '';
+      const model = modelOverride || process.env.AI_MODEL || 'gpt-4o-mini';
+
+      const systemPrompt = skill.promptTemplate?.trim()
+        ? `You are executing the following skill. Follow its instructions exactly.\n\n--- Skill: ${skill.name} ---\n${skill.promptTemplate}`
+        : `You are a helpful AI assistant. Skill name: ${skill.name}.`;
+
+      const messages = [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: input },
+      ];
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      });
+
+      const send = (event: string, data: unknown) =>
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+      try {
+        let charCount = 0;
+        await fetchModelStream(token, model, messages, (chunk) => {
+          charCount += chunk.length;
+          send('token', { chunk });
+        });
+        send('done', { estimatedTokens: Math.ceil(charCount / 4) });
+      } catch (err) {
+        send('error', { message: err instanceof Error ? err.message : 'Stream failed' });
+      } finally {
+        reply.raw.end();
+      }
+    }
+  );
 }

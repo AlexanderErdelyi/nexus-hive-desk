@@ -31,7 +31,7 @@ function getErrorMessage(error: unknown) {
 export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string }) {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(!!defaultCustomerId);
-  const [form, setForm] = useState({ name: '', description: '', customerId: defaultCustomerId ?? '' });
+  const [form, setForm] = useState({ name: '', description: '', customerId: defaultCustomerId ?? '', capabilities: 'translation' });
   const [customerFilter, setCustomerFilter] = useState('');
 
   const { data: customersData } = useQuery({
@@ -55,7 +55,7 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['projects'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', customerId: '' });
+      setForm({ name: '', description: '', customerId: '', capabilities: 'translation' });
       toast.success('Project created');
     },
     onError: (error) => toast.error(getErrorMessage(error)),
@@ -131,6 +131,32 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Capabilities</label>
+              <div className="flex flex-wrap gap-4">
+                {[
+                  { id: 'translation', label: 'Translation' },
+                  { id: 'user-stories', label: 'Work Items' },
+                  { id: 'documentation', label: 'Documentation' },
+                ].map((cap) => {
+                  const caps = form.capabilities.split(',').map((c) => c.trim()).filter(Boolean);
+                  return (
+                    <label key={cap.id} className="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 dark:border-gray-600"
+                        checked={caps.includes(cap.id)}
+                        onChange={() => {
+                          const next = caps.includes(cap.id) ? caps.filter((c) => c !== cap.id) : [...caps, cap.id];
+                          setForm((f) => ({ ...f, capabilities: next.join(',') }));
+                        }}
+                      />
+                      {cap.label}
+                    </label>
+                  );
+                })}
+              </div>
             </div>
           </div>
           <div className="mt-4 flex gap-3">

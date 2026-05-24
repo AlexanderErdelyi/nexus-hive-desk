@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, BookOpen, Bot, Bug, CheckCircle2, CheckSquare, ChevronDown, ChevronRight, ExternalLink, GitBranch,
-  Filter, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
+  Filter, LayoutGrid, LayoutList, Loader2, MessageCircle, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Star, X, Zap,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,6 +28,7 @@ interface WorkItem {
   tags?: string | null;
   areaPath?: string | null;
   iterationPath?: string | null;
+  parentId?: number | null;
   createdDate?: string;
   changedDate?: string;
   url?: string;
@@ -138,6 +139,156 @@ function priorityBadge(p?: number) {
   return <span className={`text-xs font-medium ${entry.cls}`}>{entry.label}</span>;
 }
 
+// ── Backlog tree helpers ──────────────────────────────────────────────────────
+
+const TYPE_ORDER: Record<string, number> = {
+  epic: 0, feature: 1, 'user story': 2, task: 3, bug: 4,
+};
+
+type BacklogNode = WorkItem & { children: BacklogNode[] };
+
+function buildTree(items: WorkItem[]): BacklogNode[] {
+  const map = new Map<number, BacklogNode>();
+  for (const item of items) map.set(item.id, { ...item, children: [] });
+
+  const roots: BacklogNode[] = [];
+  for (const node of map.values()) {
+    if (node.parentId && map.has(node.parentId)) {
+      map.get(node.parentId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sort = (nodes: BacklogNode[]): BacklogNode[] => {
+    nodes.sort((a, b) => {
+      const ao = TYPE_ORDER[a.type.toLowerCase()] ?? 99;
+      const bo = TYPE_ORDER[b.type.toLowerCase()] ?? 99;
+      return ao !== bo ? ao - bo : a.id - b.id;
+    });
+    for (const n of nodes) sort(n.children);
+    return nodes;
+  };
+  return sort(roots);
+}
+
+function collectIds(nodes: BacklogNode[], depth = 0, maxDepth = Infinity): number[] {
+  const ids: number[] = [];
+  for (const n of nodes) {
+    if (n.children.length > 0) {
+      ids.push(n.id);
+      if (depth < maxDepth) ids.push(...collectIds(n.children, depth + 1, maxDepth));
+    }
+  }
+  return ids;
+}
+
+// ── Board/Kanban helpers ──────────────────────────────────────────────────────
+
+// Canonical state ordering for board columns
+const STATE_COLUMN_ORDER = [
+  'new', 'to do', 'proposed',
+  'active', 'in progress', 'doing', 'committed',
+  'review', 'testing', 'in review', 'code review',
+  'resolved', 'done', 'closed', 'completed', 'removed',
+];
+
+function stateColumnOrder(state: string): number {
+  const idx = STATE_COLUMN_ORDER.indexOf(state.toLowerCase());
+  return idx === -1 ? 50 : idx;
+}
+
+function assigneeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+function columnTheme(state: string) {
+  const s = state.toLowerCase();
+  if (s.includes('done') || s.includes('closed') || s.includes('completed') || s.includes('resolved'))
+    return { header: 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800', dot: 'bg-emerald-400' };
+  if (s.includes('progress') || s.includes('active') || s.includes('doing') || s.includes('committed'))
+    return { header: 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800', dot: 'bg-blue-400' };
+  if (s.includes('review') || s.includes('testing'))
+    return { header: 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800', dot: 'bg-purple-400' };
+  if (s.includes('removed'))
+    return { header: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700', dot: 'bg-gray-400' };
+  return { header: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700', dot: 'bg-indigo-400' };
+}
+
+// ── BacklogRow ────────────────────────────────────────────────────────────────
+
+function BacklogRow({
+  node, depth, onSelect, selectedId, expandedIds, onToggle,
+}: {
+  node: BacklogNode;
+  depth: number;
+  onSelect: (item: WorkItem) => void;
+  selectedId?: number;
+  expandedIds: Set<number>;
+  onToggle: (id: number) => void;
+}) {
+  const expanded = expandedIds.has(node.id);
+  const hasChildren = node.children.length > 0;
+  const indent = depth * 20 + 12;
+
+  return (
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelect(node)}
+        onKeyDown={(e) => e.key === 'Enter' && onSelect(node)}
+        style={{ paddingLeft: `${indent}px` }}
+        className={`flex items-center gap-2 py-2 pr-3 rounded-lg cursor-pointer group transition-colors
+          ${selectedId === node.id
+            ? 'bg-indigo-50 dark:bg-indigo-900/20 ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
+            : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
+          }`}
+      >
+        {hasChildren ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggle(node.id); }}
+            className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400"
+          >
+            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </button>
+        ) : (
+          <span className="shrink-0 w-4" />
+        )}
+        <span className="shrink-0">{typeIcon(node.type, 13)}</span>
+        <span className="flex-1 min-w-0 text-sm truncate text-gray-900 dark:text-white">{node.title}</span>
+        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-600">#{node.id}</span>
+        <span className="shrink-0">{stateChip(node.state)}</span>
+        {node.priority && <span className="shrink-0 hidden sm:block">{priorityBadge(node.priority)}</span>}
+        {node.assignedTo && (
+          <span className="shrink-0 hidden md:block text-xs text-gray-400 dark:text-gray-600 truncate max-w-[120px]">
+            {node.assignedTo}
+          </span>
+        )}
+        {hasChildren && (
+          <span className="shrink-0 text-xs text-gray-400 dark:text-gray-600 tabular-nums">
+            {node.children.length}
+          </span>
+        )}
+      </div>
+      {expanded && hasChildren && node.children.map((child) => (
+        <BacklogRow
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          onSelect={onSelect}
+          selectedId={selectedId}
+          expandedIds={expandedIds}
+          onToggle={onToggle}
+        />
+      ))}
+    </>
+  );
+}
+
+
 function markdownToHtml(content: string): string {
   if (!content) return '';
   // If it already looks like HTML, return as-is
@@ -193,6 +344,71 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── RichTextToggle — Edit/Preview toggle for markdown/HTML textareas ──────────
+
+function RichTextToggle({
+  label,
+  value,
+  onChange,
+  rows = 4,
+  placeholder,
+  labelClass,
+  fieldClass,
+}: {
+  label: React.ReactNode;
+  value: string;
+  onChange: (v: string) => void;
+  rows?: number;
+  placeholder?: string;
+  labelClass?: string;
+  fieldClass?: string;
+}) {
+  const [preview, setPreview] = useState(false);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <label className={`text-xs font-semibold ${labelClass ?? 'text-gray-500 dark:text-gray-400'}`}>{label}</label>
+        <div className="inline-flex overflow-hidden rounded-md border border-gray-200 bg-white text-[11px] dark:border-gray-700 dark:bg-gray-900">
+          <button
+            type="button"
+            onClick={() => setPreview(false)}
+            className={`px-2.5 py-0.5 font-medium transition ${!preview ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setPreview(true)}
+            className={`px-2.5 py-0.5 font-medium transition ${preview ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+          >
+            Preview
+          </button>
+        </div>
+      </div>
+      {preview ? (
+        value ? (
+          <div
+            className={`prose prose-sm max-w-none rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900 dark:prose-invert ${fieldClass ?? ''}`}
+            dangerouslySetInnerHTML={{ __html: markdownToHtml(value) }}
+          />
+        ) : (
+          <div className="rounded-lg border border-dashed border-gray-200 p-3 text-xs italic text-gray-400 dark:border-gray-700">
+            Nothing to preview yet.
+          </div>
+        )
+      ) : (
+        <textarea
+          rows={rows}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={`w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white ${fieldClass ?? ''}`}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Work Item Detail Modal ────────────────────────────────────────────────────
 
 function WorkItemDetailModal({
@@ -236,7 +452,13 @@ function WorkItemDetailModal({
   const [splitExpandedIdx, setSplitExpandedIdx] = useState<number | null>(null);
   const [splitItemRefinePrompt, setSplitItemRefinePrompt] = useState('');
   const [splitItemRefining, setSplitItemRefining] = useState(false);
+  const [refineStreamText, setRefineStreamText] = useState('');
+  const [splitStreamText, setSplitStreamText] = useState('');
   const [portalReady, setPortalReady] = useState(false);
+  const [editDescription, setEditDescription] = useState(item.description ?? '');
+  const [editAcceptanceCriteria, setEditAcceptanceCriteria] = useState(item.acceptanceCriteria ?? '');
+  const [detailsSaving, setDetailsSaving] = useState(false);
+  const detailsDirty = editDescription !== (item.description ?? '') || editAcceptanceCriteria !== (item.acceptanceCriteria ?? '');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const splitLogsEndRef = useRef<HTMLDivElement>(null);
 
@@ -258,6 +480,23 @@ function WorkItemDetailModal({
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   });
+
+  async function saveDetails() {
+    if (!detailsDirty || detailsSaving) return;
+    setDetailsSaving(true);
+    try {
+      await api.patch(`/api/projects/${projectId}/work-items/${item.id}`, {
+        description: editDescription,
+        acceptanceCriteria: editAcceptanceCriteria,
+      });
+      toast.success('Work item updated ✔');
+      onUpdated();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+    } finally {
+      setDetailsSaving(false);
+    }
+  }
 
   useEffect(() => {
     setPortalReady(true);
@@ -302,6 +541,7 @@ function WorkItemDetailModal({
     setRefinePrompt('');
     setRefining(true);
     setRefineResult(null);
+    setRefineStreamText('');
     setRefineMessages((prev) => [...prev, { role: 'user', content: msg, timestamp: new Date() }]);
 
     const token = localStorage.getItem('nexus_auth_token');
@@ -335,11 +575,13 @@ function WorkItemDetailModal({
             if (line.startsWith('data: ')) data += line.slice(6).trim();
           }
           if (!data) continue;
-          const parsed = JSON.parse(data) as RefineResult & { message?: string };
+          const parsed = JSON.parse(data) as RefineResult & { message?: string; chunk?: string };
+          if (eventType === 'token' && parsed.chunk) setRefineStreamText((prev) => prev + parsed.chunk!);
           if (eventType === 'log' && parsed.message) {
             setRefineMessages((prev) => [...prev, { role: 'log', content: parsed.message!, timestamp: new Date() }]);
           }
           if (eventType === 'result') {
+            setRefineStreamText('');
             setRefineResult(parsed);
             setRefineMessages((prev) => [...prev, { role: 'agent', content: 'Refinement ready — review the proposed changes on the right.', timestamp: new Date() }]);
           }
@@ -383,6 +625,7 @@ function WorkItemDetailModal({
     setSplitResult(null);
     setSplitEditedItems([]);
     setSplitEditedFeature(null);
+    setSplitStreamText('');
 
     const token = localStorage.getItem('nexus_auth_token');
     try {
@@ -420,11 +663,13 @@ function WorkItemDetailModal({
             if (line.startsWith('data: ')) data += line.slice(6).trim();
           }
           if (!data) continue;
-          const parsed = JSON.parse(data) as SplitResult & { message?: string };
+          const parsed = JSON.parse(data) as SplitResult & { message?: string; chunk?: string };
+          if (eventType === 'token' && parsed.chunk) setSplitStreamText((prev) => prev + parsed.chunk!);
           if (eventType === 'log' && parsed.message) {
             setSplitLogs((prev) => [...prev, parsed.message!]);
           }
           if (eventType === 'result') {
+            setSplitStreamText('');
             setSplitResult(parsed);
             setSplitEditedItems(parsed.items ?? []);
             setSplitEditedFeature(parsed.feature ?? null);
@@ -602,28 +847,43 @@ function WorkItemDetailModal({
           {activeTab === 'details' && (
             <div className="flex h-full min-h-0 overflow-hidden">
               {/* Main content */}
-              <div className="flex-1 space-y-6 overflow-y-auto p-6">
-                {item.description ? (
-                  <section>
-                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Description</h3>
-                    <div
-                      className="prose prose-sm max-w-none rounded-2xl bg-gray-50 p-5 text-gray-700 dark:bg-gray-800/50 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.description) }}
-                    />
-                  </section>
-                ) : (
-                  <div className="flex items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 py-12 text-center dark:border-gray-800">
-                    <p className="text-sm text-gray-400">No description</p>
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <div className="flex-1 space-y-5 overflow-y-auto p-6">
+                  <RichTextToggle
+                    label="Description"
+                    value={editDescription}
+                    onChange={setEditDescription}
+                    rows={6}
+                    placeholder="Add a description…"
+                  />
+                  <RichTextToggle
+                    label={<span className="text-green-600 dark:text-green-400">✓ Acceptance Criteria</span>}
+                    labelClass="text-green-600 dark:text-green-400"
+                    value={editAcceptanceCriteria}
+                    onChange={setEditAcceptanceCriteria}
+                    rows={5}
+                    placeholder="Add acceptance criteria…"
+                    fieldClass="border-green-100 bg-green-50/50 focus:border-green-400 dark:border-green-900/30"
+                  />
+                </div>
+                {detailsDirty && (
+                  <div className="flex items-center justify-end gap-2 border-t border-gray-200 bg-white px-6 py-3 dark:border-gray-800 dark:bg-gray-950">
+                    <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>
+                    <button
+                      onClick={() => { setEditDescription(item.description ?? ''); setEditAcceptanceCriteria(item.acceptanceCriteria ?? ''); }}
+                      className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-800"
+                    >
+                      Discard
+                    </button>
+                    <button
+                      onClick={() => void saveDetails()}
+                      disabled={detailsSaving}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {detailsSaving ? <Loader2 size={11} className="animate-spin" /> : null}
+                      Save changes
+                    </button>
                   </div>
-                )}
-                {item.acceptanceCriteria && (
-                  <section>
-                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-600">Acceptance Criteria</h3>
-                    <div
-                      className="prose prose-sm max-w-none rounded-2xl bg-blue-50 p-5 text-gray-700 dark:bg-blue-900/10 dark:prose-invert dark:text-gray-300"
-                      dangerouslySetInnerHTML={{ __html: markdownToHtml(item.acceptanceCriteria) }}
-                    />
-                  </section>
                 )}
               </div>
               {/* Meta sidebar */}
@@ -918,9 +1178,16 @@ function WorkItemDetailModal({
                       )}
                     </div>
                   ))}
-                  {refining && (
+                  {refining && !refineStreamText && (
                     <div className="flex items-center gap-2 text-xs text-gray-400">
                       <Loader2 size={12} className="animate-spin" /> Refining…
+                    </div>
+                  )}
+                  {refineStreamText && refining && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2.5 text-sm text-gray-800 dark:bg-gray-800 dark:text-gray-200">
+                        <span className="whitespace-pre-wrap">{refineStreamText}</span><span className="animate-pulse">▌</span>
+                      </div>
                     </div>
                   )}
                   <div ref={chatEndRef} />
@@ -1078,6 +1345,12 @@ function WorkItemDetailModal({
                   {splitLogs.map((log, i) => (
                     <p key={i} className="text-xs italic text-gray-500 dark:text-gray-400">{log}</p>
                   ))}
+                  {splitStreamText && splitGenerating && (
+                    <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 p-3 dark:border-violet-900/40 dark:bg-violet-900/10">
+                      <p className="mb-1 text-xs font-semibold text-violet-500">Generating…</p>
+                      <p className="whitespace-pre-wrap font-mono text-xs text-gray-600 dark:text-gray-400">{splitStreamText}<span className="animate-pulse">▌</span></p>
+                    </div>
+                  )}
                   <div ref={splitLogsEndRef} />
                 </div>
               </div>
@@ -1172,39 +1445,34 @@ function WorkItemDetailModal({
                           </div>
                           {/* Description */}
                           {it.description !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">Description</label>
-                              <textarea
-                                rows={4}
-                                value={it.description ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label="Description"
+                              value={it.description ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, description: v } : x))}
+                              rows={4}
+                            />
                           )}
                           {/* Technical Spec */}
                           {it.technicalSpec !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-indigo-500 dark:text-indigo-400">🔧 Technical Spec</label>
-                              <textarea
-                                rows={3}
-                                value={it.technicalSpec ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, technicalSpec: e.target.value } : x))}
-                                className="w-full rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-gray-800 focus:border-indigo-400 focus:outline-none dark:border-indigo-900/30 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label={<span className="text-indigo-500 dark:text-indigo-400">🔧 Technical Spec</span>}
+                              labelClass="text-indigo-500 dark:text-indigo-400"
+                              value={it.technicalSpec ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, technicalSpec: v } : x))}
+                              rows={3}
+                              fieldClass="border-indigo-100 bg-indigo-50/50 focus:border-indigo-400 dark:border-indigo-900/30"
+                            />
                           )}
                           {/* Acceptance Criteria */}
                           {it.acceptanceCriteria !== undefined && (
-                            <div>
-                              <label className="mb-1 block text-xs font-semibold text-green-600 dark:text-green-400">✓ Acceptance Criteria</label>
-                              <textarea
-                                rows={3}
-                                value={it.acceptanceCriteria ?? ''}
-                                onChange={(e) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, acceptanceCriteria: e.target.value } : x))}
-                                className="w-full rounded-lg border border-green-100 bg-green-50/50 px-3 py-2 text-xs text-gray-800 focus:border-green-400 focus:outline-none dark:border-green-900/30 dark:bg-gray-800 dark:text-white"
-                              />
-                            </div>
+                            <RichTextToggle
+                              label={<span className="text-green-600 dark:text-green-400">✓ Acceptance Criteria</span>}
+                              labelClass="text-green-600 dark:text-green-400"
+                              value={it.acceptanceCriteria ?? ''}
+                              onChange={(v) => setSplitEditedItems((prev) => prev.map((x, i) => i === idx ? { ...x, acceptanceCriteria: v } : x))}
+                              rows={3}
+                              fieldClass="border-green-100 bg-green-50/50 focus:border-green-400 dark:border-green-900/30"
+                            />
                           )}
                           {/* Children tasks */}
                           {it.children && it.children.length > 0 && (
@@ -1307,6 +1575,7 @@ function WorkItemForm({
   const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [recordingsFolder, setRecordingsFolder] = useState('');
   const [recordingsMcpId, setRecordingsMcpId] = useState('');
+  const [streamingText, setStreamingText] = useState('');
   const [portalReady, setPortalReady] = useState(false);
   const chatRef = useRef<HTMLDivElement>(null);
 
@@ -1453,6 +1722,7 @@ function WorkItemForm({
 
   async function generateStreaming(agentId: string, description: string) {
     const token = localStorage.getItem('nexus_auth_token');
+    setStreamingText('');
     const response = await fetch(`/api/projects/${projectId}/work-items/generate-stream`, {
       method: 'POST',
       headers: {
@@ -1489,10 +1759,11 @@ function WorkItemForm({
         }
 
         if (!data) continue;
-        const parsed = JSON.parse(data) as GeneratedWorkItem & { message?: string };
+        const parsed = JSON.parse(data) as GeneratedWorkItem & { message?: string; chunk?: string };
 
+        if (eventType === 'token' && parsed.chunk) setStreamingText((prev) => prev + parsed.chunk!);
         if (eventType === 'log' && parsed.message) addChatMessage('log', parsed.message);
-        if (eventType === 'result') applyGenerated(parsed);
+        if (eventType === 'result') { setStreamingText(''); applyGenerated(parsed); }
         if (eventType === 'error') throw new Error(parsed.message ?? 'Streaming generation failed');
         if (eventType === 'done') return;
       }
@@ -1726,6 +1997,16 @@ function WorkItemForm({
                       </div>
                     );
                   })}
+                  {streamingText && aiLoading && (
+                    <div className="flex items-start gap-3">
+                      <div className="mt-1 rounded-xl bg-white/10 p-2 text-violet-200">
+                        <Bot size={14} />
+                      </div>
+                      <div className="max-w-[88%] rounded-2xl rounded-tl-md border border-white/10 bg-slate-900/90 px-4 py-3 text-sm leading-relaxed text-slate-100 shadow-lg shadow-black/20">
+                        <div className="prose prose-sm prose-invert max-w-none whitespace-pre-wrap">{streamingText}<span className="animate-pulse">▌</span></div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-5 border-t border-white/10 pt-4">
@@ -1968,13 +2249,20 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
   const [search, setSearch] = useState('');
   const [selectedItem, setSelectedItem] = useState<WorkItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'backlog' | 'board'>('list');
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandLevel, setExpandLevel] = useState(0);
+
+  // Board drag state
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dropTargetCol, setDropTargetCol] = useState<string | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['work-items', projectId, typeFilter, stateFilter],
+    queryKey: ['work-items', projectId, typeFilter, stateFilter, viewMode],
     queryFn: () => {
-      const params = new URLSearchParams({ top: '100' });
-      if (typeFilter) params.set('type', typeFilter);
-      if (stateFilter) params.set('state', stateFilter);
+      const params = new URLSearchParams({ top: (viewMode === 'backlog' || viewMode === 'board') ? '200' : '100' });
+      if (viewMode === 'list' && typeFilter) params.set('type', typeFilter);
+      if (viewMode !== 'board' && stateFilter) params.set('state', stateFilter);
       return api.get<{ data: WorkItem[]; meta: { total: number } }>(
         `/api/projects/${projectId}/work-items?${params}`
       );
@@ -2005,6 +2293,71 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
     return wi.title.toLowerCase().includes(q) || String(wi.id).includes(q) || (wi.tags?.toLowerCase().includes(q) ?? false);
   });
 
+  const backlogTree = buildTree(filtered);
+
+  // Board grouping: derive sorted columns from unique states
+  const boardColumns = [...new Set(filtered.map((wi) => wi.state))]
+    .sort((a, b) => stateColumnOrder(a) - stateColumnOrder(b));
+  const boardGroups = new Map<string, WorkItem[]>(boardColumns.map((s) => [s, []]));
+  for (const wi of filtered) boardGroups.get(wi.state)?.push(wi);
+
+  // State-change mutation for drag-and-drop
+  const stateChangeMut = useMutation({
+    mutationFn: ({ wiId, state }: { wiId: number; state: string }) =>
+      api.patch(`/api/projects/${projectId}/work-items/${wiId}`, { state }),
+    onMutate: async ({ wiId, state }) => {
+      // Optimistic update: move the card in the query cache immediately
+      await qc.cancelQueries({ queryKey: ['work-items', projectId] });
+      qc.setQueryData<{ data: WorkItem[]; meta: { total: number } }>(
+        ['work-items', projectId, typeFilter, stateFilter, viewMode],
+        (old) => old ? { ...old, data: old.data.map((wi) => wi.id === wiId ? { ...wi, state } : wi) } : old
+      );
+    },
+    onError: () => {
+      toast.error('Failed to update state');
+      void qc.invalidateQueries({ queryKey: ['work-items', projectId] });
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['work-items', projectId] }),
+  });
+
+  function handleDrop(targetState: string) {
+    if (draggingId === null || targetState === dropTargetCol) { setDraggingId(null); setDropTargetCol(null); return; }
+    const wi = items.find((w) => w.id === draggingId);
+    if (wi && wi.state !== targetState) stateChangeMut.mutate({ wiId: draggingId, state: targetState });
+    setDraggingId(null);
+    setDropTargetCol(null);
+  }
+
+  // Initialise expanded state when tree first loads (start collapsed)
+  useEffect(() => {
+    if (viewMode === 'backlog') {
+      setExpandLevel(0);
+      setExpandedIds(new Set());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, viewMode]);
+
+  const handleToggle = (id: number) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  // Cycle: 0=collapsed → 1=Epic+Feature → 2=+UserStory → 3=all → 0
+  const EXPAND_LEVELS = [
+    { label: 'Expand', maxDepth: -1 },          // level 0: collapsed → next click goes to 1
+    { label: '+ User Story', maxDepth: 0 },     // level 1: epic/feature visible
+    { label: '+ Task', maxDepth: 1 },           // level 2: user story visible
+    { label: 'Collapse', maxDepth: Infinity },  // level 3: all visible
+  ] as const;
+
+  const cycleExpand = () => {
+    const next = (expandLevel + 1) % 4;
+    setExpandLevel(next);
+    setExpandedIds(next === 0 ? new Set() : new Set(collectIds(backlogTree, 0, EXPAND_LEVELS[next].maxDepth)));
+  };
+
   return (
     <div>
       {/* ── List column ── */}
@@ -2023,12 +2376,14 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           <div className="flex items-center gap-1.5">
             <Filter size={13} className="shrink-0 text-gray-400" />
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+              disabled={viewMode === 'backlog' || viewMode === 'board'}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-40">
               <option value="">All types</option>
               {uniqueTypes.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}
-              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white">
+              disabled={viewMode === 'board'}
+              className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white disabled:opacity-40">
               <option value="">All states</option>
               {uniqueStates.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -2037,6 +2392,39 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
             className="rounded-xl border border-gray-200 bg-white p-2 text-gray-500 hover:bg-gray-50 disabled:opacity-40 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400 dark:hover:bg-gray-800">
             <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           </button>
+          {/* View mode toggle */}
+          <div className="flex rounded-xl border border-gray-200 bg-white overflow-hidden dark:border-gray-700 dark:bg-gray-900">
+            <button
+              onClick={() => setViewMode('list')}
+              title="List view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors
+                ${viewMode === 'list'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <LayoutList size={13} />
+            </button>
+            <button
+              onClick={() => setViewMode('backlog')}
+              title="Backlog view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors border-l border-gray-200 dark:border-gray-700
+                ${viewMode === 'backlog'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <GitBranch size={13} />
+            </button>
+            <button
+              onClick={() => setViewMode('board')}
+              title="Board view"
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm transition-colors border-l border-gray-200 dark:border-gray-700
+                ${viewMode === 'board'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800'}`}
+            >
+              <LayoutGrid size={13} />
+            </button>
+          </div>
           <button
             onClick={() => { setShowCreateModal(true); setSelectedItem(null); }}
             className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 active:bg-indigo-800"
@@ -2045,7 +2433,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
           </button>
         </div>
 
-        {/* Items list */}
+        {/* Items list / backlog */}
         {isLoading ? (
           <div className="flex items-center justify-center py-24 text-gray-400">
             <Loader2 size={28} className="animate-spin" />
@@ -2063,7 +2451,7 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
               {items.length === 0 ? 'No work items found. Create your first one!' : 'No items match the current filter.'}
             </p>
           </div>
-        ) : (
+        ) : viewMode === 'list' ? (
           <div className="space-y-1.5">
             {filtered.map((wi) => (
               <button
@@ -2092,6 +2480,115 @@ export function WorkItemsView({ projectId, customerId }: { projectId: string; cu
                 </div>
               </button>
             ))}
+          </div>
+        ) : viewMode === 'backlog' ? (
+          /* Backlog tree view */
+          <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
+            {/* Header row */}
+            <div className="flex items-center gap-2 border-b border-gray-100 dark:border-gray-800 px-3 py-2">
+              <span className="flex-1 text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide">Title</span>
+              <button
+                onClick={cycleExpand}
+                title={expandLevel === 0 ? 'Expand Epic & Feature level' : expandLevel === 3 ? 'Collapse all' : EXPAND_LEVELS[expandLevel + 1]?.label ?? ''}
+                className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+              >
+                {expandLevel === 0
+                  ? <><ChevronRight size={11} /> Expand</>
+                  : expandLevel === 3
+                    ? <><ChevronRight size={11} className="rotate-90" /> Collapse</>
+                    : <><ChevronDown size={11} /> {EXPAND_LEVELS[expandLevel].label}</>
+                }
+              </button>
+              <span className="text-xs font-medium text-gray-400 dark:text-gray-600 uppercase tracking-wide pr-1">State</span>
+            </div>
+            <div className="divide-y divide-gray-50 dark:divide-gray-800/50 p-1">
+              {backlogTree.map((node) => (
+                <BacklogRow
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  onSelect={(wi) => { setSelectedItem(wi); setShowCreateModal(false); }}
+                  selectedId={selectedItem?.id}
+                  expandedIds={expandedIds}
+                  onToggle={handleToggle}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          /* ── Kanban board ────────────────────────────────────────────────────── */
+          <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: '60vh' }}>
+            {boardColumns.length === 0 ? (
+              <div className="flex-1 rounded-2xl border-2 border-dashed border-gray-200 py-16 text-center dark:border-gray-800">
+                <p className="text-gray-400 dark:text-gray-600">No work items found.</p>
+              </div>
+            ) : boardColumns.map((colState) => {
+              const theme = columnTheme(colState);
+              const colItems = boardGroups.get(colState) ?? [];
+              const isOver = dropTargetCol === colState;
+              return (
+                <div
+                  key={colState}
+                  className={`flex flex-col rounded-xl border transition-colors shrink-0 w-72 ${theme.header} ${isOver ? 'ring-2 ring-indigo-400 ring-offset-1' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); setDropTargetCol(colState); }}
+                  onDragLeave={() => setDropTargetCol(null)}
+                  onDrop={() => handleDrop(colState)}
+                >
+                  {/* Column header */}
+                  <div className="flex items-center gap-2 px-3 py-2.5 border-b border-inherit">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${theme.dot}`} />
+                    <span className="flex-1 text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{colState}</span>
+                    <span className="text-xs font-medium text-gray-400 dark:text-gray-500 tabular-nums">{colItems.length}</span>
+                  </div>
+
+                  {/* Cards */}
+                  <div className="flex flex-col gap-2 p-2 flex-1">
+                    {colItems.map((wi) => (
+                      <div
+                        key={wi.id}
+                        draggable
+                        onDragStart={() => setDraggingId(wi.id)}
+                        onDragEnd={() => { setDraggingId(null); setDropTargetCol(null); }}
+                        onClick={() => { setSelectedItem(wi); setShowCreateModal(false); }}
+                        className={`group cursor-pointer rounded-lg border bg-white p-3 shadow-sm transition-all
+                          hover:shadow-md hover:border-indigo-300 dark:bg-gray-900 dark:hover:border-indigo-700
+                          ${draggingId === wi.id ? 'opacity-40 scale-95' : ''}
+                          ${selectedItem?.id === wi.id ? 'border-indigo-300 ring-1 ring-indigo-300 dark:border-indigo-700 dark:ring-indigo-700' : 'border-gray-200 dark:border-gray-700'}
+                        `}
+                      >
+                        {/* Type + ID */}
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="shrink-0">{typeIcon(wi.type, 12)}</span>
+                          <span className="text-[10px] text-gray-400 dark:text-gray-600 font-mono">#{wi.id}</span>
+                          <span className="ml-auto text-[10px] text-gray-400 dark:text-gray-600 truncate max-w-[80px]">{wi.type}</span>
+                        </div>
+                        {/* Title */}
+                        <p className="text-sm font-medium text-gray-900 dark:text-white leading-snug line-clamp-3">{wi.title}</p>
+                        {/* Footer: priority + assignee */}
+                        <div className="mt-2 flex items-center gap-1.5">
+                          {wi.priority && <span className="shrink-0">{priorityBadge(wi.priority)}</span>}
+                          {wi.assignedTo && (
+                            <span
+                              title={wi.assignedTo}
+                              className="ml-auto shrink-0 flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-[10px] font-bold text-indigo-600 dark:text-indigo-300"
+                            >
+                              {assigneeInitials(wi.assignedTo)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Drop placeholder */}
+                    {isOver && draggingId !== null && (boardGroups.get(colState)?.every((w) => w.id !== draggingId) ?? true) && (
+                      <div className="rounded-lg border-2 border-dashed border-indigo-300 dark:border-indigo-700 h-16 flex items-center justify-center">
+                        <span className="text-xs text-indigo-400 dark:text-indigo-500">Drop here</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 

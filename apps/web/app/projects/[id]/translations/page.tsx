@@ -5,9 +5,9 @@ export default async function TranslationsPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ fileId?: string }>;
+  searchParams: Promise<{ fileId?: string; objectFilter?: string; filter?: string }>;
 }) {
   const { id } = await params;
-  const { fileId } = await searchParams;
-  return <TranslationEditor projectId={id} xliffFileId={fileId} />;
+  const { fileId, objectFilter, filter } = await searchParams;
+  return <TranslationEditor projectId={id} xliffFileId={fileId} initialObjectFilter={objectFilter} initialFilter={filter} />;
 }

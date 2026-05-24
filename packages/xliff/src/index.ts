@@ -1,4 +1,4 @@
-import { XMLBuilder, XMLParser } from 'fast-xml-parser';
+import { XMLBuilder, XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { ParsedXliff, TranslationState, XliffUnit } from '@nexus/types';
 
 const PARSER_OPTIONS = {
@@ -6,7 +6,9 @@ const PARSER_OPTIONS = {
   attributeNamePrefix: '@_',
   parseAttributeValue: false,
   trimValues: true,
-  processEntities: true,
+  // Increase entity expansion limits — BC XLIFF files can contain thousands of
+  // XML character references (e.g. &#160;) that hit fast-xml-parser's default of 1000.
+  processEntities: { maxTotalExpansions: 100000, maxEntityCount: 100000, maxEntitySize: 100000, maxExpandedLength: 10000000, maxExpansionDepth: 100 },
 };
 
 const BUILDER_OPTIONS = {
@@ -27,9 +29,18 @@ function normalizeState(raw?: string, targetText?: string, sourceText?: string):
     final: 'final',
     'signed-off': 'signed-off',
   };
+
+  // If source == target (both non-empty), treat as translated regardless of explicit state.
+  // BC Xliff Generator copies source → target as a placeholder and marks state="needs-translation".
+  // But identical source/target almost always means the string is the same in both languages
+  // (proper nouns, abbreviations, codes, numbers, etc.) — no translation needed.
+  const trimmedSource = sourceText?.trim();
+  const trimmedTarget = targetText?.trim();
+  if (trimmedSource && trimmedTarget && trimmedSource === trimmedTarget) return 'translated';
+
   if (raw && map[raw]) return map[raw];
-  // No state attribute — infer: if target exists and differs from source, treat as translated
-  if (targetText && targetText.trim() && targetText !== sourceText) return 'translated';
+  // No state attribute — infer from target text
+  if (targetText && targetText.trim()) return 'translated';
   return 'needs-translation';
 }
 
@@ -43,8 +54,104 @@ function getText(node: unknown): string {
   return '';
 }
 
+// ─── XML pre-processor ────────────────────────────────────────────────────────
+// BC Xliff Generator can produce malformed XML in several ways:
+//  1. AL object/field names with double-quote chars end up unescaped in
+//     trans-unit id and note attribute values (e.g. note="Table "Cust." ...")
+//  2. Duplicate <?xml?> processing instructions at the top of the file
+// Both issues are fixed here before handing the content to fast-xml-parser.
+
+/**
+ * Fix unescaped double-quotes inside the value of a named XML attribute.
+ *
+ * Strategy: scan character-by-character after the opening `attr="`.
+ * A `"` is treated as the TRUE closing delimiter only when the very next
+ * characters match one of:
+ *   - whitespace then a XML name-start char (next attribute follows)
+ *   - optional whitespace then `>` or `/>`  (tag ends here)
+ * Every other `"` encountered is an embedded (unescaped) quote and is
+ * replaced with `&quot;`.
+ */
+function fixAttrQuotes(xml: string, attrName: string): string {
+  const prefix = `${attrName}="`;
+  const parts: string[] = [];
+  let pos = 0;
+
+  while (pos < xml.length) {
+    const start = xml.indexOf(prefix, pos);
+    if (start === -1) { parts.push(xml.slice(pos)); break; }
+
+    // Copy everything up to and including the opening `attr="`
+    parts.push(xml.slice(pos, start + prefix.length));
+    let i = start + prefix.length;
+    let value = '';
+
+    while (i < xml.length) {
+      const ch = xml[i];
+      if (ch !== '"') { value += ch; i++; continue; }
+
+      // Is this the TRUE closing quote?
+      const after = xml.slice(i + 1);
+      const isEnd =
+        /^\s+[a-zA-Z_:]/.test(after) ||   // next attribute: space then XML name-start
+        /^\s*\/?>/.test(after);            // end of tag: />  or  >  (with optional space)
+
+      if (isEnd) {
+        parts.push(value.replace(/"/g, '&quot;'), '"');
+        pos = i + 1;
+        break;
+      }
+      value += '"';
+      i++;
+    }
+
+    // Ran off end without finding a closing quote — just emit as-is
+    if (i >= xml.length) { parts.push(value); pos = xml.length; break; }
+  }
+
+  return parts.join('');
+}
+
+function sanitizeXmlAttributeQuotes(xml: string): string {
+  // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
+  xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
+
+  // Fix 2 — unescaped `"` inside attribute values.
+  // BC XLIFF generator sometimes emits AL object/field names without proper &quot; escaping
+  // in trans-unit id and note attrs, and occasionally in <note> element from/annotates attrs.
+  xml = fixAttrQuotes(xml, 'id');
+  xml = fixAttrQuotes(xml, 'note');
+  xml = fixAttrQuotes(xml, 'from');
+  xml = fixAttrQuotes(xml, 'annotates');
+
+  return xml;
+}
+
 // ─── Parse XLIFF ──────────────────────────────────────────────────────────────
 export function parseXliff(xmlContent: string): ParsedXliff {
+  // Strip UTF-8 BOM (\uFEFF) — some editors / ADO add it; fast-xml-parser rejects it
+  xmlContent = xmlContent.replace(/^\uFEFF/, '');
+
+  // Validate first to get a proper human-readable error instead of a JS TypeError
+  const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: false });
+  if (validationResult !== true) {
+    // Try to fix common issues (unescaped quotes in attribute values) then re-validate
+    const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
+    const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
+    if (retryResult !== true) {
+      const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
+      // Include the raw lines around the error in the thrown message for diagnosis
+      const rawLines = xmlContent.split('\n');
+      const sanitizedLines = sanitized.split('\n');
+      const errLine = err.line - 1;
+      const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+      const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}`);
+      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
+    }
+    xmlContent = sanitized;
+  }
+
   const parser = new XMLParser({
     ...PARSER_OPTIONS,
     isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),

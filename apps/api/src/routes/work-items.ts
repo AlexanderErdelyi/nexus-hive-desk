@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { requireAuth } from '../lib/auth';
 
 function azureHeaders(pat: string): Record<string, string> {
   return {
@@ -132,6 +133,126 @@ async function fetchModelJson<T = Record<string, unknown>>(
   return JSON.parse(content) as T;
 }
 
+// ─── Streaming AI helpers ──────────────────────────────────────────────────
+
+async function readOpenAIStream(
+  body: ReadableStream<Uint8Array>,
+  onToken: (chunk: string) => void
+): Promise<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6).trim();
+      if (raw === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(raw) as { choices?: Array<{ delta?: { content?: string } }> };
+        const chunk = parsed.choices?.[0]?.delta?.content ?? '';
+        if (chunk) { fullText += chunk; onToken(chunk); }
+      } catch { /* skip malformed chunks */ }
+    }
+  }
+  return fullText;
+}
+
+async function fetchModelStream(
+  token: string,
+  model: string,
+  messages: ChatModelMessage[],
+  onToken: (chunk: string) => void,
+  temperature = 0.7
+): Promise<string> {
+  // Anthropic Claude SSE
+  if (model.startsWith('claude-')) {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+    if (anthropicKey) {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model, max_tokens: 4096, stream: true,
+          system: messages[0]?.role === 'system' ? messages[0].content : undefined,
+          messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content })),
+        }),
+      });
+      if (!res.ok) throw new Error(`Anthropic API error: ${await res.text().catch(() => res.statusText)}`);
+      if (!res.body) throw new Error('No response body from Anthropic');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', fullText = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6).trim()) as { type?: string; delta?: { type?: string; text?: string } };
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              const chunk = evt.delta.text ?? '';
+              if (chunk) { fullText += chunk; onToken(chunk); }
+            }
+          } catch { /* skip */ }
+        }
+      }
+      return fullText;
+    }
+
+    if (openRouterKey) {
+      const orModel = model.startsWith('anthropic/') ? model : `anthropic/${model}`;
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${openRouterKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: orModel, messages, temperature, stream: true }),
+      });
+      if (!res.ok) throw new Error(`OpenRouter API error: ${await res.text().catch(() => res.statusText)}`);
+      if (!res.body) throw new Error('No response body from OpenRouter');
+      return readOpenAIStream(res.body, onToken);
+    }
+
+    throw new Error('Claude model selected but ANTHROPIC_API_KEY or OPENROUTER_API_KEY is not configured');
+  }
+
+  // Default: GitHub Models (OpenAI-compatible SSE)
+  const res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, temperature, stream: true }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`AI API error: ${text}`);
+  }
+  if (!res.body) throw new Error('No response body from AI');
+  return readOpenAIStream(res.body, onToken);
+}
+
+function parseJsonFromText(text: string): Record<string, unknown> {
+  const stripped = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim();
+  try {
+    return JSON.parse(stripped) as Record<string, unknown>;
+  } catch {
+    const match = stripped.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Failed to parse AI response as JSON');
+    return JSON.parse(match[0]) as Record<string, unknown>;
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 function getFirstLevelPaths(root?: AdoClassificationNode | null): string[] {
   return (root?.children ?? [])
     .map((child) => child.path ?? child.name)
@@ -165,8 +286,9 @@ function replaceScreenshotPlaceholders(value: string | undefined, uploads: Scree
     upload.url ? content.replaceAll(`SCREENSHOT_PLACEHOLDER_${upload.index}`, upload.url) : content
   ), value);
 }
-
+
 export async function workItemRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List work items ───────────────────────────────────────────────────────
   app.get<{
     Params: { id: string };
@@ -223,6 +345,7 @@ export async function workItemRoutes(app: FastifyInstance) {
         'Microsoft.VSTS.Common.Priority', 'System.Description',
         'Microsoft.VSTS.Common.AcceptanceCriteria',
         'System.Tags', 'System.AreaPath', 'System.IterationPath',
+        'System.Parent',
       ].join(',');
 
       const detailsUrl = `${baseUrl}/_apis/wit/workitems?ids=${ids.join(',')}&fields=${fields}&api-version=7.1`;
@@ -246,6 +369,7 @@ export async function workItemRoutes(app: FastifyInstance) {
           tags: f['System.Tags'] ?? null,
           areaPath: f['System.AreaPath'] ?? null,
           iterationPath: f['System.IterationPath'] ?? null,
+          parentId: (f['System.Parent'] as number | null | undefined) ?? null,
           createdDate: f['System.CreatedDate'],
           changedDate: f['System.ChangedDate'],
           url: `${conn.baseUrl?.replace(/\/$/, '')}/${encodeURIComponent(adoProject)}/_workitems/edit/${wi.id}`,
@@ -885,14 +1009,16 @@ Return ONLY valid JSON with these fields:
 Prefer one of the provided work item types and area paths when context is available.`,
       ].filter(Boolean).join('\n\n');
 
-      const generated = await fetchModelJson<Record<string, unknown>>(
+      const fullText = await fetchModelStream(
         token,
         model,
         [
           { role: 'system', content: systemContent },
           { role: 'user', content: trimmedDescription },
-        ]
+        ],
+        (chunk) => sendEvent('token', { chunk })
       );
+      const generated = parseJsonFromText(fullText);
 
       sendEvent('result', { ...generated, screenshotPaths });
       sendEvent('done', { ok: true });
@@ -1209,13 +1335,15 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
         'Return ONLY valid JSON: { "title": "...", "description": "...", "acceptanceCriteria": "..." }',
       ].filter(Boolean).join('\n');
 
-      const generated = await fetchModelJson<{ title?: string; description?: string; acceptanceCriteria?: string }>(
+      const refineFullText = await fetchModelStream(
         token, model,
         [
           { role: 'system', content: systemContent },
           { role: 'user', content: prompt.trim() },
-        ]
+        ],
+        (chunk) => sendEvent('token', { chunk })
       );
+      const generated = parseJsonFromText(refineFullText);
 
       sendEvent('result', generated);
       sendEvent('done', { ok: true });
@@ -1392,7 +1520,7 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
         modeConfig.format,
       ].filter(Boolean).join('\n');
 
-      const generated = await fetchModelJson<DecomposeResult>(
+      const decomposeFullText = await fetchModelStream(
         token,
         model,
         [
@@ -1401,8 +1529,10 @@ If the system prompt above specifies a language (e.g. German, French), ALL text 
             role: 'user',
             content: instructions?.trim() ? `Additional instructions: ${instructions.trim()}` : `Decompose the above ${wiType}.`,
           },
-        ]
+        ],
+        (chunk) => sendEvent('token', { chunk })
       );
+      const generated = parseJsonFromText(decomposeFullText);
 
       sendEvent('result', { ...generated, parentId: req.params.wiId, parentType: wiType });
       sendEvent('done', { ok: true });

@@ -38,7 +38,12 @@ Rules:
 - Preserve ampersand shortcuts (e.g. &Save)
 - Keep technical terms, field names, and acronyms unchanged unless in glossary
 - Be concise — UI strings are short
-- Return ONLY a JSON object with a "translations" array of objects containing "id" and "translation" fields${glossarySection}`;
+- Return ONLY a JSON object with a "translations" array of objects containing "id", "translation", and "confidence" fields
+- "confidence" is a number 0–100 indicating your certainty:
+  - 90–100: certain (simple word, glossary match, or very clear translation)
+  - 70–89: likely correct (standard phrase)
+  - 50–69: uncertain (ambiguous or domain-specific)
+  - below 50: low confidence (needs manual review)${glossarySection}`;
 
   const userPrompt = `Translate these strings:\n${JSON.stringify(
     request.units.map((u) => ({ id: u.id, text: u.source }))
@@ -81,7 +86,7 @@ async function translateWithEndpoint(options: {
   };
 
   const content = data.choices?.[0]?.message?.content ?? '{}';
-  let parsed: { translations?: Array<{ id: string; translation: string }> };
+  let parsed: { translations?: Array<{ id: string; translation: string; confidence?: number }> };
   try {
     parsed = JSON.parse(content);
   } catch {
@@ -89,11 +94,16 @@ async function translateWithEndpoint(options: {
   }
 
   const translations = parsed.translations ?? [];
-  const results: AITranslateResult[] = translations.map((translation) => ({
-    id: translation.id,
-    translatedText: translation.translation,
-    confidence: 'high',
-  }));
+  const results: AITranslateResult[] = translations.map((translation) => {
+    const score = typeof translation.confidence === 'number' ? translation.confidence : 85;
+    const tier: 'high' | 'medium' | 'low' = score >= 90 ? 'high' : score >= 70 ? 'medium' : 'low';
+    return {
+      id: translation.id,
+      translatedText: translation.translation,
+      confidence: tier,
+      confidenceScore: score,
+    };
+  });
 
   return results;
 }

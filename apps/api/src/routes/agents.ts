@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { executeAgentRun } from '../lib/agent-engine';
+import { fetchModelStream } from '../lib/stream-ai.js';
+import { requireAuth } from '../lib/auth';
 
 function stripMCPCredentials(agent: any) {
   if (!agent?.mcpConnections) return agent;
@@ -15,6 +17,7 @@ function stripMCPCredentials(agent: any) {
 }
 
 export async function agentRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth(app));
   // ─── List agents ──────────────────────────────────────────────────────────
   app.get<{ Querystring: { customerId?: string; projectId?: string } }>(
     '/',
@@ -231,4 +234,64 @@ export async function agentRoutes(app: FastifyInstance) {
       return { data: runs };
     }
   );
+
+  // ─── Test-run agent (SSE chat stream) ────────────────────────────────────
+  app.post<{
+    Params: { id: string };
+    Body: { messages: Array<{ role: 'user' | 'assistant'; content: string }>; model?: string };
+  }>('/:id/test-stream', async (req, reply) => {
+    const agent = await prisma.agent.findUnique({
+      where: { id: req.params.id },
+      include: { skills: { include: { skill: true } } },
+    });
+    if (!agent) return reply.status(404).send({ error: 'not_found', message: 'Agent not found' });
+
+    const { messages: history, model: modelOverride } = req.body;
+    if (!Array.isArray(history) || history.length === 0) {
+      return reply.status(400).send({ error: 'validation', message: 'messages array is required' });
+    }
+
+    const token = process.env.GITHUB_TOKEN ?? '';
+    const model = modelOverride || agent.model || process.env.AI_MODEL || 'gpt-4o-mini';
+
+    // Build system message: agent system prompt + injected skills context
+    const skillsContext = (agent.skills ?? [])
+      .filter((s) => s.skill.promptTemplate)
+      .map((s) => `### Skill: ${s.skill.name}\n${s.skill.promptTemplate}`)
+      .join('\n\n');
+
+    const systemContent = [
+      agent.systemPrompt?.trim() || `You are a helpful AI assistant called "${agent.name}".`,
+      skillsContext ? `\n\n--- Attached Skills ---\n${skillsContext}` : '',
+    ].join('');
+
+    const messages = [
+      { role: 'system' as const, content: systemContent },
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+    ];
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    const send = (event: string, data: unknown) =>
+      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    try {
+      let charCount = 0;
+      await fetchModelStream(token, model, messages, (chunk) => {
+        charCount += chunk.length;
+        send('token', { chunk });
+      });
+      send('done', { estimatedTokens: Math.ceil(charCount / 4) });
+    } catch (err) {
+      send('error', { message: err instanceof Error ? err.message : 'Stream failed' });
+    } finally {
+      reply.raw.end();
+    }
+  });
 }
