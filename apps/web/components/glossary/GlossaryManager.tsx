@@ -2,10 +2,12 @@
 
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, Check, ChevronLeft, Download, Plus, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { Bot, BookOpen, Check, ChevronLeft, Download, Plus, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { Skeleton } from '@/components/shared/Skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
 
 interface GlossaryEntry {
   id: string;
@@ -651,12 +653,21 @@ export function GlossaryManager({ projectId }: { projectId: string }) {
       {/* Glossary Table */}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
         {isLoading ? (
-          <div className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</div>
-        ) : entries.length === 0 ? (
-          <div className="py-12 text-center text-gray-400 dark:text-gray-600">
-            <p>No glossary entries yet.</p>
-            <p className="mt-1 text-sm">Use AI Auto-Generate or add terms manually.</p>
+          <div className="space-y-2 py-4">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex gap-4 border-b border-gray-100 py-3 dark:border-gray-800">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+            ))}
           </div>
+        ) : entries.length === 0 ? (
+          <EmptyState
+            icon={BookOpen}
+            title="No glossary entries yet"
+            description="Use AI Auto-Generate or add terms manually."
+          />
         ) : (
           <table className="w-full text-sm">
             <thead className="border-b border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/50">

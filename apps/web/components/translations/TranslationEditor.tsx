@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Filter, FolderOpen, GitCommit, GitPullRequest, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
+import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Filter, FolderOpen, GitCommit, GitPullRequest, Languages, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import type { TranslationState } from '@nexus/types';
+import { TranslationRowSkeleton } from '@/components/shared/Skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { api } from '@/lib/api';
 import { cn, getStateColor, getStateLabel } from '@/lib/utils';
 import { CommitModal } from '@/components/projects/CommitModal';
@@ -1349,9 +1351,13 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {isLoading ? (
-              <tr><td colSpan={5} className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</td></tr>
+              <tr><td colSpan={5} className="py-4">
+                <div className="space-y-1 px-2">
+                  {[...Array(8)].map((_, i) => <TranslationRowSkeleton key={i} />)}
+                </div>
+              </td></tr>
             ) : translations.length === 0 ? (
-              <tr><td colSpan={5} className="py-12 text-center text-gray-400 dark:text-gray-600">No translations match your filter</td></tr>
+              <tr><td colSpan={5}><EmptyState icon={Languages} title="No translations match your filter" description="Try adjusting your search or filter criteria." className="border-none rounded-none py-12" /></td></tr>
             ) : (
               translations.map((translation) => {
                 const edit = edits.get(translation.id);
