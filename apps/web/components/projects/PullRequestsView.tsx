@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlignJustify,
   AlertCircle,
   AlertTriangle,
   Bot,
@@ -18,7 +19,9 @@ import {
   Link2,
   Link2Off,
   Loader2,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   RefreshCw,
   Search,
   ThumbsDown,
@@ -26,7 +29,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { diffLines } from 'diff';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -579,7 +582,7 @@ function splitLines(s: string): string[] {
   return lines;
 }
 
-function computeDiffRows(before: string, after: string): DiffRow[] {
+function computeDiffRows(before: string, after: string, context = DIFF_CONTEXT): DiffRow[] {
   const changes = diffLines(before, after);
   type Seg = { kind: 'change'; rows: DiffRow[] } | { kind: 'ctx'; lines: string[]; l0: number; r0: number };
   const segs: Seg[] = [];
@@ -619,8 +622,8 @@ function computeDiffRows(before: string, after: string): DiffRow[] {
     const { lines, l0, r0 } = seg;
     const hasPrev = si > 0;
     const hasNext = si < segs.length - 1;
-    const showStart = hasPrev ? Math.min(DIFF_CONTEXT, lines.length) : 0;
-    const showEnd = hasNext ? Math.min(DIFF_CONTEXT, lines.length - showStart) : 0;
+    const showStart = hasPrev ? Math.min(context, lines.length) : 0;
+    const showEnd = hasNext ? Math.min(context, lines.length - showStart) : 0;
     const hidden = lines.length - showStart - showEnd;
     for (let j = 0; j < showStart; j++)
       result.push({ type: 'context', left: { no: l0 + j, text: lines[j] }, right: { no: r0 + j, text: lines[j] } });
@@ -632,18 +635,25 @@ function computeDiffRows(before: string, after: string): DiffRow[] {
   return result;
 }
 
-function SideBySideDiff({ before, after }: { before: string; after: string }) {
-  const rows = computeDiffRows(before, after);
+function SideBySideDiff({ before, after, context = DIFF_CONTEXT }: { before: string; after: string; context?: number }) {
+  const rows = computeDiffRows(before, after, context);
   if (rows.length === 0) return <p className="p-3 text-xs text-gray-400">No changes detected.</p>;
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[600px] border-collapse font-mono text-xs">
+      <table className="w-full table-fixed border-collapse font-mono text-xs">
+        <colgroup>
+          <col style={{ width: '2.5rem' }} />
+          <col />
+          <col style={{ width: '1px' }} />
+          <col style={{ width: '2.5rem' }} />
+          <col />
+        </colgroup>
         <thead>
           <tr className="border-b border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800">
-            <th className="w-9 py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>Before</th>
-            <th className="w-px bg-gray-200 dark:bg-gray-700" />
-            <th className="w-9 py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>After</th>
+            <th className="py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>Before</th>
+            <th className="bg-gray-200 dark:bg-gray-700" />
+            <th className="py-1 text-center text-[10px] font-normal text-gray-400" colSpan={2}>After</th>
           </tr>
         </thead>
         <tbody>
@@ -672,21 +682,21 @@ function SideBySideDiff({ before, after }: { before: string; after: string }) {
 
             return (
               <tr key={idx} className="group">
-                <td className={`w-8 select-none border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${leftBg}`}>
+                <td className={`w-10 select-none border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${leftBg}`}>
                   {row.left?.no}
                 </td>
-                <td className={`whitespace-pre px-2 py-px ${leftBg}`}>
+                <td className={`overflow-hidden whitespace-pre px-2 py-px ${leftBg}`}>
                   {row.left ? (
-                    <>{row.type !== 'context' && row.left && <span className="select-none text-red-400 dark:text-red-500">-</span>}{row.left.text}</>
+                    <>{row.type !== 'context' && row.left && <span className="select-none text-red-400 dark:text-red-500">-&nbsp;</span>}{row.left.text}</>
                   ) : null}
                 </td>
-                <td className="w-px bg-gray-200 dark:bg-gray-700" />
-                <td className={`w-8 select-none border-l border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${rightBg}`}>
+                <td className="bg-gray-200 dark:bg-gray-700" />
+                <td className={`w-10 select-none border-l border-r border-gray-100 pr-2 text-right text-[10px] text-gray-300 dark:border-gray-800 dark:text-gray-600 ${rightBg}`}>
                   {row.right?.no}
                 </td>
-                <td className={`whitespace-pre px-2 py-px ${rightBg}`}>
+                <td className={`overflow-hidden whitespace-pre px-2 py-px ${rightBg}`}>
                   {row.right ? (
-                    <>{row.type !== 'context' && row.right && <span className="select-none text-green-500">+</span>}{row.right.text}</>
+                    <>{row.type !== 'context' && row.right && <span className="select-none text-green-500">+&nbsp;</span>}{row.right.text}</>
                   ) : null}
                 </td>
               </tr>
@@ -699,11 +709,16 @@ function SideBySideDiff({ before, after }: { before: string; after: string }) {
 }
 
 function ExpandableFileDiff({
-  file, pr, sourceCommit, targetCommit,
+  file, pr, sourceCommit, targetCommit, forceOpen, context,
 }: {
   file: DiffFile; pr: PullRequest; sourceCommit?: string; targetCommit?: string;
+  forceOpen?: boolean; context?: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(forceOpen ?? false);
+
+  useEffect(() => {
+    if (forceOpen !== undefined) setOpen(forceOpen);
+  }, [forceOpen]);
 
   const { data: contentData, isLoading: contentLoading } = useQuery({
     queryKey: ['file-content', pr.connectionId, pr.adoProjectName, pr.repoSlug, file.path, targetCommit, sourceCommit],
@@ -740,7 +755,7 @@ function ExpandableFileDiff({
             </div>
           )}
           {content && (
-            <SideBySideDiff before={content.beforeContent} after={content.afterContent} />
+            <SideBySideDiff before={content.beforeContent} after={content.afterContent} context={context} />
           )}
           {!contentLoading && !content && file.patch && (
             <pre className="overflow-x-auto whitespace-pre p-2 text-[11px] text-gray-600 dark:text-gray-400">{file.patch}</pre>
@@ -816,6 +831,8 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
   const [reviewing, setReviewing] = useState(false);
   const [postingIdx, setPostingIdx] = useState<number | null>(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [expandAll, setExpandAll] = useState(false);
+  const [diffOnly, setDiffOnly] = useState(true);
 
   const diffApiPath =
     pr.provider === 'azure-devops'
@@ -897,11 +914,29 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
 
           {diff && (
             <>
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {diff.totalFiles ?? diff.files.length} file{diff.files.length !== 1 ? 's' : ''} changed
-                  {(diff.totalFiles ?? 0) > diff.files.length ? ` (showing ${diff.files.length})` : ''}
-                </span>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {diff.totalFiles ?? diff.files.length} file{diff.files.length !== 1 ? 's' : ''} changed
+                    {(diff.totalFiles ?? 0) > diff.files.length ? ` (showing ${diff.files.length})` : ''}
+                  </span>
+                  <button
+                    onClick={() => setExpandAll((v) => !v)}
+                    title={expandAll ? 'Collapse all files' : 'Expand all files'}
+                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+                  >
+                    {expandAll ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+                    {expandAll ? 'Collapse all' : 'Expand all'}
+                  </button>
+                  <button
+                    onClick={() => setDiffOnly((v) => !v)}
+                    title={diffOnly ? 'Show full file content' : 'Show diff only (with context)'}
+                    className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+                  >
+                    <AlignJustify size={11} />
+                    {diffOnly ? 'Full file' : 'Diff only'}
+                  </button>
+                </div>
                 <button
                   onClick={runAiReview}
                   disabled={reviewing}
@@ -920,6 +955,8 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
                     pr={pr}
                     sourceCommit={diff.sourceCommit}
                     targetCommit={diff.targetCommit}
+                    forceOpen={expandAll}
+                    context={diffOnly ? DIFF_CONTEXT : Infinity}
                   />
                 ))}
               </ul>
