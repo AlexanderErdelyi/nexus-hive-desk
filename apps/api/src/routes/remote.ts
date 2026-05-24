@@ -1123,6 +1123,174 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
+  // ─── ADO: Get Pull Request diff (changed files + patches) ────────────────
+  app.get<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/diff',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { project, repoId, prId } = req.params;
+        const repoEnc = encodeURIComponent(repoId);
+        const projEnc = encodeURIComponent(project);
+
+        // Get PR details to obtain source/target commit SHAs
+        const pr = await fetchJson<{
+          lastMergeSourceCommit?: { commitId: string };
+          lastMergeTargetCommit?: { commitId: string };
+          title?: string;
+          description?: string;
+        }>(
+          `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/pullRequests/${encodeURIComponent(prId)}?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        // Get latest iteration to enumerate changed files
+        const iterations = await fetchJson<{ value?: Array<{ id: number }> }>(
+          `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/pullRequests/${encodeURIComponent(prId)}/iterations?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+        const latestIteration = iterations.value?.at(-1);
+        if (!latestIteration) {
+          return { data: { files: [], prTitle: pr.title, prDescription: pr.description } };
+        }
+
+        const changes = await fetchJson<{
+          changeEntries?: Array<{
+            changeType: string;
+            item?: { path?: string; gitObjectType?: string };
+          }>;
+        }>(
+          `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/pullRequests/${encodeURIComponent(prId)}/iterations/${latestIteration.id}/changes?$top=100&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const sourceCommit = pr.lastMergeSourceCommit?.commitId;
+        const targetCommit = pr.lastMergeTargetCommit?.commitId;
+
+        const fileEntries = (changes.changeEntries ?? []).filter(
+          (c) => c.item?.gitObjectType === 'blob' && c.item?.path
+        );
+
+        // Fetch diff blocks for each file (up to 20 files)
+        const fileDiffs = await Promise.all(
+          fileEntries.slice(0, 20).map(async (entry) => {
+            const filePath = entry.item!.path!;
+            let patch: string | undefined;
+
+            if (sourceCommit && targetCommit && entry.changeType !== 'delete') {
+              try {
+                const diffData = await fetchJson<{
+                  blocks?: Array<{
+                    changeType: number;
+                    mModifiedStart: number;
+                    mModifiedCount: number;
+                    mOriginalStart: number;
+                    mOriginalCount: number;
+                    truncatedDiff: boolean;
+                  }>;
+                  modifiedFile?: { path: string };
+                }>(
+                  `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/diffs/commits?baseVersionType=commit&baseVersion=${encodeURIComponent(targetCommit)}&targetVersionType=commit&targetVersion=${encodeURIComponent(sourceCommit)}&path=${encodeURIComponent(filePath)}&api-version=7.1`,
+                  azureHeaders(conn.pat)
+                );
+                // Format as summary (blocks have no line content from this endpoint)
+                if (diffData.blocks?.length) {
+                  const adds = diffData.blocks.filter((b) => b.changeType === 2).reduce((s, b) => s + b.mModifiedCount, 0);
+                  const dels = diffData.blocks.filter((b) => b.changeType === 3).reduce((s, b) => s + b.mOriginalCount, 0);
+                  patch = `@@ +${adds} lines added, -${dels} lines removed @@`;
+                }
+              } catch {
+                // non-fatal; diff summary is optional
+              }
+            }
+
+            return { path: filePath, changeType: entry.changeType, patch };
+          })
+        );
+
+        return {
+          data: {
+            files: fileDiffs,
+            prTitle: pr.title,
+            prDescription: pr.description,
+            totalFiles: fileEntries.length,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── GitHub: Get Pull Request diff (changed files + patches) ─────────────
+  app.get<{
+    Params: { connId: string; owner: string; repo: string; prId: string };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId/diff',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        // Get PR metadata (title, description)
+        const prMeta = await fetchJson<{
+          title?: string;
+          body?: string;
+          head?: { sha: string };
+          base?: { sha: string };
+        }>(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}`,
+          githubHeaders(conn.pat)
+        );
+
+        // Get changed files (returns up to 300 files, paginate if needed)
+        const files = await fetchJson<
+          Array<{
+            filename: string;
+            status: string;
+            additions: number;
+            deletions: number;
+            changes: number;
+            patch?: string;
+          }>
+        >(
+          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}/files?per_page=100`,
+          githubHeaders(conn.pat)
+        );
+
+        const mapped = files.map((f) => ({
+          path: f.filename,
+          changeType: f.status, // 'added' | 'removed' | 'modified' | 'renamed'
+          additions: f.additions,
+          deletions: f.deletions,
+          patch: f.patch ? f.patch.slice(0, 4000) : undefined, // cap patch size
+        }));
+
+        return {
+          data: {
+            files: mapped,
+            prTitle: prMeta.title,
+            prDescription: prMeta.body,
+            totalFiles: files.length,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
   // ─── GitHub: Get Pull Request status ──────────────────────────────────────
   app.get<{
     Params: { connId: string; owner: string; repo: string; prId: string };
