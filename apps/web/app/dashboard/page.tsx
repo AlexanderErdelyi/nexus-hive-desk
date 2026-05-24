@@ -158,12 +158,46 @@ const activityIcon: Record<string, React.ReactNode> = {
   member_added: <UserPlus size={13} className="text-purple-500" />,
 };
 
+const activityViewParam: Record<string, string> = {
+  xliff_upload: 'translations',
+  xliff_sync: 'translations',
+  translation_change: 'translations',
+  al_review: 'al-code-health',
+  member_added: '',
+};
+
+function activityHref(item: ActivityItem): string {
+  const view = activityViewParam[item.type];
+  return view
+    ? `/projects/${item.projectId}?view=${view}`
+    : `/projects/${item.projectId}`;
+}
+
+const LS_DISMISSED_KEY = 'dashboard_dismissed_items';
+
+function loadDismissed(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(LS_DISMISSED_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissed(ids: Set<string>) {
+  // Keep only the most recent 200 to avoid unbounded growth
+  const arr = [...ids].slice(-200);
+  localStorage.setItem(LS_DISMISSED_KEY, JSON.stringify(arr));
+}
+
 function ActivityFeed({ projectIds }: { projectIds: string[] }) {
   const [since, setSince] = useState<string>(() => {
     if (typeof window === 'undefined') return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     return localStorage.getItem(LS_KEY) ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   });
   const [collapsed, setCollapsed] = useState(false);
+  const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['dashboard-activity', since],
@@ -172,11 +206,22 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
     staleTime: 60_000,
   });
 
-  const items = data?.data ?? [];
+  const allItems = data?.data ?? [];
+  const items = allItems.filter((it) => !dismissed.has(it.id));
+
+  function dismissItem(id: string) {
+    const next = new Set([...dismissed, id]);
+    setDismissed(next);
+    saveDismissed(next);
+  }
 
   function markAllRead() {
     const now = new Date().toISOString();
     localStorage.setItem(LS_KEY, now);
+    // Also clear dismissed set since we're resetting the since timestamp
+    const empty = new Set<string>();
+    setDismissed(empty);
+    saveDismissed(empty);
     setSince(now);
     refetch();
   }
@@ -207,13 +252,13 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
               {items.length}
             </span>
           )}
-          {items.length > 0 && (
+          {allItems.length > 0 && (
             <button
               onClick={markAllRead}
               className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-50 hover:text-gray-700 dark:hover:bg-gray-800"
             >
               <CheckCircle2 size={11} />
-              Mark read
+              Mark all read
             </button>
           )}
         </div>
@@ -235,12 +280,15 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
           {items.map((item) => (
             <div
               key={item.id}
-              className="flex items-start gap-3 border-b border-gray-50 px-4 py-2.5 last:border-0 hover:bg-gray-50/50 dark:border-gray-800/60 dark:hover:bg-gray-800/30"
+              className="group flex items-start gap-3 border-b border-gray-50 px-4 py-2.5 last:border-0 dark:border-gray-800/60"
             >
               <span className="mt-0.5 shrink-0">
                 {activityIcon[item.type] ?? <Circle size={13} className="text-gray-400" />}
               </span>
-              <div className="min-w-0 flex-1">
+              <Link
+                href={activityHref(item)}
+                className="min-w-0 flex-1 hover:opacity-80"
+              >
                 <p className="truncate text-xs text-gray-700 dark:text-gray-300">
                   <span className="font-medium">{item.projectName}</span>
                   {' — '}
@@ -248,7 +296,14 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
                   {item.detail && <span className="text-gray-400"> · {item.detail}</span>}
                 </p>
                 <p className="text-[10px] text-gray-400">{formatDate(item.occurredAt)}</p>
-              </div>
+              </Link>
+              <button
+                onClick={() => dismissItem(item.id)}
+                className="shrink-0 rounded p-0.5 text-gray-200 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100 dark:text-gray-700 dark:hover:text-gray-400"
+                title="Dismiss"
+              >
+                <X size={11} />
+              </button>
             </div>
           ))}
         </div>
@@ -293,6 +348,23 @@ function AiInsightsPanel({ projects, livePrCounts }: {
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : 'AI analysis failed'),
   });
+
+  // Derive a navigation href from the insight's action text and project name
+  function insightHref(item: AiInsight): string | null {
+    const project = projects.find((p) => p.name === item.projectName);
+    if (!project) return null;
+    const text = (item.action + ' ' + item.reason).toLowerCase();
+    if (text.includes('pull request') || text.includes(' pr ') || text.includes('review') || text.includes('merge')) {
+      return `/projects/${project.id}?view=pull-requests`;
+    }
+    if (text.includes('translat') || text.includes('xliff')) {
+      return `/projects/${project.id}?view=translations`;
+    }
+    if (text.includes('al health') || text.includes('al-health') || text.includes('code health') || text.includes('health issue')) {
+      return `/projects/${project.id}?view=al-code-health`;
+    }
+    return `/projects/${project.id}`;
+  }
 
   const visible = insights?.filter((_, i) => !dismissed.has(i)) ?? [];
 
@@ -345,8 +417,9 @@ function AiInsightsPanel({ projects, livePrCounts }: {
               {insights.map((item, i) => {
                 if (dismissed.has(i)) return null;
                 const cfg = priorityConfig[item.priority] ?? priorityConfig.low;
-                return (
-                  <div key={i} className={`flex items-start gap-3 rounded-lg px-3 py-2.5 ${cfg.bg}`}>
+                const href = insightHref(item);
+                const content = (
+                  <>
                     <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${cfg.color} bg-white/60 dark:bg-black/20`}>
                       {cfg.label}
                     </span>
@@ -357,9 +430,20 @@ function AiInsightsPanel({ projects, livePrCounts }: {
                       <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">{item.action}</p>
                       <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">{item.reason}</p>
                     </div>
+                  </>
+                );
+                return (
+                  <div key={i} className={`group flex items-start gap-3 rounded-lg px-3 py-2.5 ${cfg.bg}`}>
+                    {href ? (
+                      <Link href={href} className="flex min-w-0 flex-1 items-start gap-3 hover:opacity-80">
+                        {content}
+                      </Link>
+                    ) : (
+                      <div className="flex min-w-0 flex-1 items-start gap-3">{content}</div>
+                    )}
                     <button
                       onClick={() => setDismissed((prev) => new Set([...prev, i]))}
-                      className="shrink-0 rounded p-0.5 text-gray-300 hover:text-gray-500"
+                      className="shrink-0 rounded p-0.5 text-gray-300 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100 dark:text-gray-600 dark:hover:text-gray-400"
                       title="Dismiss"
                     >
                       <X size={11} />
