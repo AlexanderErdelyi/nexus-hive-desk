@@ -449,6 +449,144 @@ export async function projectRoutes(app: FastifyInstance) {
     }
   });
 
+  // ─── Pull Requests ───────────────────────────────────────────────────────────
+
+  app.get<{ Params: { id: string } }>('/:id/pull-requests', async (req, reply) => {
+    const repos = await prisma.projectRepository.findMany({
+      where: { projectId: req.params.id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (repos.length === 0) {
+      return { data: [] };
+    }
+
+    interface PullRequest {
+      id: string;
+      title: string;
+      author: string;
+      status: string;
+      sourceBranch: string;
+      targetBranch: string;
+      reviewers: string[];
+      createdAt: string;
+      url: string;
+      repoLabel: string;
+      provider: 'github' | 'azure-devops';
+    }
+
+    interface RepoError {
+      repoLabel: string;
+      error: string;
+    }
+
+    const pullRequests: PullRequest[] = [];
+    const errors: RepoError[] = [];
+
+    await Promise.all(
+      repos.map(async (repo) => {
+        const repoLabel = repo.label ?? repo.repoName;
+        try {
+          const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+          if (!conn) {
+            errors.push({ repoLabel, error: 'Connection not found' });
+            return;
+          }
+
+          const pat = conn.pat;
+
+          if (conn.type === 'azure-devops') {
+            const adoProject = repo.adoProjectName ?? repo.repoName.split('/').slice(-2, -1)[0];
+            const repoName = repo.repoName.split('/').pop() ?? repo.repoName;
+            const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+            const url = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/pullrequests?searchCriteria.status=active&$top=100&api-version=7.1`;
+            const res = await fetch(url, {
+              headers: {
+                Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+            const data = await res.json() as {
+              value?: Array<{
+                pullRequestId: number;
+                title: string;
+                createdBy?: { displayName?: string };
+                status: string;
+                sourceRefName: string;
+                targetRefName: string;
+                reviewers?: Array<{ displayName?: string; vote?: number }>;
+                creationDate: string;
+                _links?: { web?: { href?: string } };
+                remoteUrl?: string;
+              }>;
+            };
+            for (const pr of data.value ?? []) {
+              pullRequests.push({
+                id: String(pr.pullRequestId),
+                title: pr.title,
+                author: pr.createdBy?.displayName ?? 'Unknown',
+                status: pr.status,
+                sourceBranch: pr.sourceRefName.replace('refs/heads/', ''),
+                targetBranch: pr.targetRefName.replace('refs/heads/', ''),
+                reviewers: (pr.reviewers ?? []).map((r) => r.displayName ?? '').filter(Boolean),
+                createdAt: pr.creationDate,
+                url: pr._links?.web?.href ?? '',
+                repoLabel,
+                provider: 'azure-devops',
+              });
+            }
+          } else {
+            // GitHub
+            const parts = repo.repoName.split('/');
+            const [owner, repoSlug] = parts.length >= 2 ? [parts[0], parts[1]] : [parts[0], parts[0]];
+            const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoSlug)}/pulls?state=open&per_page=100`;
+            const res = await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${pat}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+            const data = await res.json() as Array<{
+              number: number;
+              title: string;
+              user?: { login?: string };
+              state: string;
+              head?: { ref?: string };
+              base?: { ref?: string };
+              requested_reviewers?: Array<{ login?: string }>;
+              created_at: string;
+              html_url: string;
+            }>;
+            for (const pr of Array.isArray(data) ? data : []) {
+              pullRequests.push({
+                id: String(pr.number),
+                title: pr.title,
+                author: pr.user?.login ?? 'Unknown',
+                status: pr.state,
+                sourceBranch: pr.head?.ref ?? '',
+                targetBranch: pr.base?.ref ?? '',
+                reviewers: (pr.requested_reviewers ?? []).map((r) => r.login ?? '').filter(Boolean),
+                createdAt: pr.created_at,
+                url: pr.html_url,
+                repoLabel,
+                provider: 'github',
+              });
+            }
+          }
+        } catch (err) {
+          errors.push({ repoLabel, error: err instanceof Error ? err.message : 'Unknown error' });
+        }
+      })
+    );
+
+    pullRequests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return { data: pullRequests, errors: errors.length > 0 ? errors : undefined };
+  });
+
   // ─── ADO Access Config ───────────────────────────────────────────────────────
 
   app.patch<{
