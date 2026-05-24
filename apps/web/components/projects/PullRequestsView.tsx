@@ -3,11 +3,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
+  AlertTriangle,
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
+  Code2,
   ExternalLink,
+  FileCode,
   GitPullRequest,
+  Info,
   Link2,
   Link2Off,
   Loader2,
@@ -70,6 +75,33 @@ interface WorkItemSearchResult {
 interface PRResponse {
   data: PullRequest[];
   errors?: RepoError[];
+}
+
+interface DiffFile {
+  path: string;
+  changeType?: string;
+  patch?: string;
+  additions?: number;
+  deletions?: number;
+}
+
+interface DiffResponse {
+  files: DiffFile[];
+  prTitle?: string;
+  prDescription?: string;
+  totalFiles?: number;
+}
+
+interface AISuggestion {
+  file: string;
+  line?: number | null;
+  severity: 'info' | 'warning' | 'error';
+  comment: string;
+}
+
+interface AIReviewResponse {
+  suggestions: AISuggestion[];
+  summary: string;
 }
 
 // ── Vote helpers ───────────────────────────────────────────────────────────────
@@ -502,6 +534,180 @@ function WorkItemsPanel({ pr, projectId }: { pr: PullRequest; projectId: string 
   );
 }
 
+// ── Diff + AI review panel ─────────────────────────────────────────────────────
+
+function changeTypeBadge(changeType?: string) {
+  const t = changeType?.toLowerCase() ?? '';
+  if (t === 'add' || t === 'added') return <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-700 dark:bg-green-900/30 dark:text-green-400">+added</span>;
+  if (t === 'delete' || t === 'removed') return <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700 dark:bg-red-900/30 dark:text-red-400">-removed</span>;
+  if (t === 'renamed') return <span className="rounded bg-purple-100 px-1.5 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">renamed</span>;
+  return <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">modified</span>;
+}
+
+function severityIcon(severity: AISuggestion['severity']) {
+  if (severity === 'error') return <AlertCircle size={12} className="text-red-500" />;
+  if (severity === 'warning') return <AlertTriangle size={12} className="text-amber-500" />;
+  return <Info size={12} className="text-blue-500" />;
+}
+
+function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
+  const [open, setOpen] = useState(false);
+  const [aiReview, setAiReview] = useState<AIReviewResponse | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [postingIdx, setPostingIdx] = useState<number | null>(null);
+
+  const diffApiPath =
+    pr.provider === 'azure-devops'
+      ? `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName ?? '')}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/diff`
+      : `/api/remote/connections/${pr.connectionId}/github/repos/${encodeURIComponent(pr.repoSlug.split('/')[0])}/${encodeURIComponent(pr.repoSlug.split('/')[1])}/pull-requests/${pr.id}/diff`;
+
+  const { data: diffData, isLoading: diffLoading } = useQuery({
+    queryKey: ['pr-diff', pr.connectionId, pr.id],
+    queryFn: () => api.get<{ data: DiffResponse }>(diffApiPath),
+    enabled: open,
+  });
+
+  const diff = diffData?.data;
+
+  async function runAiReview() {
+    if (!diff?.files?.length) return;
+    setAiReview(null);
+    setReviewing(true);
+    try {
+      const result = await api.post<{ data: AIReviewResponse }>('/api/ai/pr-review', {
+        prTitle: diff.prTitle ?? pr.title,
+        prDescription: diff.prDescription,
+        files: diff.files,
+      });
+      setAiReview(result.data);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'AI review failed');
+    } finally {
+      setReviewing(false);
+    }
+  }
+
+  async function postSuggestion(suggestion: AISuggestion, idx: number) {
+    setPostingIdx(idx);
+    try {
+      const comment = `**AI Review** (${suggestion.severity}): ${suggestion.comment}${suggestion.line ? `\n\n*File: \`${suggestion.file}\`, line ${suggestion.line}*` : `\n\n*File: \`${suggestion.file}\`*`}`;
+      if (pr.provider === 'azure-devops') {
+        await api.post(
+          `/api/remote/connections/${pr.connectionId}/azure/projects/${encodeURIComponent(pr.adoProjectName ?? '')}/repos/${encodeURIComponent(pr.repoSlug)}/pull-requests/${pr.id}/threads`,
+          { content: comment }
+        );
+      } else {
+        const [owner, repo] = pr.repoSlug.split('/');
+        await api.post(
+          `/api/remote/connections/${pr.connectionId}/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pull-requests/${pr.id}/review`,
+          { event: 'COMMENT', body: comment }
+        );
+      }
+      toast.success('Comment posted');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to post comment');
+    } finally {
+      setPostingIdx(null);
+    }
+  }
+
+  return (
+    <div className="mt-2 border-t border-gray-100 dark:border-gray-800">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 py-2 text-left text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+      >
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <Code2 size={13} />
+        <span>Diff &amp; AI Review</span>
+      </button>
+
+      {open && (
+        <div className="pb-3">
+          {diffLoading && (
+            <div className="flex items-center gap-2 py-4 text-xs text-gray-400">
+              <Loader2 size={13} className="animate-spin" />
+              Loading diff…
+            </div>
+          )}
+
+          {diff && (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {diff.totalFiles ?? diff.files.length} file{diff.files.length !== 1 ? 's' : ''} changed
+                  {(diff.totalFiles ?? 0) > diff.files.length ? ` (showing ${diff.files.length})` : ''}
+                </span>
+                <button
+                  onClick={runAiReview}
+                  disabled={reviewing}
+                  className="flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50 dark:bg-indigo-900/20 dark:text-indigo-400 dark:hover:bg-indigo-900/40"
+                >
+                  {reviewing ? <Loader2 size={11} className="animate-spin" /> : <Bot size={11} />}
+                  {reviewing ? 'Analyzing…' : 'AI Review'}
+                </button>
+              </div>
+
+              <ul className="mb-3 space-y-1 rounded-lg border border-gray-100 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-800/50">
+                {diff.files.map((f) => (
+                  <li key={f.path} className="flex items-center gap-2 text-xs">
+                    <FileCode size={11} className="shrink-0 text-gray-400" />
+                    <span className="flex-1 truncate font-mono text-gray-700 dark:text-gray-300" title={f.path}>
+                      {f.path}
+                    </span>
+                    {changeTypeBadge(f.changeType)}
+                    {(f.additions !== undefined || f.patch) && (
+                      <span className="shrink-0 text-gray-400">
+                        {f.patch
+                          ? `${(f.patch.match(/^\+/gm) ?? []).length}+ ${(f.patch.match(/^-/gm) ?? []).length}-`
+                          : `${f.additions ?? 0}+ ${f.deletions ?? 0}-`}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              {aiReview && (
+                <div className="space-y-2">
+                  {aiReview.summary && (
+                    <p className="rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">
+                      <span className="font-medium">Summary: </span>
+                      {aiReview.summary}
+                    </p>
+                  )}
+                  {aiReview.suggestions.length === 0 && (
+                    <p className="text-xs text-gray-400">No issues found — looks good!</p>
+                  )}
+                  {aiReview.suggestions.map((s, i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-2 rounded-lg border border-gray-100 bg-white p-2.5 dark:border-gray-700 dark:bg-gray-900"
+                    >
+                      <span className="mt-0.5 shrink-0">{severityIcon(s.severity)}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-xs text-indigo-600 dark:text-indigo-400">{s.file}</p>
+                        <p className="mt-0.5 text-xs text-gray-700 dark:text-gray-300">{s.comment}</p>
+                      </div>
+                      <button
+                        onClick={() => postSuggestion(s, i)}
+                        disabled={postingIdx === i}
+                        title="Post as PR comment"
+                        className="shrink-0 rounded p-1 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 disabled:opacity-50 dark:hover:bg-indigo-900/20"
+                      >
+                        {postingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <MessageSquare size={12} />}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PR card ────────────────────────────────────────────────────────────────────
 
 function PRCard({ pr, projectId }: { pr: PullRequest; projectId: string }) {
@@ -547,6 +753,7 @@ function PRCard({ pr, projectId }: { pr: PullRequest; projectId: string }) {
           {pr.provider === 'azure-devops' && pr.adoProjectName && (
             <WorkItemsPanel pr={pr} projectId={projectId} />
           )}
+          <DiffPanel pr={pr} projectId={projectId} />
         </div>
 
         <span className="shrink-0 rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-mono text-indigo-500 dark:bg-indigo-900/30 dark:text-indigo-400">

@@ -287,6 +287,84 @@ Write professional, clear, testable content. Respond in the same language as the
     }
   });
 
+  // ─── PR code review — analyze diff and return suggestions ────────────────
+  app.post<{
+    Body: {
+      prTitle: string;
+      prDescription?: string;
+      files: Array<{ path: string; changeType?: string; patch?: string; additions?: number; deletions?: number }>;
+    };
+  }>('/pr-review', async (req, reply) => {
+    const { prTitle, prDescription, files } = req.body;
+    if (!files?.length) {
+      return reply.status(400).send({ error: 'validation', message: 'files is required' });
+    }
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    const diffSummary = files
+      .slice(0, 20)
+      .map((f) => {
+        const lines = [`--- File: ${f.path} (${f.changeType ?? 'modified'})`];
+        if (f.patch) lines.push(f.patch.slice(0, 2000));
+        else if (f.additions !== undefined) lines.push(`+${f.additions} additions, -${f.deletions ?? 0} deletions`);
+        return lines.join('\n');
+      })
+      .join('\n\n');
+
+    const prompt = `You are an expert code reviewer. Analyze the following pull request diff and provide specific, actionable review suggestions.
+
+PR Title: ${prTitle}
+${prDescription ? `PR Description: ${prDescription}\n` : ''}
+Changed files (${files.length} total, showing ${Math.min(files.length, 20)}):
+${diffSummary}
+
+Return a JSON object with this structure:
+{
+  "suggestions": [
+    {
+      "file": "path/to/file",
+      "line": null,
+      "severity": "info" | "warning" | "error",
+      "comment": "concise actionable comment"
+    }
+  ],
+  "summary": "1-2 sentence overall review summary"
+}
+
+Focus on: bugs, security issues, performance problems, missing error handling, and code quality. Skip style comments. Limit to the 8 most important suggestions.`;
+
+    try {
+      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.AI_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a code review assistant. Respond only with valid JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+          max_tokens: 2000,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
+      }
+
+      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+      const parsed = JSON.parse(content) as { suggestions?: unknown[]; summary?: string };
+      return { data: { suggestions: parsed.suggestions ?? [], summary: parsed.summary ?? '' } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(500).send({ error: 'ai_error', message });
+    }
+  });
+
   // ─── Quick suggest — lightweight single-turn AI call ──────────────────────
   app.post<{ Body: { prompt: string } }>('/quick-suggest', async (req, reply) => {
     const { prompt } = req.body;
