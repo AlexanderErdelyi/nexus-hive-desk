@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, Filter, FolderOpen, GitCommit, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
+import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Filter, FolderOpen, GitCommit, GitPullRequest, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
@@ -298,6 +298,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const bulkAbortControllerRef = useRef<AbortController | null>(null);
   const [page, setPage] = useState(1);
   const [edits, setEdits] = useState<Map<string, { target: string; state: TranslationState }>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -308,6 +309,14 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [aiReviewing, setAiReviewing] = useState(false);
   const [showCommitModal, setShowCommitModal] = useState(false);
+  // ─── Push as PR state ──────────────────────────────────────────────────────
+  const [showPushPrDialog, setShowPushPrDialog] = useState(false);
+  const [pushPrBranchName, setPushPrBranchName] = useState('');
+  const [pushPrTitle, setPushPrTitle] = useState('');
+  const [pushPrTargetBranch, setPushPrTargetBranch] = useState('');
+  const [pushPrDescription, setPushPrDescription] = useState('');
+  const [pushPrLoading, setPushPrLoading] = useState(false);
+  const [pushPrResult, setPushPrResult] = useState<{ prId: number; prUrl?: string; branchName: string } | null>(null);
   const [tmSuggestions, setTmSuggestions] = useState<Map<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>>>(new Map());
   const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
   const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
@@ -560,11 +569,15 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     setBulkDone(false);
     setBulkProgress({ done: 0, total: 0 });
 
+    const controller = new AbortController();
+    bulkAbortControllerRef.current = controller;
+
     try {
       const res = await fetch(`${API_URL}/api/ai/translate-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId, xliffFileId }),
+        signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error('Failed to start bulk translation');
 
@@ -604,11 +617,57 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
         }
       }
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      if (error instanceof Error && error.name === 'AbortError') {
+        toast.info('Bulk translation cancelled');
+        setBulkDone(true);
+      } else {
+        toast.error(getErrorMessage(error));
+      }
     } finally {
+      bulkAbortControllerRef.current = null;
       setBulkTranslating(false);
     }
   }, [projectId, xliffFileId]);
+
+  function cancelBulkTranslate() {
+    bulkAbortControllerRef.current?.abort();
+  }
+
+  // ─── Push XLIFF as new branch + PR ────────────────────────────────────────
+  async function doPushAsPr() {
+    if (!currentFile || !xliffFileId) return;
+    if (!pushPrBranchName.trim() || !pushPrTitle.trim() || !pushPrTargetBranch.trim()) {
+      toast.error('Branch name, PR title, and target branch are required');
+      return;
+    }
+    const repoParts = currentFile.remoteRepo!.split('/');
+    const isAdo = repoParts.length >= 3;
+    const connId = currentFile.remoteConnectionId!;
+    setPushPrLoading(true);
+    try {
+      let result: { data: { prId: number; prUrl?: string; branchName: string } };
+      if (isAdo) {
+        const adoProject = repoParts[repoParts.length - 2];
+        const repoId = repoParts[repoParts.length - 1];
+        result = await api.post(
+          `/api/remote/connections/${connId}/azure/projects/${encodeURIComponent(adoProject)}/repos/${encodeURIComponent(repoId)}/push-xliff`,
+          { xliffFileId, branchName: pushPrBranchName.trim(), prTitle: pushPrTitle.trim(), targetBranch: pushPrTargetBranch.trim(), prDescription: pushPrDescription }
+        );
+      } else {
+        const [owner, repo] = repoParts;
+        result = await api.post(
+          `/api/remote/connections/${connId}/github/repos/${owner}/${repo}/push-xliff`,
+          { xliffFileId, branchName: pushPrBranchName.trim(), prTitle: pushPrTitle.trim(), targetBranch: pushPrTargetBranch.trim(), prDescription: pushPrDescription }
+        );
+      }
+      setPushPrResult(result.data);
+      toast.success(`PR #${result.data.prId} created!`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to create PR');
+    } finally {
+      setPushPrLoading(false);
+    }
+  }
 
   /** Apply all bulk results as edits (staged for review, not yet saved) */
   function applyBulkResults(minScore = 0) {
@@ -780,6 +839,22 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               className="flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
             >
               <GitCommit size={14} /> Commit to Remote
+            </button>
+          )}
+          {currentFile?.remoteRepo && currentFile.remoteConnectionId && (
+            <button
+              onClick={() => {
+                const ts = Date.now();
+                setPushPrBranchName(`translations/update-${ts}`);
+                setPushPrTitle(`Update translations in ${currentFile.filename}`);
+                setPushPrTargetBranch(currentFile.remoteBranch ?? 'main');
+                setPushPrDescription('');
+                setPushPrResult(null);
+                setShowPushPrDialog(true);
+              }}
+              className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50"
+            >
+              <GitPullRequest size={14} /> Push as PR
             </button>
           )}
           {/* TM apply button */}
@@ -954,6 +1029,15 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                   style={{ width: bulkProgress.total ? `${(bulkProgress.done / bulkProgress.total) * 100}%` : '0%' }}
                 />
               </div>
+              {bulkTranslating && (
+                <button
+                  type="button"
+                  onClick={cancelBulkTranslate}
+                  className="mt-2 flex items-center gap-1.5 rounded-lg border border-orange-400 px-3 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:text-orange-300 dark:hover:bg-orange-900/30"
+                >
+                  <X size={11} /> Cancel
+                </button>
+              )}
             </div>
           )}
 
@@ -964,6 +1048,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                 const high = bulkResults.filter((r) => r.confidenceScore >= 90).length;
                 const med = bulkResults.filter((r) => r.confidenceScore >= 70 && r.confidenceScore < 90).length;
                 const low = bulkResults.filter((r) => r.confidenceScore < 70).length;
+                const skipped = bulkProgress.total > bulkResults.length ? bulkProgress.total - bulkResults.length : 0;
                 return (
                   <>
                     <span className="rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700 dark:bg-green-900/40 dark:text-green-300">
@@ -975,6 +1060,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                     {low > 0 && (
                       <span className="rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
                         {low} low (&lt;70%)
+                      </span>
+                    )}
+                    {skipped > 0 && (
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                        {skipped} skipped
                       </span>
                     )}
                   </>
@@ -1760,6 +1850,101 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
           />
         );
       })()
+    )}
+    {/* Push as PR dialog */}
+    {showPushPrDialog && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900">
+          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+            <div className="flex items-center gap-2">
+              <GitPullRequest size={16} className="text-green-600 dark:text-green-400" />
+              <h2 className="font-semibold text-gray-900 dark:text-white">Push Translations as PR</h2>
+            </div>
+            <button onClick={() => setShowPushPrDialog(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="space-y-4 p-5">
+            {pushPrResult ? (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/20">
+                <p className="mb-1 text-sm font-semibold text-green-800 dark:text-green-300">
+                  ✓ PR #{pushPrResult.prId} created on branch <code className="rounded bg-green-100 px-1 dark:bg-green-900/40">{pushPrResult.branchName}</code>
+                </p>
+                {pushPrResult.prUrl && (
+                  <a
+                    href={pushPrResult.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-green-700 hover:underline dark:text-green-400"
+                  >
+                    <ExternalLink size={13} /> Open Pull Request
+                  </a>
+                )}
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">New branch name</label>
+                  <input
+                    type="text"
+                    value={pushPrBranchName}
+                    onChange={(e) => setPushPrBranchName(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="translations/update-..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">PR title</label>
+                  <input
+                    type="text"
+                    value={pushPrTitle}
+                    onChange={(e) => setPushPrTitle(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="Update translations in..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">Target branch (merge into)</label>
+                  <input
+                    type="text"
+                    value={pushPrTargetBranch}
+                    onChange={(e) => setPushPrTargetBranch(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="main"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700 dark:text-gray-300">PR description <span className="font-normal text-gray-400">(optional)</span></label>
+                  <textarea
+                    rows={2}
+                    value={pushPrDescription}
+                    onChange={(e) => setPushPrDescription(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    placeholder="Automated translation update..."
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 border-t border-gray-100 px-5 py-4 dark:border-gray-800">
+            <button
+              onClick={() => setShowPushPrDialog(false)}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+            >
+              {pushPrResult ? 'Close' : 'Cancel'}
+            </button>
+            {!pushPrResult && (
+              <button
+                onClick={doPushAsPr}
+                disabled={pushPrLoading}
+                className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                {pushPrLoading ? <><Loader2 size={14} className="animate-spin" /> Creating PR…</> : <><GitPullRequest size={14} /> Create PR</>}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
     )}
     {/* VS Code context menu */}
     {vsCtxMenu && (
