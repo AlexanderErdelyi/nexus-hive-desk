@@ -1,4 +1,4 @@
-﻿import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
 import { serializeXliff } from '@nexus/xliff';
 import type { TranslationState } from '@nexus/types';
@@ -1358,50 +1358,6 @@ export async function remoteRoutes(app: FastifyInstance) {
             prTitle: prMeta.title,
             prDescription: prMeta.body,
             totalFiles: files.length,
-          },
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        return reply.status(502).send({ error: 'remote_error', message });
-      }
-    }
-  );
-
-  // ÔöÇÔöÇÔöÇ GitHub: Get Pull Request status ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-  app.get<{
-    Params: { connId: string; owner: string; repo: string; prId: string };
-  }>(
-    '/connections/:connId/github/repos/:owner/:repo/pull-requests/:prId',
-    async (req, reply) => {
-      const conn = await getConnection(req.params.connId);
-      if (!conn || conn.type !== 'github') {
-        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
-      }
-
-      try {
-        const result = await fetchJson<{
-          number: number;
-          title: string;
-          state: string;
-          merged: boolean;
-          html_url: string;
-          user?: { login: string };
-          created_at: string;
-          closed_at?: string;
-        }>(
-          `https://api.github.com/repos/${encodeURIComponent(req.params.owner)}/${encodeURIComponent(req.params.repo)}/pulls/${encodeURIComponent(req.params.prId)}`,
-          githubHeaders(conn.pat)
-        );
-
-        return {
-          data: {
-            prId: result.number,
-            title: result.title,
-            status: result.merged ? 'completed' : result.state, // map to same shape as ADO
-            createdBy: result.user?.login,
-            createdAt: result.created_at,
-            closedAt: result.closed_at,
-            webUrl: result.html_url,
           },
         };
       } catch (error) {

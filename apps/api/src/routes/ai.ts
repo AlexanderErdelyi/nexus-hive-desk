@@ -1,4 +1,4 @@
-﻿import { createProvider } from '@nexus/ai';
+import { createProvider } from '@nexus/ai';
 import { prisma } from '@nexus/db';
 import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
@@ -491,44 +491,6 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
       const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
       const parsed = JSON.parse(content) as { suggestions?: unknown[]; summary?: string };
       return { data: { suggestions: parsed.suggestions ?? [], summary: parsed.summary ?? '' } };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.status(500).send({ error: 'ai_error', message });
-    }
-  });
-
-  // ÔöÇÔöÇÔöÇ Quick suggest ÔÇö lightweight single-turn AI call ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-  app.post<{ Body: { prompt: string } }>('/quick-suggest', async (req, reply) => {
-    const { prompt } = req.body;
-    if (!prompt?.trim()) {
-      return reply.status(400).send({ error: 'validation', message: 'prompt is required' });
-    }
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
-
-    try {
-      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: process.env.AI_MODEL ?? 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: 'You are a helpful assistant. Respond only with valid JSON.' },
-            { role: 'user', content: prompt.trim() },
-          ],
-          temperature: 0.7,
-          response_format: { type: 'json_object' },
-        }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => response.statusText);
-        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
-      }
-
-      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
-      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
-      return { data: JSON.parse(content) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return reply.status(500).send({ error: 'ai_error', message });
