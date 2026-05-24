@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { CreateBranchModal } from '@/components/shared/CreateBranchModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ interface ObjectResult {
 interface ProjectRepo {
   id: string;
   label?: string | null;
+  connectionId: string;
   repoName: string;
   adoProjectName?: string | null;
   defaultBranch?: string | null;
@@ -1020,6 +1022,7 @@ export function ALCodeHealthView({ projectId }: Props) {
   const [changedFiles, setChangedFiles] = useState<string[]>([]);
   const [selectedChangedFiles, setSelectedChangedFiles] = useState<Set<string>>(new Set());
   const [showChangedPicker, setShowChangedPicker] = useState(false);
+  const [showCreateBranch, setShowCreateBranch] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // ── Project data (repos + localWorkspacePath) ─────────────────────────────
@@ -1342,6 +1345,14 @@ export function ALCodeHealthView({ projectId }: Props) {
             <button onClick={exportCsv} className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"><Download size={13} /> CSV</button>
           </div>
         )}
+        {repos.length > 0 && (
+          <button
+            onClick={() => setShowCreateBranch(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+          >
+            <GitBranch size={13} /> Create Branch
+          </button>
+        )}
       </div>
 
       {/* Source selection */}
@@ -1591,6 +1602,15 @@ export function ALCodeHealthView({ projectId }: Props) {
 
       {/* Work Item modal */}
       {wiModal && <WorkItemModal issue={wiModal.issue} object={wiModal.object} projectId={projectId} onClose={() => setWiModal(null)} />}
+
+      {/* Create Branch modal */}
+      {showCreateBranch && repos.length > 0 && (
+        <CreateBranchModal
+          repos={repos}
+          suggestedBranchName={repoBranch ? undefined : undefined}
+          onClose={() => setShowCreateBranch(false)}
+        />
+      )}
     </div>
   );
 }

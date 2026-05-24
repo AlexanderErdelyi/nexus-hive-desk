@@ -1,5 +1,7 @@
 ﻿import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nexus/db';
+import { serializeXliff } from '@nexus/xliff';
+import type { TranslationState } from '@nexus/types';
 import { requireAuth } from '../lib/auth';
 
 // ÔöÇÔöÇÔöÇ Helpers ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
@@ -1402,6 +1404,228 @@ export async function remoteRoutes(app: FastifyInstance) {
             webUrl: result.html_url,
           },
         };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Push XLIFF as new branch + PR (composite) ──────────────────────
+  app.post<{
+    Params: { connId: string; project: string; repoId: string };
+    Body: {
+      xliffFileId: string;
+      branchName: string;
+      prTitle: string;
+      targetBranch: string;
+      prDescription?: string;
+      commitMessage?: string;
+    };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/push-xliff',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { xliffFileId, branchName, prTitle, targetBranch, prDescription, commitMessage } = req.body;
+
+        // 1. Fetch XLIFF content from database
+        const file = await prisma.xliffFile.findUnique({ where: { id: xliffFileId } });
+        if (!file) {
+          return reply.status(404).send({ error: 'not_found', message: 'XLIFF file not found' });
+        }
+        if (!file.remotePath) {
+          return reply.status(400).send({ error: 'no_remote_path', message: 'File has no remote path configured' });
+        }
+        const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
+        const xliffUpdates = new Map(
+          translations.map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
+        );
+        const content = serializeXliff(file.originalXml, xliffUpdates);
+
+        // 2. Get source branch ref SHA
+        const refsData = await fetchJson(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/refs?filter=heads/${encodeURIComponent(targetBranch)}&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+        const sourceRef = refsData.value?.[0];
+        if (!sourceRef) {
+          return reply.status(400).send({ error: 'branch_not_found', message: `Branch '${targetBranch}' not found` });
+        }
+
+        // 3. Create new branch from source branch
+        await fetchJsonWithInit(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/refs?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: azureHeaders(conn.pat),
+            body: JSON.stringify([{
+              name: `refs/heads/${branchName}`,
+              oldObjectId: '0000000000000000000000000000000000000000',
+              newObjectId: sourceRef.objectId,
+            }]),
+          }
+        );
+
+        // 4. Get new branch ref for commit (needed as oldObjectId)
+        const newBranchRefs = await fetchJson(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/refs?filter=heads/${encodeURIComponent(branchName)}&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+        const newBranchRef = newBranchRefs.value?.[0];
+        if (!newBranchRef) {
+          return reply.status(500).send({ error: 'branch_create_failed', message: 'Failed to find newly created branch' });
+        }
+
+        // 5. Commit XLIFF to new branch
+        await fetchJsonWithInit(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pushes?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: azureHeaders(conn.pat),
+            body: JSON.stringify({
+              refUpdates: [{ name: `refs/heads/${branchName}`, oldObjectId: newBranchRef.objectId }],
+              commits: [{
+                comment: commitMessage ?? prTitle,
+                changes: [{
+                  changeType: 'edit',
+                  item: { path: file.remotePath },
+                  newContent: { content, contentType: 'rawtext' },
+                }],
+              }],
+            }),
+          }
+        );
+
+        // 6. Create PR
+        const prResult = await fetchJsonWithInit<{
+          pullRequestId: number;
+          title: string;
+          status: string;
+          _links?: { web?: { href?: string } };
+        }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullrequests?api-version=7.1`,
+          {
+            method: 'POST',
+            headers: azureHeaders(conn.pat),
+            body: JSON.stringify({
+              title: prTitle,
+              description: prDescription ?? '',
+              sourceRefName: `refs/heads/${branchName}`,
+              targetRefName: `refs/heads/${targetBranch}`,
+            }),
+          }
+        );
+
+        return reply.status(201).send({
+          data: { prId: prResult.pullRequestId, prUrl: prResult._links?.web?.href, branchName },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── GitHub: Push XLIFF as new branch + PR (composite) ───────────────────
+  app.post<{
+    Params: { connId: string; owner: string; repo: string };
+    Body: {
+      xliffFileId: string;
+      branchName: string;
+      prTitle: string;
+      targetBranch: string;
+      prDescription?: string;
+      commitMessage?: string;
+    };
+  }>(
+    '/connections/:connId/github/repos/:owner/:repo/push-xliff',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'github') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const { xliffFileId, branchName, prTitle, targetBranch, prDescription, commitMessage } = req.body;
+        const { owner, repo } = req.params;
+
+        // 1. Fetch XLIFF content from database
+        const file = await prisma.xliffFile.findUnique({ where: { id: xliffFileId } });
+        if (!file) {
+          return reply.status(404).send({ error: 'not_found', message: 'XLIFF file not found' });
+        }
+        if (!file.remotePath) {
+          return reply.status(400).send({ error: 'no_remote_path', message: 'File has no remote path configured' });
+        }
+        const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
+        const xliffUpdates = new Map(
+          translations.map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
+        );
+        const content = serializeXliff(file.originalXml, xliffUpdates);
+
+        // 2. Get source branch SHA
+        const refData = await fetchJson<{ object: { sha: string } }>(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(targetBranch)}`,
+          githubHeaders(conn.pat)
+        );
+        const sourceSha = refData.object.sha;
+
+        // 3. Create new branch
+        await fetchJsonWithInit(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
+          {
+            method: 'POST',
+            headers: githubHeaders(conn.pat),
+            body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: sourceSha }),
+          }
+        );
+
+        // 4. Get current file SHA (required for GitHub PUT to update an existing file)
+        let fileSha: string | undefined;
+        try {
+          const fileData = await fetchJson<{ sha: string }>(
+            `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${file.remotePath}?ref=${encodeURIComponent(branchName)}`,
+            githubHeaders(conn.pat)
+          );
+          fileSha = fileData.sha;
+        } catch {
+          // File doesn't exist on the branch yet — omit sha to create it
+        }
+
+        // 5. Commit XLIFF to new branch
+        await fetchJsonWithInit(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${file.remotePath}`,
+          {
+            method: 'PUT',
+            headers: githubHeaders(conn.pat),
+            body: JSON.stringify({
+              message: commitMessage ?? prTitle,
+              content: Buffer.from(content, 'utf-8').toString('base64'),
+              sha: fileSha,
+              branch: branchName,
+            }),
+          }
+        );
+
+        // 6. Create PR
+        const prResult = await fetchJsonWithInit<{ number: number; title: string; state: string; html_url: string }>(
+          `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`,
+          {
+            method: 'POST',
+            headers: githubHeaders(conn.pat),
+            body: JSON.stringify({ title: prTitle, body: prDescription ?? '', head: branchName, base: targetBranch }),
+          }
+        );
+
+        return reply.status(201).send({
+          data: { prId: prResult.number, prUrl: prResult.html_url, branchName },
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         return reply.status(502).send({ error: 'remote_error', message });
