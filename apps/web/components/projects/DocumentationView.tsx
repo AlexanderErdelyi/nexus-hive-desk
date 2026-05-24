@@ -22,6 +22,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { MarkdownSplitEditor } from './MarkdownSplitEditor';
 
 interface DocumentationViewProps {
   projectId: string;
@@ -1933,12 +1934,19 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                     className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-white dark:border-gray-700"
                     title="HTML Preview"
                   />
-                ) : (
+                ) : editorFormat === 'html' ? (
                   <textarea
                     className="min-h-[360px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-3 py-3 font-mono text-sm text-gray-900 focus:border-indigo-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     value={draft.content}
                     onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
-                    placeholder={editorFormat === 'html' ? '<div style="...">\n  <!-- Your HTML content here -->\n</div>' : '# Overview'}
+                    placeholder='<div style="...">\n  <!-- Your HTML content here -->\n</div>'
+                  />
+                ) : (
+                  <MarkdownSplitEditor
+                    value={draft.content}
+                    onChange={(content) => setDraft((current) => ({ ...current, content }))}
+                    placeholder="# Overview"
+                    minHeight={400}
                   />
                 )}
               </div>
