@@ -453,6 +453,14 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [translations.map((t) => t.id).join(','), currentFile?.id]);
 
+  // Ctrl+S / Cmd+S global shortcut
+  useEffect(() => {
+    const handler = () => { if (edits.size > 0) saveMutation.mutate(); };
+    window.addEventListener('nhd:save', handler);
+    return () => window.removeEventListener('nhd:save', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edits.size]);
+
   function applyAllTmMatches() {
     const exact = Array.from(tmSuggestions.entries()).filter(([, v]) => v[0]?.score === 1);
     if (!exact.length) { toast.info('No exact TM matches to apply'); return; }
@@ -931,9 +939,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               <button
                 onClick={() => saveMutation.mutate()}
                 disabled={saveMutation.isPending}
+                title="Save translations (Ctrl+S)"
                 className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
                 <Save size={15} /> {saveMutation.isPending ? 'Saving...' : `Save (${edits.size})`}
+                <kbd className="hidden rounded border border-indigo-500 bg-indigo-700 px-1 py-0.5 text-[9px] font-mono text-indigo-200 sm:inline">Ctrl+S</kbd>
               </button>
             </>
           )}

@@ -722,6 +722,7 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, lastFetchedRe
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [expandedFinding, setExpandedFinding] = useState<number | null>(null);
   const [selectedModel, setSelectedModel] = useState('gpt-4o');
+  const [activeTab, setActiveTab] = useState<'tree' | 'findings'>('tree');
   // Local sub-modal state (self-contained)
   const [localRefactor, setLocalRefactor] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
   const [localCode, setLocalCode] = useState<{ issue: HealthIssue; object: ObjectResult } | null>(null);
@@ -814,9 +815,25 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, lastFetchedRe
           </div>
         </div>
 
+        {/* Tab bar — visible only on narrow screens (below lg) */}
+        <div className="flex border-b border-gray-100 dark:border-gray-800 lg:hidden">
+          <button
+            onClick={() => setActiveTab('tree')}
+            className={cn('flex-1 py-2 text-xs font-medium', activeTab === 'tree' ? 'border-b-2 border-violet-500 text-violet-600 dark:text-violet-400' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400')}
+          >
+            File Tree
+          </button>
+          <button
+            onClick={() => setActiveTab('findings')}
+            className={cn('flex-1 py-2 text-xs font-medium', activeTab === 'findings' ? 'border-b-2 border-violet-500 text-violet-600 dark:text-violet-400' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400')}
+          >
+            Findings
+          </button>
+        </div>
+
         <div className="flex flex-1 overflow-hidden">
           {/* Left: object selector */}
-          <div className="flex w-60 shrink-0 flex-col border-r border-gray-100 dark:border-gray-800">
+          <div className={cn('flex w-60 shrink-0 flex-col border-r border-gray-100 dark:border-gray-800', activeTab === 'tree' ? 'flex' : 'hidden', 'lg:flex')}>
             {/* Mode + view toggles */}
             <div className="space-y-1 border-b border-gray-100 p-2 dark:border-gray-800">
               <div className="flex gap-1">
@@ -857,7 +874,7 @@ function AiSemanticModal({ results, projectId, localWorkspacePath, lastFetchedRe
           </div>
 
           {/* Right: findings */}
-          <div className="flex flex-1 flex-col overflow-hidden">
+          <div className={cn('flex flex-1 flex-col overflow-hidden', activeTab === 'findings' ? 'flex' : 'hidden', 'lg:flex')}>
             {findings.length === 0 && !loading && !error && (
               <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
                 <Brain size={36} className="text-gray-300 dark:text-gray-600" />

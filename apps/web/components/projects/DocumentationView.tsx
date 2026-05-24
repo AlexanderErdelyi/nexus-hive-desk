@@ -547,6 +547,18 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
     }
   }, [pageQuery.error]);
 
+  // Ctrl+S / Cmd+S global shortcut — only fires when actively editing
+  useEffect(() => {
+    const handler = () => {
+      if ((isEditing || isCreating) && draft.path.trim() && draft.title.trim()) {
+        saveMutation.mutate({ ...draft, editorFormat });
+      }
+    };
+    window.addEventListener('nhd:save', handler);
+    return () => window.removeEventListener('nhd:save', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, isCreating, draft, editorFormat]);
+
   const saveMutation = useMutation({
     mutationFn: (input: WikiPageDraft & { editorFormat?: 'markdown' | 'html' }) => api.post<{ data: unknown }>(`/api/mcp-connections/${activeMcpId}/wiki-pages`, {
       path: input.path.trim(),
@@ -1956,10 +1968,12 @@ export function DocumentationView({ projectId, customerId }: DocumentationViewPr
                   type="button"
                   onClick={() => saveMutation.mutate({ ...draft, editorFormat })}
                   disabled={!draft.path.trim() || !draft.title.trim() || saveMutation.isPending}
+                  title="Save to Wiki (Ctrl+S)"
                   className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
                   {saveMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                   Save to Wiki
+                  <kbd className="hidden rounded border border-indigo-500 bg-indigo-700 px-1 py-0.5 text-[9px] font-mono text-indigo-200 sm:inline">Ctrl+S</kbd>
                 </button>
                 <button
                   type="button"

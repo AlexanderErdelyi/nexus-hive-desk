@@ -629,7 +629,7 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
       </button>
 
       {open && (
-        <div className="pb-3">
+        <div className="overflow-x-auto pb-3">
           {diffLoading && (
             <div className="flex items-center gap-2 py-4 text-xs text-gray-400">
               <Loader2 size={13} className="animate-spin" />
