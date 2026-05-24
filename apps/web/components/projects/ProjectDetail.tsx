@@ -18,9 +18,10 @@ import { ProjectRepositories, type ProjectRepo } from './ProjectRepositories';
 import { ProjectADOAccess } from './ProjectADOAccess';
 import { WorkItemsView } from './WorkItemsView';
 import { DocumentationView } from './DocumentationView';
+import { PullRequestsView } from './PullRequestsView';
 import { formatDate } from '@/lib/utils';
 
-type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation';
+type ProjectView = 'hub' | 'translations' | 'setup' | 'work-items' | 'documentation' | 'pull-requests';
 
 interface Customer {
   id: string;
@@ -170,7 +171,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           {view !== 'hub' && (
             <span className="flex items-center gap-1 text-sm text-gray-400 dark:text-gray-500">
               <ChevronRight size={14} />
-              {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation'}[view]}
+              {{translations:'Translations', setup:'Setup', 'work-items':'Work Items', documentation:'Documentation', 'pull-requests':'Pull Requests'}[view]}
             </span>
           )}
         </div>
@@ -230,12 +231,21 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         comingSoon: false,
         dataTour: 'tab-wiki',
       },
+      {
+        key: 'pull-requests' as ProjectView,
+        icon: <GitPullRequest size={28} className="text-violet-500" />,
+        title: 'Pull Requests',
+        description: 'View open pull requests across all configured repositories. Supports both Azure DevOps and GitHub.',
+        badge: project.repositories.length > 0 ? `${project.repositories.length} repo${project.repositories.length !== 1 ? 's' : ''}` : 'No repos yet',
+        badgeColor: project.repositories.length > 0 ? 'text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400' : 'text-gray-400 bg-gray-100 dark:bg-gray-800',
+        available: true,
+      },
     ];
 
     return (
       <div>
         {header}
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
           {cards.map((card) => (
             <button
               key={card.key}
@@ -559,10 +569,20 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   }
 
   // ─── Documentation view ─────────────────────────────────────────────────────
+  if (view === 'documentation') {
+    return (
+      <div>
+        {header}
+        <DocumentationView projectId={projectId} customerId={project.customerId} />
+      </div>
+    );
+  }
+
+  // ─── Pull Requests view ──────────────────────────────────────────────────────
   return (
     <div>
       {header}
-      <DocumentationView projectId={projectId} customerId={project.customerId} />
+      <PullRequestsView projectId={projectId} hasRepositories={project.repositories.length > 0} />
     </div>
   );
 }
