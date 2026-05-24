@@ -193,7 +193,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     defaultBranch: remoteConfig.defaultBranch !== undefined ? remoteConfig.defaultBranch : project?.defaultBranch,
   };
 
-  if (isLoading) return <div className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</div>;
+  if (isLoading) return (
+    <div className="space-y-4 py-4">
+      <div className="h-8 w-48 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+      <div className="h-4 w-full animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+      <div className="h-4 w-3/4 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+    </div>
+  );
   if (!project) return <div className="py-12 text-center text-red-500">Project not found</div>;
 
   const hasRemoteConfig = !!(effectiveRemoteConfig.connectionId && effectiveRemoteConfig.adoRepoName);

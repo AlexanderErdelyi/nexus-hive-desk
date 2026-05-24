@@ -31,6 +31,9 @@ import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { CreateBranchModal } from '@/components/shared/CreateBranchModal';
 import type { ProjectRepo } from '@/components/shared/CreateBranchModal';
+import { PRCardSkeleton } from '@/components/shared/Skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
+import { ApiErrorBanner } from '@/components/shared/ApiErrorBanner';
 
 interface Reviewer {
   name: string;
@@ -626,7 +629,7 @@ function DiffPanel({ pr, projectId }: { pr: PullRequest; projectId: string }) {
       </button>
 
       {open && (
-        <div className="pb-3">
+        <div className="overflow-x-auto pb-3">
           {diffLoading && (
             <div className="flex items-center gap-2 py-4 text-xs text-gray-400">
               <Loader2 size={13} className="animate-spin" />
@@ -799,23 +802,20 @@ export function PullRequestsView({ projectId, hasRepositories }: { projectId: st
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <Loader2 size={24} className="animate-spin text-gray-400 dark:text-gray-600" />
+      <div className="space-y-3">
+        {[...Array(3)].map((_, i) => (
+          <PRCardSkeleton key={i} />
+        ))}
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-xl border border-red-100 bg-red-50 py-12 text-center dark:border-red-900/30 dark:bg-red-900/10">
-        <AlertCircle size={24} className="mb-2 text-red-400" />
-        <p className="text-sm text-red-600 dark:text-red-400">
-          {error instanceof Error ? error.message : 'Failed to load pull requests'}
-        </p>
-        <button onClick={() => refetch()} className="mt-3 text-xs text-red-500 underline hover:no-underline">
-          Retry
-        </button>
-      </div>
+      <ApiErrorBanner
+        message={error instanceof Error ? error.message : 'Failed to load pull requests'}
+        onRetry={() => refetch()}
+      />
     );
   }
 
@@ -866,11 +866,11 @@ export function PullRequestsView({ projectId, hasRepositories }: { projectId: st
       ))}
 
       {prs.length === 0 && repoErrors.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-200 py-16 text-center dark:border-gray-700">
-          <GitPullRequest size={32} className="mb-3 text-gray-300 dark:text-gray-600" />
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">No open pull requests</p>
-          <p className="mt-1 text-xs text-gray-400 dark:text-gray-600">All clear! No open PRs across your repositories.</p>
-        </div>
+        <EmptyState
+          icon={GitPullRequest}
+          title="No open pull requests"
+          description="All clear! No open PRs across your repositories."
+        />
       )}
 
       {Object.entries(grouped).map(([repoLabel, repoPrs]) => (

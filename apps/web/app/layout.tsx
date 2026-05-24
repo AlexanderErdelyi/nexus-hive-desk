@@ -1,14 +1,13 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Inter } from 'next/font/google';
 import { Toaster } from 'sonner';
 import './globals.css';
 import { Providers } from './providers';
-import { ThemeToggle } from '@/components/ThemeToggle';
 import { AuthGuard } from '@/components/auth/AuthGuard';
-import { UserMenu } from '@/components/auth/UserMenu';
 import { GuidedTour } from '@/components/tour/GuidedTour';
-import { TourButton } from '@/components/tour/TourButton';
+import { AppNav } from '@/components/shared/AppNav';
+import { KeyboardShortcutsProvider } from '@/components/shared/KeyboardShortcutsProvider';
+import { OfflineBanner } from '@/components/shared/OfflineBanner';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -22,56 +21,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <Providers>
+          <KeyboardShortcutsProvider>
           <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-            <nav className="flex items-center gap-3 border-b border-gray-200 bg-white px-6 py-3 dark:border-gray-800 dark:bg-gray-900">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
-                  <span className="text-sm font-bold text-white">N</span>
-                </div>
-                <span className="text-lg font-semibold text-gray-900 dark:text-white">NexusHiveDesk</span>
-              </div>
-              <span className="text-gray-300 dark:text-gray-700">|</span>
-              <Link
-                href="/dashboard"
-                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-              >
-                Dashboard
-              </Link>
-              <Link
-                href="/projects"
-                data-tour="nav-projects"
-                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-              >
-                Projects
-              </Link>
-              <Link href="/customers" className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white">
-                Customers
-              </Link>
-              <Link
-                href="/agents"
-                data-tour="nav-agents"
-                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-              >
-                Agents
-              </Link>
-              <Link
-                href="/settings"
-                data-tour="nav-settings"
-                className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-              >
-                Settings
-              </Link>
-              <div className="ml-auto flex items-center gap-3">
-                <TourButton />
-                <UserMenu />
-                <ThemeToggle />
-              </div>
-            </nav>
-            <main className="mx-auto max-w-7xl px-6 py-8">
+            <AppNav />
+            <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
               <AuthGuard>{children}</AuthGuard>
             </main>
             <GuidedTour />
+            <OfflineBanner />
           </div>
+          </KeyboardShortcutsProvider>
         </Providers>
         <Toaster richColors position="top-right" theme="system" />
       </body>

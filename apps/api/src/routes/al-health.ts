@@ -220,14 +220,19 @@ function addDuplicateIssues(results: ObjectResult[]): void {
 
 // ─── ADO / GitHub helpers ─────────────────────────────────────────────────────
 
-async function fetchAdoAlFiles(baseUrl: string, adoProject: string, repoName: string, branch: string, pat: string): Promise<{ path: string; content: string }[]> {
+async function fetchAdoAlFiles(baseUrl: string, adoProject: string, repoName: string, branch: string, pat: string, filePaths?: string[]): Promise<{ path: string; content: string }[]> {
   const auth = Buffer.from(`:${pat}`).toString('base64');
   const headers = { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' };
-  const treeUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?recursionLevel=Full&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
-  const treeRes = await fetch(treeUrl, { headers });
-  if (!treeRes.ok) throw new Error(`ADO tree fetch failed: ${treeRes.status} ${await treeRes.text().catch(() => '')}`);
-  const treeData = await treeRes.json() as { value?: Array<{ path: string; gitObjectType: string }> };
-  const alFiles = (treeData.value ?? []).filter((i) => i.gitObjectType === 'blob' && i.path.endsWith('.al')).slice(0, 500);
+  let alFiles: { path: string }[];
+  if (filePaths && filePaths.length > 0) {
+    alFiles = filePaths.map((p) => ({ path: p }));
+  } else {
+    const treeUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/items?recursionLevel=Full&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch&api-version=7.1`;
+    const treeRes = await fetch(treeUrl, { headers });
+    if (!treeRes.ok) throw new Error(`ADO tree fetch failed: ${treeRes.status} ${await treeRes.text().catch(() => '')}`);
+    const treeData = await treeRes.json() as { value?: Array<{ path: string; gitObjectType: string }> };
+    alFiles = (treeData.value ?? []).filter((i) => i.gitObjectType === 'blob' && i.path.endsWith('.al')).slice(0, 500);
+  }
   const results: { path: string; content: string }[] = [];
   for (let i = 0; i < alFiles.length; i += 20) {
     const batch = alFiles.slice(i, i + 20);
@@ -242,12 +247,17 @@ async function fetchAdoAlFiles(baseUrl: string, adoProject: string, repoName: st
   return results;
 }
 
-async function fetchGitHubAlFiles(owner: string, repo: string, branch: string, pat: string): Promise<{ path: string; content: string }[]> {
+async function fetchGitHubAlFiles(owner: string, repo: string, branch: string, pat: string, filePaths?: string[]): Promise<{ path: string; content: string }[]> {
   const headers = { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github+json' };
-  const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers });
-  if (!treeRes.ok) throw new Error(`GitHub tree fetch failed: ${treeRes.status}`);
-  const treeData = await treeRes.json() as { tree?: Array<{ path: string; type: string }> };
-  const alFiles = (treeData.tree ?? []).filter((f) => f.type === 'blob' && f.path.endsWith('.al')).slice(0, 500);
+  let alFiles: { path: string }[];
+  if (filePaths && filePaths.length > 0) {
+    alFiles = filePaths.map((p) => ({ path: p.replace(/^\//, '') }));
+  } else {
+    const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers });
+    if (!treeRes.ok) throw new Error(`GitHub tree fetch failed: ${treeRes.status}`);
+    const treeData = await treeRes.json() as { tree?: Array<{ path: string; type: string }> };
+    alFiles = (treeData.tree ?? []).filter((f) => f.type === 'blob' && f.path.endsWith('.al')).slice(0, 500);
+  }
   const results: { path: string; content: string }[] = [];
   for (let i = 0; i < alFiles.length; i += 20) {
     const batch = alFiles.slice(i, i + 20);
@@ -302,9 +312,9 @@ export async function alHealthRoutes(app: FastifyInstance) {
   // POST fetch-analyse (with optional baseline for diff detection)
   app.post<{
     Params: { projectId: string };
-    Body: { repositoryId: string; branch?: string; baseline?: Record<string, string> };
+    Body: { repositoryId: string; branch?: string; baseline?: Record<string, string>; filePaths?: string[] };
   }>('/:projectId/al-health/fetch-analyse', async (req, reply) => {
-    const { repositoryId, branch, baseline = {} } = req.body;
+    const { repositoryId, branch, baseline = {}, filePaths } = req.body;
     const repo = await prisma.projectRepository.findUnique({ where: { id: repositoryId } });
     if (!repo) return reply.status(404).send({ error: 'not_found', message: 'Repository not found' });
     const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
@@ -316,12 +326,12 @@ export async function alHealthRoutes(app: FastifyInstance) {
     if (conn.type === 'github') {
       const [owner, repoName] = repo.repoName.split('/');
       if (!owner || !repoName) return reply.status(400).send({ error: 'validation', message: 'GitHub repoName must be "owner/repo"' });
-      files = await fetchGitHubAlFiles(owner, repoName, targetBranch, conn.pat);
+      files = await fetchGitHubAlFiles(owner, repoName, targetBranch, conn.pat, filePaths);
     } else {
       const baseUrl = conn.baseUrl ?? '';
       const adoProject = repo.adoProjectName ?? '';
       if (!baseUrl || !adoProject) return reply.status(400).send({ error: 'validation', message: 'ADO connection missing baseUrl or adoProjectName' });
-      files = await fetchAdoAlFiles(baseUrl, adoProject, repo.repoName, targetBranch, conn.pat);
+      files = await fetchAdoAlFiles(baseUrl, adoProject, repo.repoName, targetBranch, conn.pat, filePaths);
     }
 
     const analysed: ObjectResult[] = [];
@@ -565,6 +575,112 @@ Keep code snippets concise (show only the relevant portion, not the entire proce
     try {
       return { data: JSON.parse(raw.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim()) };
     } catch { return reply.status(502).send({ error: 'parse_error', message: 'AI returned invalid JSON' }); }
+  });
+
+  // GET recently changed .al files for a repository (Issue #33)
+  app.get<{
+    Params: { projectId: string; repoId: string };
+    Querystring: { branch?: string; since?: string; top?: string };
+  }>('/:projectId/al-health/repos/:repoId/changed-files', async (req, reply) => {
+    const { repoId } = req.params;
+    const { branch, since, top = '20' } = req.query;
+    const topN = Math.min(parseInt(top, 10) || 20, 100);
+    const repo = await prisma.projectRepository.findUnique({ where: { id: repoId } });
+    if (!repo) return reply.status(404).send({ error: 'not_found', message: 'Repo not found' });
+    const conn = await prisma.customerConnection.findUnique({ where: { id: repo.connectionId } });
+    if (!conn) return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+    const targetBranch = branch ?? repo.defaultBranch ?? 'main';
+    const changedFiles: string[] = [];
+    try {
+      if (conn.type === 'github') {
+        const [owner, repoName] = repo.repoName.split('/');
+        const ghHeaders = { Authorization: `Bearer ${conn.pat}`, Accept: 'application/vnd.github.v3+json' };
+        let url = `https://api.github.com/repos/${owner}/${repoName}/commits?sha=${encodeURIComponent(targetBranch)}&per_page=${topN}`;
+        if (since) url += `&since=${encodeURIComponent(since)}`;
+        const commitsRes = await fetch(url, { headers: ghHeaders });
+        if (!commitsRes.ok) throw new Error(`GitHub commits ${commitsRes.status}`);
+        const commits = await commitsRes.json() as Array<{ sha: string }>;
+        const fileSets = await Promise.all(commits.slice(0, 10).map(async (c) => {
+          const r = await fetch(`https://api.github.com/repos/${owner}/${repoName}/commits/${c.sha}`, { headers: ghHeaders });
+          if (!r.ok) return [];
+          const d = await r.json() as { files?: Array<{ filename: string }> };
+          return (d.files ?? []).map((f) => f.filename);
+        }));
+        const seen = new Set<string>();
+        for (const files of fileSets) for (const f of files) {
+          if (f.endsWith('.al') && !seen.has(f)) { seen.add(f); changedFiles.push(f); }
+        }
+      } else {
+        const baseUrl = (conn.baseUrl ?? '').replace(/\/$/, '');
+        const adoProject = repo.adoProjectName ?? '';
+        const repoName = repo.repoName.split('/').pop() || repo.repoName;
+        const auth = Buffer.from(`:${conn.pat}`).toString('base64');
+        const adoHeaders = { Authorization: `Basic ${auth}` };
+        let commitsUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/commits?searchCriteria.itemVersion.version=${encodeURIComponent(targetBranch)}&searchCriteria.$top=${topN}&api-version=7.1`;
+        if (since) commitsUrl += `&searchCriteria.fromDate=${encodeURIComponent(since)}`;
+        const commitsRes = await fetch(commitsUrl, { headers: adoHeaders });
+        if (!commitsRes.ok) throw new Error(`ADO commits ${commitsRes.status}`);
+        const commitsData = await commitsRes.json() as { value?: Array<{ commitId: string }> };
+        const commits = commitsData.value ?? [];
+        const seen = new Set<string>();
+        for (const c of commits.slice(0, 10)) {
+          const changeUrl = `${baseUrl}/${encodeURIComponent(adoProject)}/_apis/git/repositories/${encodeURIComponent(repoName)}/commits/${c.commitId}/changes?api-version=7.1`;
+          const changeRes = await fetch(changeUrl, { headers: adoHeaders });
+          if (!changeRes.ok) continue;
+          const changeData = await changeRes.json() as { changes?: Array<{ item?: { path?: string } }> };
+          for (const ch of changeData.changes ?? []) {
+            const p = ch.item?.path ?? '';
+            if (p.endsWith('.al') && !seen.has(p)) { seen.add(p); changedFiles.push(p); }
+          }
+        }
+      }
+    } catch (e) {
+      return reply.status(502).send({ error: 'fetch_failed', message: e instanceof Error ? e.message : 'Failed to fetch changed files' });
+    }
+    return { data: changedFiles };
+  });
+
+  // GET dismissed findings (Issue #35)
+  app.get<{
+    Params: { projectId: string };
+    Querystring: { repoId?: string };
+  }>('/:projectId/al-health/dismissed', async (req) => {
+    const userId = req.user.sub;
+    const { repoId } = req.query;
+    const dismissed = await prisma.dismissedFinding.findMany({
+      where: { userId, ...(repoId ? { repoId } : {}) },
+      select: { findingHash: true, filePath: true, repoId: true },
+    });
+    return { data: dismissed };
+  });
+
+  // POST dismiss a finding (Issue #35)
+  app.post<{
+    Params: { projectId: string };
+    Body: { repoId: string; filePath: string; findingHash: string };
+  }>('/:projectId/al-health/dismissed', async (req, reply) => {
+    const userId = req.user.sub;
+    const { repoId, filePath, findingHash } = req.body;
+    if (!repoId || !findingHash) return reply.status(400).send({ error: 'validation', message: 'repoId and findingHash required' });
+    const record = await prisma.dismissedFinding.upsert({
+      where: { userId_repoId_findingHash: { userId, repoId, findingHash } },
+      update: {},
+      create: { userId, repoId, filePath, findingHash },
+    });
+    return reply.status(201).send({ data: record });
+  });
+
+  // DELETE (undismiss) a finding (Issue #35)
+  app.delete<{
+    Params: { projectId: string; findingHash: string };
+    Querystring: { repoId?: string };
+  }>('/:projectId/al-health/dismissed/:findingHash', async (req, reply) => {
+    const userId = req.user.sub;
+    const { repoId } = req.query;
+    await prisma.dismissedFinding.deleteMany({
+      where: { userId, findingHash: decodeURIComponent(req.params.findingHash), ...(repoId ? { repoId } : {}) },
+    });
+    return reply.status(204).send();
   });
 }
 

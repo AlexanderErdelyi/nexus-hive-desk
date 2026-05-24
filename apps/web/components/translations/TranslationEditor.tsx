@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Filter, FolderOpen, GitCommit, GitPullRequest, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
+import { AlertTriangle, BarChart2, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Filter, FolderOpen, GitCommit, GitPullRequest, Languages, Loader2, RotateCcw, Save, Search, Sparkles, Upload, X, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDropzone } from 'react-dropzone';
 import { toast } from 'sonner';
 import type { TranslationState } from '@nexus/types';
+import { TranslationRowSkeleton } from '@/components/shared/Skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
 import { api } from '@/lib/api';
 import { cn, getStateColor, getStateLabel } from '@/lib/utils';
 import { CommitModal } from '@/components/projects/CommitModal';
@@ -450,6 +452,14 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     }).catch(() => { /* silently ignore TM errors */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [translations.map((t) => t.id).join(','), currentFile?.id]);
+
+  // Ctrl+S / Cmd+S global shortcut
+  useEffect(() => {
+    const handler = () => { if (edits.size > 0) saveMutation.mutate(); };
+    window.addEventListener('nhd:save', handler);
+    return () => window.removeEventListener('nhd:save', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edits.size]);
 
   function applyAllTmMatches() {
     const exact = Array.from(tmSuggestions.entries()).filter(([, v]) => v[0]?.score === 1);
@@ -929,9 +939,11 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               <button
                 onClick={() => saveMutation.mutate()}
                 disabled={saveMutation.isPending}
+                title="Save translations (Ctrl+S)"
                 className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
                 <Save size={15} /> {saveMutation.isPending ? 'Saving...' : `Save (${edits.size})`}
+                <kbd className="hidden rounded border border-indigo-500 bg-indigo-700 px-1 py-0.5 text-[9px] font-mono text-indigo-200 sm:inline">Ctrl+S</kbd>
               </button>
             </>
           )}
@@ -1339,9 +1351,13 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {isLoading ? (
-              <tr><td colSpan={5} className="py-12 text-center text-gray-400 dark:text-gray-600">Loading...</td></tr>
+              <tr><td colSpan={5} className="py-4">
+                <div className="space-y-1 px-2">
+                  {[...Array(8)].map((_, i) => <TranslationRowSkeleton key={i} />)}
+                </div>
+              </td></tr>
             ) : translations.length === 0 ? (
-              <tr><td colSpan={5} className="py-12 text-center text-gray-400 dark:text-gray-600">No translations match your filter</td></tr>
+              <tr><td colSpan={5}><EmptyState icon={Languages} title="No translations match your filter" description="Try adjusting your search or filter criteria." className="border-none rounded-none py-12" /></td></tr>
             ) : (
               translations.map((translation) => {
                 const edit = edits.get(translation.id);
