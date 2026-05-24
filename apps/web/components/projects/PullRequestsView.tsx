@@ -225,7 +225,7 @@ function PRActions({ pr, projectId }: PRActionsProps) {
   const [showComment, setShowComment] = useState(false);
 
   function buildUrl(path: string) {
-    return `/connections/${pr.connectionId}${path}`;
+    return `/api/remote/connections/${pr.connectionId}${path}`;
   }
 
   const onSuccess = () => qc.invalidateQueries({ queryKey: ['project-prs', projectId] });

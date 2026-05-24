@@ -1240,7 +1240,7 @@ export async function remoteRoutes(app: FastifyInstance) {
         const changes = await fetchJson<{
           changeEntries?: Array<{
             changeType: string;
-            item?: { path?: string; gitObjectType?: string };
+            item?: { path?: string; gitObjectType?: string; isFolder?: boolean };
           }>;
         }>(
           `${baseUrl}/${projEnc}/_apis/git/repositories/${repoEnc}/pullRequests/${encodeURIComponent(prId)}/iterations/${latestIteration.id}/changes?$top=100&api-version=7.1`,
@@ -1251,7 +1251,9 @@ export async function remoteRoutes(app: FastifyInstance) {
         const targetCommit = pr.lastMergeTargetCommit?.commitId;
 
         const fileEntries = (changes.changeEntries ?? []).filter(
-          (c) => c.item?.gitObjectType === 'blob' && c.item?.path
+          (c) => c.item?.path && !c.item?.isFolder &&
+            (c.item?.gitObjectType === undefined ||
+             c.item.gitObjectType.toLowerCase() === 'blob')
         );
 
         // Fetch diff blocks for each file (up to 20 files)
