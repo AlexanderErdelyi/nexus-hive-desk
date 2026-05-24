@@ -14,6 +14,9 @@ import {
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
+import { EmptyState } from '@/components/shared/EmptyState';
+import { CardSkeleton } from '@/components/shared/Skeleton';
 
 interface TranslationStats {
   totalUnits: number;
@@ -245,7 +248,6 @@ export default function DashboardPage() {
   });
 
   const projects = data?.data ?? [];
-
   const totalProjects = projects.length;
   const totalTranslated = projects.reduce(
     (sum, p) => sum + (p.translationStats?.translatedUnits ?? 0),
@@ -259,6 +261,7 @@ export default function DashboardPage() {
   const overallPct = totalUnits > 0 ? Math.round((totalTranslated / totalUnits) * 100) : 0;
 
   return (
+    <ErrorBoundary>
     <div>
       {/* Page header */}
       <div className="mb-6 flex items-center gap-3">
@@ -319,10 +322,7 @@ export default function DashboardPage() {
       {isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[...Array(6)].map((_, i) => (
-            <div
-              key={i}
-              className="h-64 animate-pulse rounded-xl border border-gray-200 bg-gray-100 dark:border-gray-800 dark:bg-gray-800"
-            />
+            <CardSkeleton key={i} />
           ))}
         </div>
       )}
@@ -335,20 +335,12 @@ export default function DashboardPage() {
       )}
 
       {!isLoading && !isError && projects.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-gray-300 bg-white py-16 text-center dark:border-gray-700 dark:bg-gray-900">
-          <CheckCircle2 className="mb-3 h-10 w-10 text-gray-300 dark:text-gray-600" />
-          <p className="font-medium text-gray-500 dark:text-gray-400">No projects yet</p>
-          <p className="mt-1 text-sm text-gray-400 dark:text-gray-500">
-            Create a project to see it here.
-          </p>
-          <Link
-            href="/projects"
-            className="mt-4 inline-flex items-center gap-1 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-          >
-            Go to Projects
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
+        <EmptyState
+          icon={LayoutDashboard}
+          title="No projects yet"
+          description="Create a project to see it here."
+          action={{ label: 'Go to Projects', onClick: () => { window.location.href = '/projects'; } }}
+        />
       )}
 
       {!isLoading && !isError && projects.length > 0 && (
@@ -359,5 +351,6 @@ export default function DashboardPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }

@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { CardSkeleton } from '@/components/shared/Skeleton';
+import { EmptyState } from '@/components/shared/EmptyState';
 
 interface Customer {
   id: string;
@@ -178,12 +180,16 @@ export function ProjectsList({ defaultCustomerId }: { defaultCustomerId?: string
       )}
 
       {isLoading ? (
-        <div className="py-12 text-center text-gray-400">Loading...</div>
-      ) : projects.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white py-12 text-center dark:border-gray-700 dark:bg-gray-900">
-          <FolderOpen size={40} className="mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-          <p className="text-gray-500 dark:text-gray-400">No projects yet. Create your first project.</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[...Array(3)].map((_, i) => <CardSkeleton key={i} />)}
         </div>
+      ) : projects.length === 0 ? (
+        <EmptyState
+          icon={FolderOpen}
+          title="No projects yet"
+          description="Create your first project to get started."
+          action={{ label: 'New Project', onClick: () => setShowCreate(true) }}
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((p) => (
