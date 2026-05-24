@@ -346,3 +346,15 @@ model ALHealthReview {
   @@unique([projectId, issueKey])
   @@index([projectId])
 }
+
+model DismissedFinding {
+  id          String   @id @default(cuid())
+  userId      String
+  repoId      String
+  filePath    String
+  findingHash String   // makeIssueKey: "{objectType}|{objectName}|{ruleId}|{line}"
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, repoId, findingHash])
+  @@index([userId, repoId])
+}
