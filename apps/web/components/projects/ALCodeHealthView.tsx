@@ -11,6 +11,8 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { CreateBranchModal } from '@/components/shared/CreateBranchModal';
+import { EmptyState } from '@/components/shared/EmptyState';
+import { FindingRowSkeleton } from '@/components/shared/Skeleton';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1298,6 +1300,13 @@ export function ALCodeHealthView({ projectId }: Props) {
         </div>
       </div>
 
+      {/* Skeleton while fetching from repo */}
+      {fetchingRepo && results.length === 0 && (
+        <div className="space-y-2">
+          {[...Array(6)].map((_, i) => <FindingRowSkeleton key={i} />)}
+        </div>
+      )}
+
       {/* Results */}
       {results.length > 0 && (
         <>
@@ -1360,10 +1369,12 @@ export function ALCodeHealthView({ projectId }: Props) {
 
           {/* Results */}
           {filteredResults.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-xl border border-gray-100 bg-gray-50 py-12 text-center dark:border-gray-800 dark:bg-gray-800/30">
-              <CheckCircle2 size={28} className="text-green-500" />
-              <p className="font-medium text-gray-700 dark:text-gray-300">No issues match the current filter</p>
-            </div>
+            <EmptyState
+              icon={CheckCircle2}
+              title="No issues match the current filter"
+              description="All clear! Try changing filters or uploading more AL files."
+              className="border-gray-100 dark:border-gray-800"
+            />
           ) : viewMode === 'flat' ? (
             <div className="space-y-3">{filteredResults.map((r) => renderObjectCard(r))}</div>
           ) : (

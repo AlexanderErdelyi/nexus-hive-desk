@@ -9,6 +9,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { UserMenu } from '@/components/auth/UserMenu';
 import { GuidedTour } from '@/components/tour/GuidedTour';
 import { TourButton } from '@/components/tour/TourButton';
+import { OfflineBanner } from '@/components/shared/OfflineBanner';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -71,6 +72,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <AuthGuard>{children}</AuthGuard>
             </main>
             <GuidedTour />
+            <OfflineBanner />
           </div>
         </Providers>
         <Toaster richColors position="top-right" theme="system" />
