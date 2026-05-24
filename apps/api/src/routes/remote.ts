@@ -940,6 +940,128 @@ export async function remoteRoutes(app: FastifyInstance) {
     }
   );
 
+  // ─── ADO: List work items linked to a Pull Request ────────────────────────
+  app.get<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/work-items',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const refs = await fetchJson<{ value?: Array<{ id: number; url: string }> }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}/workitems?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const ids = (refs.value ?? []).map((w) => w.id);
+        if (ids.length === 0) return { data: [] };
+
+        const details = await fetchJson<{ value?: Array<{ id: number; fields: Record<string, string> }> }>(
+          `${baseUrl}/_apis/wit/workitems?ids=${ids.join(',')}&fields=System.Id,System.Title,System.State,System.WorkItemType&api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const items = (details.value ?? []).map((wi) => ({
+          id: wi.id,
+          title: wi.fields['System.Title'],
+          state: wi.fields['System.State'],
+          type: wi.fields['System.WorkItemType'],
+          url: `${baseUrl}/${encodeURIComponent(req.params.project)}/_workitems/edit/${wi.id}`,
+        }));
+
+        return { data: items };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Link a work item to a Pull Request ──────────────────────────────
+  app.post<{
+    Params: { connId: string; project: string; repoId: string; prId: string };
+    Body: { workItemId: number };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/work-items',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+        const { workItemId } = req.body;
+
+        // Fetch current PR to get existing workItemRefs
+        const pr = await fetchJson<{ workItemRefs?: Array<{ id: string; url: string }> }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const existing = pr.workItemRefs ?? [];
+        const alreadyLinked = existing.some((r) => String(r.id) === String(workItemId));
+        if (alreadyLinked) {
+          return reply.status(409).send({ error: 'conflict', message: 'Work item already linked' });
+        }
+
+        const updated = [
+          ...existing,
+          { id: String(workItemId), url: `${baseUrl}/_apis/wit/workItems/${workItemId}` },
+        ];
+
+        await fetchJsonWithInit(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}?api-version=7.1`,
+          { method: 'PATCH', headers: azureHeaders(conn.pat), body: JSON.stringify({ workItemRefs: updated }) }
+        );
+
+        return reply.status(201).send({ data: { workItemId } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
+  // ─── ADO: Unlink a work item from a Pull Request ──────────────────────────
+  app.delete<{
+    Params: { connId: string; project: string; repoId: string; prId: string; wiId: string };
+  }>(
+    '/connections/:connId/azure/projects/:project/repos/:repoId/pull-requests/:prId/work-items/:wiId',
+    async (req, reply) => {
+      const conn = await getConnection(req.params.connId);
+      if (!conn || conn.type !== 'azure-devops') {
+        return reply.status(404).send({ error: 'not_found', message: 'Connection not found' });
+      }
+
+      try {
+        const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
+
+        const pr = await fetchJson<{ workItemRefs?: Array<{ id: string; url: string }> }>(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}?api-version=7.1`,
+          azureHeaders(conn.pat)
+        );
+
+        const filtered = (pr.workItemRefs ?? []).filter((r) => String(r.id) !== String(req.params.wiId));
+
+        await fetchJsonWithInit(
+          `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/pullRequests/${encodeURIComponent(req.params.prId)}?api-version=7.1`,
+          { method: 'PATCH', headers: azureHeaders(conn.pat), body: JSON.stringify({ workItemRefs: filtered }) }
+        );
+
+        return reply.status(200).send({ data: { success: true } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return reply.status(502).send({ error: 'remote_error', message });
+      }
+    }
+  );
+
   // ─── GitHub: Get Pull Request status ──────────────────────────────────────
   app.get<{
     Params: { connId: string; owner: string; repo: string; prId: string };
