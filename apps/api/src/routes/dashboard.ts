@@ -53,10 +53,31 @@ export async function dashboardRoutes(app: FastifyInstance) {
       include: { repositories: true },
     });
 
-    // Collect all unique connectionIds used by repositories
-    const connectionIds = new Set<string>();
+    // Build a normalised list of "repo entries" per project.
+    // Prefer explicit ProjectRepository rows; fall back to the legacy
+    // connectionId/adoProjectName stored directly on the Project model.
+    type RepoEntry = {
+      connectionId: string;
+      adoProjectName: string | null;
+      repoName: string;
+    };
+    const projectRepos: { project: typeof projects[0]; repos: RepoEntry[] }[] = [];
     for (const p of projects) {
-      for (const r of p.repositories) connectionIds.add(r.connectionId);
+      if (p.repositories.length > 0) {
+        projectRepos.push({ project: p, repos: p.repositories });
+      } else if (p.connectionId) {
+        // Legacy: project has a direct connection but no ProjectRepository rows
+        projectRepos.push({
+          project: p,
+          repos: [{ connectionId: p.connectionId, adoProjectName: p.adoProjectName ?? null, repoName: p.name }],
+        });
+      }
+    }
+
+    // Collect all unique connectionIds
+    const connectionIds = new Set<string>();
+    for (const { repos } of projectRepos) {
+      for (const r of repos) connectionIds.add(r.connectionId);
     }
     if (connectionIds.size === 0) return { data: [] };
 
@@ -96,8 +117,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
 
     const tasks: Promise<void>[] = [];
 
-    for (const project of projects) {
-      for (const repo of project.repositories) {
+    for (const { project, repos } of projectRepos) {
+      for (const repo of repos) {
         const conn = connMap[repo.connectionId];
         if (!conn) continue;
 
