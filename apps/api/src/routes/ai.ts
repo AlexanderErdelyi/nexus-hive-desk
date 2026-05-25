@@ -498,4 +498,112 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
       return reply.status(500).send({ error: 'ai_error', message });
     }
   });
+
+  // ─── Dashboard AI insights ──────────────────────────────────────────────────
+  app.post<{
+    Body: {
+      projects: Array<{
+        name: string;
+        capabilities: string;
+        openPrs: number;
+        translationPct: number | null;
+        alReviewed: number;
+        recentActivity: number;
+      }>;
+      /** DevOps events from connected repos (PRs, work items) */
+      devopsEvents?: Array<{
+        type: string;
+        projectName: string;
+        label: string;
+        detail: string | null;
+      }>;
+    };
+  }>('/dashboard-insights', async (req, reply) => {
+    const { projects, devopsEvents } = req.body;
+    if (!projects?.length) return reply.status(400).send({ error: 'validation', message: 'projects is required' });
+
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    const projectSummary = projects.map((p) => {
+      const parts = [`Project "${p.name}":`];
+      if (p.openPrs > 0) parts.push(`${p.openPrs} open PR${p.openPrs !== 1 ? 's' : ''} awaiting review`);
+      if (p.translationPct !== null) parts.push(`translation ${p.translationPct}% complete`);
+      if (p.alReviewed > 0) parts.push(`${p.alReviewed} AL health issues reviewed`);
+      if (p.recentActivity > 0) parts.push(`${p.recentActivity} recent change${p.recentActivity !== 1 ? 's' : ''} in last 7 days`);
+      const caps = p.capabilities.split(',').map((c) => c.trim()).filter(Boolean);
+      parts.push(`capabilities: ${caps.join(', ')}`);
+      return parts.join(', ');
+    }).join('\n');
+
+    // Build devops context section
+    let devopsSection = '';
+    if (devopsEvents && devopsEvents.length > 0) {
+      const reviewRequested = devopsEvents.filter((e) => e.type === 'pr_review_requested');
+      const myPrs = devopsEvents.filter((e) => e.type === 'pr_created');
+      const approvedPrs = devopsEvents.filter((e) => e.type === 'pr_approved');
+      const rejectedPrs = devopsEvents.filter((e) => e.type === 'pr_rejected');
+      const workItems = devopsEvents.filter((e) => e.type === 'work_item_assigned');
+      const issues = devopsEvents.filter((e) => e.type === 'issue_assigned');
+
+      const lines: string[] = ['\nDevOps activity for the current user:'];
+      if (reviewRequested.length) lines.push(`- ${reviewRequested.length} PR(s) waiting for my review: ${reviewRequested.slice(0, 3).map((e) => `"${e.label}"`).join(', ')}`);
+      if (myPrs.length) lines.push(`- ${myPrs.length} of my PR(s) are open and awaiting merge`);
+      if (approvedPrs.length) lines.push(`- ${approvedPrs.length} of my PR(s) were approved — ready to merge`);
+      if (rejectedPrs.length) lines.push(`- ${rejectedPrs.length} of my PR(s) were rejected — need attention`);
+      if (workItems.length) lines.push(`- ${workItems.length} work item(s) assigned to me recently changed: ${workItems.slice(0, 3).map((e) => `"${e.label}" (${e.detail ?? ''})`).join(', ')}`);
+      if (issues.length) lines.push(`- ${issues.length} GitHub issue(s) assigned to me`);
+      devopsSection = lines.join('\n');
+    }
+
+    const prompt = `You are a software project manager assistant. Based on the following project status and DevOps activity, provide 3-5 prioritized action items for today.
+
+${projectSummary}
+${devopsSection}
+
+Return a JSON object:
+{
+  "insights": [
+    {
+      "priority": "high" | "medium" | "low",
+      "projectName": "exact project name or null if cross-project",
+      "action": "short imperative sentence (max 12 words)",
+      "reason": "1 sentence explaining why this matters now"
+    }
+  ],
+  "summary": "1 sentence overall status assessment"
+}
+
+Prioritize: PRs waiting for my review (high urgency), rejected PRs (high), approved PRs ready to merge (medium), assigned work items, translations below 70%, stale work. Order by urgency.`;
+
+    try {
+      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.AI_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a project management assistant. Respond only with valid JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.4,
+          response_format: { type: 'json_object' },
+          max_tokens: 800,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
+      }
+
+      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+      const parsed = JSON.parse(content) as { insights?: unknown[]; summary?: string };
+      return { data: { insights: parsed.insights ?? [], summary: parsed.summary ?? '' } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(500).send({ error: 'ai_error', message });
+    }
+  });
 }

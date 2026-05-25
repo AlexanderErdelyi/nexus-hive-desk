@@ -3,15 +3,17 @@
 import { useQuery, useQueries, useMutation } from '@tanstack/react-query';
 import {
   Activity,
-  AlertTriangle,
   ArrowRight,
   Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Circle,
+  ExternalLink,
   FileClock,
+  GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
   Languages,
   LayoutDashboard,
   Loader2,
@@ -23,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
@@ -148,6 +150,20 @@ function CapabilityTags({ capabilities }: { capabilities: string }) {
   );
 }
 
+// ─── DevOps Activity types ─────────────────────────────────────────────────────
+
+interface DevopsItem {
+  id: string;
+  type: string;
+  projectId: string;
+  projectName: string;
+  label: string;
+  detail: string | null;
+  occurredAt: string;
+  internalUrl: string | null;
+  externalUrl: string | null;
+}
+
 // ─── Activity Feed ─────────────────────────────────────────────────────────
 
 const activityIcon: Record<string, React.ReactNode> = {
@@ -191,19 +207,39 @@ function saveDismissed(ids: Set<string>) {
   localStorage.setItem(LS_DISMISSED_KEY, JSON.stringify(arr));
 }
 
-function ActivityFeed({ projectIds }: { projectIds: string[] }) {
-  const [since, setSince] = useState<string>(() => {
-    if (typeof window === 'undefined') return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    return localStorage.getItem(LS_KEY) ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  });
+// ─── AI Insights Panel ────────────────────────────────────────────────────────
+
+const devopsIcon: Record<string, React.ReactNode> = {
+  pr_review_requested: <GitPullRequest size={13} className="text-orange-500" />,
+  pr_created: <GitPullRequest size={13} className="text-indigo-500" />,
+  pr_approved: <GitMerge size={13} className="text-green-500" />,
+  pr_rejected: <GitPullRequestClosed size={13} className="text-red-500" />,
+  work_item_assigned: <CheckCircle2 size={13} className="text-blue-500" />,
+  issue_assigned: <Circle size={13} className="text-purple-500" />,
+};
+
+const LS_DISMISSED_DEVOPS_KEY = 'dashboard_dismissed_devops';
+
+function loadDismissedDevops(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(LS_DISMISSED_DEVOPS_KEY);
+    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function DevopsActivityFeed() {
+  const [since] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
   const [collapsed, setCollapsed] = useState(false);
-  const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
+  const [dismissed, setDismissed] = useState<Set<string>>(loadDismissedDevops);
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['dashboard-activity', since],
-    queryFn: () => api.get<{ data: ActivityItem[] }>(`/api/dashboard/activity?since=${encodeURIComponent(since)}`),
-    enabled: projectIds.length > 0,
-    staleTime: 60_000,
+    queryKey: ['dashboard-devops-activity', since],
+    queryFn: () => api.get<{ data: DevopsItem[] }>(`/api/dashboard/devops-activity?since=${encodeURIComponent(since)}`),
+    staleTime: 2 * 60_000,
+    retry: false,
   });
 
   const allItems = data?.data ?? [];
@@ -212,18 +248,134 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
   function dismissItem(id: string) {
     const next = new Set([...dismissed, id]);
     setDismissed(next);
+    const arr = [...next].slice(-200);
+    localStorage.setItem(LS_DISMISSED_DEVOPS_KEY, JSON.stringify(arr));
+  }
+
+  return (
+    <div className="flex-1">
+      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 dark:border-gray-800">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          DevOps activity (last 7 days)
+        </span>
+        <button
+          onClick={() => refetch()}
+          className="rounded p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          title="Refresh"
+        >
+          <RefreshCw size={11} />
+        </button>
+      </div>
+      {collapsed ? null : (
+        <div className="max-h-72 overflow-y-auto">
+          {isLoading && (
+            <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
+              <Loader2 size={13} className="animate-spin" /> Loading DevOps activity…
+            </div>
+          )}
+          {!isLoading && items.length === 0 && (
+            <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
+              <CheckCircle2 size={13} className="text-green-400" />
+              {allItems.length === 0 ? 'No DevOps activity found. Make sure your projects have connected repositories.' : 'All caught up — nothing new in the last 7 days.'}
+            </div>
+          )}
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className="group flex items-start gap-3 border-b border-gray-50 px-4 py-2.5 last:border-0 dark:border-gray-800/60"
+            >
+              <span className="mt-0.5 shrink-0">
+                {devopsIcon[item.type] ?? <Circle size={13} className="text-gray-400" />}
+              </span>
+              <div className="min-w-0 flex-1">
+                {item.internalUrl ? (
+                  <Link href={item.internalUrl} className="hover:opacity-80">
+                    <p className="truncate text-xs text-gray-700 dark:text-gray-300">
+                      <span className="font-medium">{item.projectName}</span>
+                      {' — '}
+                      {item.label}
+                      {item.detail && <span className="text-gray-400"> · {item.detail}</span>}
+                    </p>
+                  </Link>
+                ) : (
+                  <p className="truncate text-xs text-gray-700 dark:text-gray-300">
+                    <span className="font-medium">{item.projectName}</span>
+                    {' — '}
+                    {item.label}
+                    {item.detail && <span className="text-gray-400"> · {item.detail}</span>}
+                  </p>
+                )}
+                <div className="flex items-center gap-2">
+                  <p className="text-[10px] text-gray-400">{formatDate(item.occurredAt)}</p>
+                  {item.externalUrl && (
+                    <a
+                      href={item.externalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 text-[10px] text-indigo-400 hover:text-indigo-600"
+                    >
+                      <ExternalLink size={9} />
+                      Open
+                    </a>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => dismissItem(item.id)}
+                className="shrink-0 rounded p-0.5 text-gray-200 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100 dark:text-gray-700 dark:hover:text-gray-400"
+                title="Dismiss"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        onClick={() => setCollapsed((v) => !v)}
+        className="w-full py-1 text-[10px] text-gray-400 hover:text-gray-600"
+      >
+        {collapsed ? 'Show ↓' : 'Collapse ↑'}
+      </button>
+    </div>
+  );
+}
+
+/** Combined activity section with DevOps | App tabs */
+function ActivitySection({ projectIds }: { projectIds: string[] }) {
+  const [tab, setTab] = useState<'devops' | 'app'>('devops');
+  const [collapsed, setCollapsed] = useState(false);
+
+  // App feed state (lifted so it doesn't remount on tab switch)
+  const [since, setSince] = useState<string>(() => {
+    if (typeof window === 'undefined') return new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    return localStorage.getItem(LS_KEY) ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  });
+  const [appDismissed, setAppDismissed] = useState<Set<string>>(loadDismissed);
+
+  const { data: appData, isLoading: appLoading, refetch: appRefetch } = useQuery({
+    queryKey: ['dashboard-activity', since],
+    queryFn: () => api.get<{ data: ActivityItem[] }>(`/api/dashboard/activity?since=${encodeURIComponent(since)}`),
+    enabled: projectIds.length > 0 && tab === 'app',
+    staleTime: 60_000,
+  });
+  const allAppItems = appData?.data ?? [];
+  const appItems = allAppItems.filter((it) => !appDismissed.has(it.id));
+
+  function dismissAppItem(id: string) {
+    const next = new Set([...appDismissed, id]);
+    setAppDismissed(next);
     saveDismissed(next);
   }
 
   function markAllRead() {
     const now = new Date().toISOString();
     localStorage.setItem(LS_KEY, now);
-    // Also clear dismissed set since we're resetting the since timestamp
     const empty = new Set<string>();
-    setDismissed(empty);
+    setAppDismissed(empty);
     saveDismissed(empty);
     setSince(now);
-    refetch();
+    appRefetch();
   }
 
   const sinceLabel = (() => {
@@ -236,6 +388,7 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+      {/* Header with tabs */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
         <button
           onClick={() => setCollapsed((v) => !v)}
@@ -244,15 +397,34 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           <FileClock size={15} className="text-indigo-500" />
           What&apos;s new
-          <span className="ml-1 text-xs font-normal text-gray-400">({sinceLabel})</span>
         </button>
-        <div className="flex items-center gap-2">
-          {items.length > 0 && (
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setTab('devops')}
+            className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+              tab === 'devops'
+                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+            }`}
+          >
+            DevOps
+          </button>
+          <button
+            onClick={() => setTab('app')}
+            className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
+              tab === 'app'
+                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+            }`}
+          >
+            App
+          </button>
+          {tab === 'app' && appItems.length > 0 && (
             <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-100 px-1.5 text-[10px] font-semibold text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300">
-              {items.length}
+              {appItems.length}
             </span>
           )}
-          {allItems.length > 0 && (
+          {tab === 'app' && allAppItems.length > 0 && (
             <button
               onClick={markAllRead}
               className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-50 hover:text-gray-700 dark:hover:bg-gray-800"
@@ -265,54 +437,56 @@ function ActivityFeed({ projectIds }: { projectIds: string[] }) {
       </div>
 
       {!collapsed && (
-        <div className="max-h-72 overflow-y-auto">
-          {isLoading && (
-            <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
-              <Loader2 size={13} className="animate-spin" /> Loading activity…
+        <>
+          {tab === 'devops' && <DevopsActivityFeed />}
+
+          {tab === 'app' && (
+            <div className="max-h-72 overflow-y-auto">
+              <div className="px-4 py-1.5 text-[10px] text-gray-400">App events ({sinceLabel})</div>
+              {appLoading && (
+                <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
+                  <Loader2 size={13} className="animate-spin" /> Loading activity…
+                </div>
+              )}
+              {!appLoading && appItems.length === 0 && (
+                <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
+                  <CheckCircle2 size={13} className="text-green-400" />
+                  All caught up — nothing new {sinceLabel}.
+                </div>
+              )}
+              {appItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="group flex items-start gap-3 border-b border-gray-50 px-4 py-2.5 last:border-0 dark:border-gray-800/60"
+                >
+                  <span className="mt-0.5 shrink-0">
+                    {activityIcon[item.type] ?? <Circle size={13} className="text-gray-400" />}
+                  </span>
+                  <Link href={activityHref(item)} className="min-w-0 flex-1 hover:opacity-80">
+                    <p className="truncate text-xs text-gray-700 dark:text-gray-300">
+                      <span className="font-medium">{item.projectName}</span>
+                      {' — '}
+                      {item.label}
+                      {item.detail && <span className="text-gray-400"> · {item.detail}</span>}
+                    </p>
+                    <p className="text-[10px] text-gray-400">{formatDate(item.occurredAt)}</p>
+                  </Link>
+                  <button
+                    onClick={() => dismissAppItem(item.id)}
+                    className="shrink-0 rounded p-0.5 text-gray-200 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100 dark:text-gray-700 dark:hover:text-gray-400"
+                    title="Dismiss"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
-          {!isLoading && items.length === 0 && (
-            <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
-              <CheckCircle2 size={13} className="text-green-400" />
-              All caught up — nothing new {sinceLabel}.
-            </div>
-          )}
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className="group flex items-start gap-3 border-b border-gray-50 px-4 py-2.5 last:border-0 dark:border-gray-800/60"
-            >
-              <span className="mt-0.5 shrink-0">
-                {activityIcon[item.type] ?? <Circle size={13} className="text-gray-400" />}
-              </span>
-              <Link
-                href={activityHref(item)}
-                className="min-w-0 flex-1 hover:opacity-80"
-              >
-                <p className="truncate text-xs text-gray-700 dark:text-gray-300">
-                  <span className="font-medium">{item.projectName}</span>
-                  {' — '}
-                  {item.label}
-                  {item.detail && <span className="text-gray-400"> · {item.detail}</span>}
-                </p>
-                <p className="text-[10px] text-gray-400">{formatDate(item.occurredAt)}</p>
-              </Link>
-              <button
-                onClick={() => dismissItem(item.id)}
-                className="shrink-0 rounded p-0.5 text-gray-200 opacity-0 transition-opacity hover:text-gray-500 group-hover:opacity-100 dark:text-gray-700 dark:hover:text-gray-400"
-                title="Dismiss"
-              >
-                <X size={11} />
-              </button>
-            </div>
-          ))}
-        </div>
+        </>
       )}
     </div>
   );
 }
-
-// ─── AI Insights Panel ────────────────────────────────────────────────────────
 
 const priorityConfig = {
   high: { color: 'text-red-600 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-900/20', label: 'High' },
@@ -329,6 +503,14 @@ function AiInsightsPanel({ projects, livePrCounts }: {
   const [collapsed, setCollapsed] = useState(false);
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
 
+  const devopsSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { data: devopsData } = useQuery({
+    queryKey: ['dashboard-devops-activity-ai', devopsSince],
+    queryFn: () => api.get<{ data: DevopsItem[] }>(`/api/dashboard/devops-activity?since=${encodeURIComponent(devopsSince)}`),
+    staleTime: 2 * 60_000,
+    retry: false,
+  });
+
   const { mutate: analyze, isPending } = useMutation({
     mutationFn: () =>
       api.post<{ data: { insights: AiInsight[]; summary: string } }>('/api/ai/dashboard-insights', {
@@ -339,6 +521,12 @@ function AiInsightsPanel({ projects, livePrCounts }: {
           translationPct: p.translationStats?.percentComplete ?? null,
           alReviewed: p.alHealth?.reviewedIssueCount ?? 0,
           recentActivity: 0,
+        })),
+        devopsEvents: (devopsData?.data ?? []).slice(0, 20).map((e) => ({
+          type: e.type,
+          projectName: e.projectName,
+          label: e.label,
+          detail: e.detail,
         })),
       }),
     onSuccess: (res) => {
@@ -691,7 +879,7 @@ export default function DashboardPage() {
       {/* Activity + AI insights row */}
       {!isLoading && projects.length > 0 && (
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <ActivityFeed projectIds={projects.map((p) => p.id)} />
+          <ActivitySection projectIds={projects.map((p) => p.id)} />
           <AiInsightsPanel projects={projects} livePrCounts={livePrCounts} />
         </div>
       )}
@@ -707,7 +895,7 @@ export default function DashboardPage() {
 
       {isError && (
         <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <Activity className="h-4 w-4 shrink-0" />
           Failed to load dashboard. Please refresh and try again.
         </div>
       )}
