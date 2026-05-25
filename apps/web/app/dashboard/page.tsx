@@ -504,16 +504,26 @@ function AiInsightsPanel({ projects, livePrCounts }: {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
 
   const devopsSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: devopsData } = useQuery({
-    queryKey: ['dashboard-devops-activity-ai', devopsSince],
-    queryFn: () => api.get<{ data: DevopsItem[] }>(`/api/dashboard/devops-activity?since=${encodeURIComponent(devopsSince)}`),
-    staleTime: 2 * 60_000,
-    retry: false,
-  });
 
   const { mutate: analyze, isPending } = useMutation({
-    mutationFn: () =>
-      api.post<{ data: { insights: AiInsight[]; summary: string } }>('/api/ai/dashboard-insights', {
+    mutationFn: async () => {
+      // Always fetch fresh devops events inside the mutation so we're
+      // never racing against a background query that hasn't resolved yet.
+      let devopsEvents: Array<{ type: string; projectName: string; label: string; detail: string | null }> = [];
+      try {
+        const devopsRes = await api.get<{ data: DevopsItem[] }>(
+          `/api/dashboard/devops-activity?since=${encodeURIComponent(devopsSince)}`
+        );
+        devopsEvents = (devopsRes.data ?? []).slice(0, 20).map((e) => ({
+          type: e.type,
+          projectName: e.projectName,
+          label: e.label,
+          detail: e.detail,
+        }));
+      } catch {
+        // devops fetch failed — proceed without it rather than blocking AI
+      }
+      return api.post<{ data: { insights: AiInsight[]; summary: string } }>('/api/ai/dashboard-insights', {
         projects: projects.map((p) => ({
           name: p.name,
           capabilities: p.capabilities,
@@ -522,13 +532,9 @@ function AiInsightsPanel({ projects, livePrCounts }: {
           alReviewed: p.alHealth?.reviewedIssueCount ?? 0,
           recentActivity: 0,
         })),
-        devopsEvents: (devopsData?.data ?? []).slice(0, 20).map((e) => ({
-          type: e.type,
-          projectName: e.projectName,
-          label: e.label,
-          detail: e.detail,
-        })),
-      }),
+        devopsEvents,
+      });
+    },
     onSuccess: (res) => {
       setInsights(res.data.insights as AiInsight[]);
       setSummary(res.data.summary);
