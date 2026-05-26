@@ -103,107 +103,119 @@ function getText(node: unknown): string {
 // ─── XML pre-processor ────────────────────────────────────────────────────────
 // BC Xliff Generator can produce malformed XML in several ways:
 //  1. AL object/field names with double-quote chars end up unescaped in
-//     trans-unit id and note attribute values (e.g. note="Table "Cust." ...")
+//     trans-unit id and note attribute values (e.g. id="Table "Cust." ...")
 //  2. Duplicate <?xml?> processing instructions at the top of the file
 // Both issues are fixed here before handing the content to fast-xml-parser.
 
 /**
- * Fix unescaped double-quotes inside the value of a named XML attribute.
+ * Single-pass XML pre-processor that escapes unescaped double-quotes inside
+ * attribute values of opening tags.
  *
- * Strategy: scan character-by-character after the opening `attr="`.
- * A `"` is treated as the TRUE closing delimiter only when the very next
- * characters match one of:
- *   - whitespace then a XML name-start char (next attribute follows)
- *   - optional whitespace then `>` or `/>`  (tag ends here)
- * Every other `"` encountered is an embedded (unescaped) quote and is
- * replaced with `&quot;`.
+ * Operates as a lightweight state machine:
+ *   TEXT → enters tag on '<'
+ *   TAG  → copies tag name and whitespace/attribute-names/= as-is;
+ *          on '"' enters ATTR_VALUE, on '>' or '/>' returns to TEXT
+ *   ATTR_VALUE → accumulates chars; on '"' uses the same closing-quote
+ *                heuristic (next attr or end-of-tag follows) to decide if
+ *                this is the real closing delimiter; otherwise treats it as
+ *                an embedded quote and replaces with &quot;
  *
- * Guard: only process occurrences that are actually inside an XML opening
- * tag (the nearest preceding angle-bracket is `<`, not `>`).  This prevents
- * false matches on patterns like `from="…"` that appear inside element text
- * content or inside single-quoted attribute values.
+ * Processing in a single pass eliminates the risk of one per-attribute pass
+ * corrupting the output consumed by a subsequent pass.
  */
-function fixAttrQuotes(xml: string, attrName: string): string {
-  const prefix = `${attrName}="`;
-  const parts: string[] = [];
-  let pos = 0;
+function fixAllUnescapedAttrQuotes(xml: string): string {
+  const out: string[] = [];
+  let i = 0;
 
-  while (pos < xml.length) {
-    const start = xml.indexOf(prefix, pos);
-    if (start === -1) { parts.push(xml.slice(pos)); break; }
+  while (i < xml.length) {
+    // ── TEXT content ── copy until next '<'
+    const ltPos = xml.indexOf('<', i);
+    if (ltPos === -1) { out.push(xml.slice(i)); break; }
+    out.push(xml.slice(i, ltPos));
+    i = ltPos; // i points at '<'
 
-    // Verify this occurrence is inside an XML opening tag, not in text content
-    // or inside another attribute value.  Scan backwards for the nearest `<`
-    // or `>` — if we hit `>` first we are outside a tag, so skip.
-    let insideTag = false;
-    for (let k = start - 1; k >= 0; k--) {
-      if (xml[k] === '<') { insideTag = true; break; }
-      if (xml[k] === '>') { insideTag = false; break; }
-    }
-    if (!insideTag) {
-      // Outside a tag — copy up to and past this byte and keep searching.
-      parts.push(xml.slice(pos, start + prefix.length));
-      pos = start + prefix.length;
+    const next = i + 1 < xml.length ? xml[i + 1] : '';
+
+    // ── Closing tag, comment/CDATA/DOCTYPE, or processing instruction ──
+    // Copy character-by-character until '>' (simple but safe for XLIFF).
+    if (next === '/' || next === '!' || next === '?') {
+      const gtPos = xml.indexOf('>', i);
+      if (gtPos === -1) { out.push(xml.slice(i)); i = xml.length; break; }
+      out.push(xml.slice(i, gtPos + 1));
+      i = gtPos + 1;
       continue;
     }
 
-    // Also require the character immediately before attrName to be whitespace
-    // or `<`, ensuring it is not part of a longer identifier.
-    if (start > 0 && !/[\s<]/.test(xml[start - 1])) {
-      parts.push(xml.slice(pos, start + 1));
-      pos = start + 1;
-      continue;
-    }
-
-    // Copy everything up to and including the opening `attr="`
-    parts.push(xml.slice(pos, start + prefix.length));
-    let i = start + prefix.length;
-    let value = '';
-
-    while (i < xml.length) {
-      const ch = xml[i];
-      if (ch !== '"') { value += ch; i++; continue; }
-
-      // Is this the TRUE closing quote?
-      // A closing quote must be followed by:
-      //   - a next XML attribute (whitespace, an XML name-start char, then '=')
-      //   - or the end of the opening tag (optional whitespace, then '>' or '/>')
-      // Crucially we require '=' after the attribute name — otherwise "word word"
-      // inside an attribute value would be misidentified as a next attribute.
-      const after = xml.slice(i + 1);
-      const isEnd =
-        /^\s+[a-zA-Z_:][a-zA-Z0-9_:.\-]*\s*=/.test(after) || // next attr (requires '=')
-        /^\s*\/?>/.test(after);            // end of tag: />  or  >  (with optional space)
-
-      if (isEnd) {
-        parts.push(value.replace(/"/g, '&quot;'), '"');
-        pos = i + 1;
-        break;
-      }
-      value += '"';
+    // ── Opening tag ── copy '<' and tag name
+    out.push('<');
+    i++;
+    while (i < xml.length && /[a-zA-Z0-9_:.-]/.test(xml[i])) {
+      out.push(xml[i]);
       i++;
     }
 
-    // Ran off end without finding a closing quote — just emit as-is
-    if (i >= xml.length) { parts.push(value); pos = xml.length; break; }
+    // ── Attribute list ── process until '>' or '/>'
+    while (i < xml.length) {
+      const ch = xml[i];
+
+      if (ch === '>') { out.push('>'); i++; break; }
+      if (ch === '/' && i + 1 < xml.length && xml[i + 1] === '>') {
+        out.push('/>'); i += 2; break;
+      }
+
+      if (ch === '"') {
+        // Double-quoted attribute value — fix any embedded unescaped quotes.
+        out.push('"');
+        i++;
+        let value = '';
+        while (i < xml.length) {
+          const vc = xml[i];
+          if (vc !== '"') { value += vc; i++; continue; }
+
+          // Is this the TRUE closing quote?
+          // Closing = followed by: next attribute (whitespace+name+`=`)
+          //                     OR end of tag (optional whitespace + `>` / `/>`)
+          const after = xml.slice(i + 1);
+          const isEnd =
+            /^\s+[a-zA-Z_:][a-zA-Z0-9_:.\-]*\s*=/.test(after) ||
+            /^\s*\/?>/.test(after);
+
+          if (isEnd) {
+            out.push(value.replace(/"/g, '&quot;'), '"');
+            i++;
+            break;
+          }
+          value += '"';
+          i++;
+        }
+        if (i >= xml.length) { out.push(value); } // ran off end
+        continue;
+      }
+
+      if (ch === "'") {
+        // Single-quoted attribute value — copy verbatim (no fix needed for '"').
+        out.push("'");
+        i++;
+        while (i < xml.length && xml[i] !== "'") { out.push(xml[i]); i++; }
+        if (i < xml.length) { out.push("'"); i++; }
+        continue;
+      }
+
+      // Whitespace, attribute name characters, '=' — copy as-is.
+      out.push(ch);
+      i++;
+    }
   }
 
-  return parts.join('');
+  return out.join('');
 }
 
 function sanitizeXmlAttributeQuotes(xml: string): string {
   // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
   xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-  // Fix 2 — unescaped `"` inside attribute values.
-  // BC XLIFF generator sometimes emits AL object/field names without proper &quot; escaping
-  // in trans-unit id/resname/extradata and note attrs, and in <note> element attrs.
-  xml = fixAttrQuotes(xml, 'id');
-  xml = fixAttrQuotes(xml, 'resname');
-  xml = fixAttrQuotes(xml, 'extradata');
-  xml = fixAttrQuotes(xml, 'note');
-  xml = fixAttrQuotes(xml, 'from');
-  xml = fixAttrQuotes(xml, 'annotates');
+  // Fix 2 — unescaped `"` inside attribute values (single-pass state machine).
+  xml = fixAllUnescapedAttrQuotes(xml);
 
   return xml;
 }
@@ -221,13 +233,21 @@ export function parseXliff(xmlContent: string): ParsedXliff {
     const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
     if (retryResult !== true) {
       const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
-      // Include the raw lines around the error in the thrown message for diagnosis
       const rawLines = xmlContent.split('\n');
       const sanitizedLines = sanitized.split('\n');
       const errLine = err.line - 1;
       const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
       const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}`);
+      // Find the FIRST diverging line between raw and sanitized — that is where corruption started
+      let firstDiff = -1;
+      for (let d = 0; d < Math.min(rawLines.length, sanitizedLines.length); d++) {
+        if (rawLines[d] !== sanitizedLines[d]) { firstDiff = d; break; }
+      }
+      const diffCtx = firstDiff >= 0
+        ? rawLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_RAW  ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n') + '\n' +
+          sanitizedLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_SANI ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n')
+        : '(no divergence found)';
+      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}\nFirst diff at line ${firstDiff}:\n${diffCtx}`);
       throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
     }
     xmlContent = sanitized;
