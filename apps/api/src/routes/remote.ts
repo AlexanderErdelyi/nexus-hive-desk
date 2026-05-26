@@ -1457,7 +1457,9 @@ export async function remoteRoutes(app: FastifyInstance) {
         }
         const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
         const xliffUpdates = new Map(
-          translations.map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
+          translations
+            .filter((t) => t.target)
+            .map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
         );
         const content = serializeXliff(file.originalXml, xliffUpdates);
 
@@ -1578,7 +1580,9 @@ export async function remoteRoutes(app: FastifyInstance) {
         }
         const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
         const xliffUpdates = new Map(
-          translations.map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
+          translations
+            .filter((t) => t.target)
+            .map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
         );
         const content = serializeXliff(file.originalXml, xliffUpdates);
 

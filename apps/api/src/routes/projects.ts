@@ -220,18 +220,20 @@ export async function projectRoutes(app: FastifyInstance) {
     }
 
     const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
+    // Only patch units with a non-empty target — empty targets preserve the original XML content
+    // (e.g. [NAB: NOT TRANSLATED]). This avoids O(n²) regex scans on large untranslated files.
     const updates = new Map(
-      translations.map((translation) => [
-        translation.unitId,
-        { target: translation.target, state: translation.state as TranslationState },
-      ])
+      translations
+        .filter((t) => t.target)
+        .map((translation) => [
+          translation.unitId,
+          { target: translation.target, state: translation.state as TranslationState },
+        ])
     );
 
     const xml = serializeXliff(file.originalXml, updates);
     return { data: { content: xml, filename: file.filename } };
   });
-
-  // ─── Sync file from remote ───────────────────────────────────────────────────
   // Fetches the latest XLIFF from the remote repo and merges it:
   // - Updates source text for existing units (preserves local target/state)
   // - Adds new units found in remote
