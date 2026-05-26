@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import type { TranslationState } from '@nexus/types';
 import { TranslationRowSkeleton } from '@/components/shared/Skeleton';
 import { EmptyState } from '@/components/shared/EmptyState';
-import { api } from '@/lib/api';
+import { api, getAuthHeaders } from '@/lib/api';
 import { cn, getStateColor, getStateLabel } from '@/lib/utils';
 import { CommitModal } from '@/components/projects/CommitModal';
 
@@ -585,7 +585,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     try {
       const res = await fetch(`${API_URL}/api/ai/translate-stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ projectId, xliffFileId }),
         signal: controller.signal,
       });
