@@ -211,10 +211,41 @@ function fixAllUnescapedAttrQuotes(xml: string): string {
 }
 
 function sanitizeXmlAttributeQuotes(xml: string): string {
+  // Normalise all line endings to \n so subsequent logic only needs to handle \n.
+  xml = xml.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
   // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
   xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-  // Fix 2 — unescaped `"` inside attribute values (single-pass state machine).
+  // Fix 2 — join continuation lines.
+  // BC XLIFF Generator can emit opening tags that span multiple lines in two ways:
+  //   a) Attribute VALUE split:  <note from="NAB\n          AL Language Tool" ...>
+  //   b) Attribute LIST split:   <trans-unit id="..."\n          size-unit="char" ...>
+  // Strategy: if a line does not start a new XML node (trimmed form does not begin with
+  // '<') AND the preceding accumulated line is still inside an unclosed opening tag
+  // (does not end with '>'), join it onto the preceding line with a space separator.
+  // This single heuristic handles both (a) and (b).
+  {
+    const lines = xml.split('\n');
+    const joined: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trimStart();
+      if (
+        joined.length > 0 &&
+        trimmed.length > 0 &&
+        !trimmed.startsWith('<') &&
+        !joined[joined.length - 1].trimEnd().endsWith('>')
+      ) {
+        joined[joined.length - 1] += ' ' + trimmed;
+      } else {
+        joined.push(line);
+      }
+    }
+    xml = joined.join('\n');
+  }
+
+  // Fix 3 — escape unescaped double-quotes inside opening-tag attribute values.
+  // BC XLIFF Generator can emit trans-unit ids like id="Table "Customer" - Field "Name""
   xml = fixAllUnescapedAttrQuotes(xml);
 
   return xml;
@@ -225,40 +256,38 @@ export function parseXliff(xmlContent: string): ParsedXliff {
   // Strip UTF-8 BOM (\uFEFF) — some editors / ADO add it; fast-xml-parser rejects it
   xmlContent = xmlContent.replace(/^\uFEFF/, '');
 
-  // Validate first to get a proper human-readable error instead of a JS TypeError
-  const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: false });
+  // Always sanitize first so BC XLIFF malformations (multi-line opening tags, duplicate
+  // XML declarations, unescaped quotes in attribute values) are normalised before validation.
+  const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
+
+  const validationResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
   if (validationResult !== true) {
-    // Try to fix common issues (unescaped quotes in attribute values) then re-validate
-    const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
-    const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
-    if (retryResult !== true) {
-      const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
-      const rawLines = xmlContent.split('\n');
-      const sanitizedLines = sanitized.split('\n');
-      const errLine = err.line - 1;
-      const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-      const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-      // Find the FIRST diverging line between raw and sanitized — that is where corruption started
-      let firstDiff = -1;
-      for (let d = 0; d < Math.min(rawLines.length, sanitizedLines.length); d++) {
-        if (rawLines[d] !== sanitizedLines[d]) { firstDiff = d; break; }
-      }
-      const diffCtx = firstDiff >= 0
-        ? rawLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_RAW  ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n') + '\n' +
-          sanitizedLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_SANI ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n')
-        : '(no divergence found)';
-      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}\nFirst diff at line ${firstDiff}:\n${diffCtx}`);
-      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
+    const err = (validationResult as { err: { msg: string; line: number; col: number } }).err;
+    const rawLines = xmlContent.split('\n');
+    const sanitizedLines = sanitized.split('\n');
+    const errLine = err.line - 1;
+    const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+    const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+    let firstDiff = -1;
+    for (let d = 0; d < Math.min(rawLines.length, sanitizedLines.length); d++) {
+      if (rawLines[d] !== sanitizedLines[d]) { firstDiff = d; break; }
     }
-    xmlContent = sanitized;
+    const diffCtx = firstDiff >= 0
+      ? rawLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_RAW  ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n') + '\n' +
+        sanitizedLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_SANI ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n')
+      : '(no divergence found)';
+    console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}\nFirst diff at line ${firstDiff}:\n${diffCtx}`);
+    throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
   }
+
+  const xmlToParse = sanitized;
 
   const parser = new XMLParser({
     ...PARSER_OPTIONS,
     isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),
   });
 
-  const parsed = parser.parse(xmlContent) as { xliff?: { file?: unknown } };
+  const parsed = parser.parse(xmlToParse) as { xliff?: { file?: unknown } };
   const xliff = parsed?.xliff;
 
   if (!xliff) throw new Error('Invalid XLIFF: missing <xliff> root element');
