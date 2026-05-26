@@ -7,6 +7,9 @@ import { requireAuth } from '../lib/auth';
 const BATCH_SIZE = 20;
 const REVIEW_BATCH_SIZE = 10;
 
+// Track active bulk translate jobs to prevent duplicate concurrent translations
+const activeTranslations = new Set<string>();
+
 async function translateTranslations(options: {
   translationIds: string[];
   projectId: string;
@@ -146,6 +149,12 @@ export async function aiRoutes(app: FastifyInstance) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
 
+    // Prevent duplicate concurrent bulk translations for the same file
+    const lockKey = xliffFileId ?? translationIds?.join(',') ?? projectId;
+    if (activeTranslations.has(lockKey)) {
+      return reply.status(409).send({ error: 'conflict', message: 'Bulk translation already in progress for this file. Please wait for it to finish.' });
+    }
+
     // Build translation where-clause directly (avoid huge IN clause for xliffFileId path)
     type TranslationWhere =
       | { id: { in: string[] } }
@@ -200,16 +209,36 @@ export async function aiRoutes(app: FastifyInstance) {
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     reply.raw.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
 
+    activeTranslations.add(lockKey);
     let done = 0;
     try {
       for (let i = 0; i < translations.length; i += BATCH_SIZE) {
         const batch = translations.slice(i, i + BATCH_SIZE);
-        const response = await providerInstance.translate({
-          units: batch.map((t) => ({ id: t.id, source: t.source })),
-          sourceLanguage: sourceLang,
-          targetLanguage: targetLang,
-          glossary,
-        });
+        let response;
+        // Retry up to 3 times on 429 rate limit
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            response = await providerInstance.translate({
+              units: batch.map((t) => ({ id: t.id, source: t.source })),
+              sourceLanguage: sourceLang,
+              targetLanguage: targetLang,
+              glossary,
+            });
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('429') && attempt < 2) {
+              // Parse retry-after if present, default to 30s
+              const retryAfterMatch = msg.match(/"retry_after"\s*:\s*(\d+)/);
+              const waitMs = retryAfterMatch ? parseInt(retryAfterMatch[1]) * 1000 : 30_000;
+              reply.raw.write(`data: ${JSON.stringify({ type: 'retry', waitMs, attempt: attempt + 1 })}\n\n`);
+              await new Promise((res) => setTimeout(res, waitMs));
+            } else {
+              throw err;
+            }
+          }
+        }
+        if (!response) break;
         done += batch.length;
         const results = response.results.map((r) => ({
           id: r.id,
@@ -223,6 +252,8 @@ export async function aiRoutes(app: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       reply.raw.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`);
+    } finally {
+      activeTranslations.delete(lockKey);
     }
     reply.raw.end();
   });

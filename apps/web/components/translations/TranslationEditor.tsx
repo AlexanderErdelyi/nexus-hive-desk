@@ -589,7 +589,14 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
         body: JSON.stringify({ projectId, xliffFileId }),
         signal: controller.signal,
       });
-      if (!res.ok || !res.body) throw new Error('Failed to start bulk translation');
+      if (!res.ok || !res.body) {
+        let errMsg = 'Failed to start bulk translation';
+        try {
+          const errJson = (await res.json()) as { message?: string };
+          if (errJson.message) errMsg = errJson.message;
+        } catch { /* ignore */ }
+        throw new Error(errMsg);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -610,12 +617,17 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               done?: number;
               results?: Array<{ id: string; suggestedTarget: string; confidenceScore: number; confidence: string }>;
               message?: string;
+              waitMs?: number;
+              attempt?: number;
             };
             if (event.type === 'start') {
               setBulkProgress({ done: 0, total: event.total ?? 0 });
             } else if (event.type === 'progress') {
               setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
               setBulkResults((prev) => [...prev, ...(event.results ?? [])]);
+            } else if (event.type === 'retry') {
+              const waitSec = Math.round((event.waitMs ?? 30000) / 1000);
+              toast.info(`AI rate limit reached — retrying in ${waitSec}s (attempt ${event.attempt ?? 1}/3)`);
             } else if (event.type === 'complete') {
               setBulkDone(true);
               setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
