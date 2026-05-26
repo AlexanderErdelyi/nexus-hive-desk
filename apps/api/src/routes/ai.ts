@@ -22,14 +22,22 @@ async function translateTranslations(options: {
   const translations = await prisma.translation.findMany({
     where: { id: { in: translationIds } },
     orderBy: { unitId: 'asc' },
+    select: { id: true, source: true, xliffFileId: true },
   });
   if (!translations.length) return { suggestions: [], translated: 0 };
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new Error('Project not found');
 
+  // Use the XLIFF file's language pair when available (takes priority over project defaults)
+  const xliffFile = translations[0].xliffFileId
+    ? await prisma.xliffFile.findUnique({ where: { id: translations[0].xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })
+    : null;
+  const sourceLang = xliffFile?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+  const targetLang = xliffFile?.targetLanguage ?? project.targetLanguage ?? 'de';
+
   const glossaryEntries = await prisma.glossaryEntry.findMany({
-    where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+    where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
   });
   const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -45,8 +53,8 @@ async function translateTranslations(options: {
     const batch = translations.slice(i, i + BATCH_SIZE);
     const response = await provider.translate({
       units: batch.map((t) => ({ id: t.id, source: t.source })),
-      sourceLanguage: project.sourceLanguage ?? 'en',
-      targetLanguage: project.targetLanguage ?? 'de',
+      sourceLanguage: sourceLang,
+      targetLanguage: targetLang,
       glossary,
     });
     allResults.push(...response.results.map((r) => ({ id: r.id, suggestedTarget: r.translatedText })));
@@ -163,12 +171,21 @@ export async function aiRoutes(app: FastifyInstance) {
     const translations = await prisma.translation.findMany({
       where: { id: { in: ids } },
       orderBy: { unitId: 'asc' },
+      select: { id: true, source: true, xliffFileId: true },
     });
     const project = await prisma.project.findUnique({ where: { id: projectId } });
     if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
 
+    // Use the XLIFF file's language pair when available (takes priority over project defaults)
+    const fileId = xliffFileId ?? translations[0]?.xliffFileId ?? null;
+    const xliffFileRecord = fileId
+      ? await prisma.xliffFile.findUnique({ where: { id: fileId }, select: { sourceLanguage: true, targetLanguage: true } })
+      : null;
+    const sourceLang = xliffFileRecord?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+    const targetLang = xliffFileRecord?.targetLanguage ?? project.targetLanguage ?? 'de';
+
     const glossaryEntries = await prisma.glossaryEntry.findMany({
-      where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+      where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
     });
     const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -188,8 +205,8 @@ export async function aiRoutes(app: FastifyInstance) {
         const batch = translations.slice(i, i + BATCH_SIZE);
         const response = await providerInstance.translate({
           units: batch.map((t) => ({ id: t.id, source: t.source })),
-          sourceLanguage: project.sourceLanguage ?? 'en',
-          targetLanguage: project.targetLanguage ?? 'de',
+          sourceLanguage: sourceLang,
+          targetLanguage: targetLang,
           glossary,
         });
         done += batch.length;
@@ -230,12 +247,20 @@ export async function aiRoutes(app: FastifyInstance) {
       const translations = await prisma.translation.findMany({
         where: { id: { in: translationIds } },
         orderBy: { unitId: 'asc' },
+        select: { id: true, source: true, target: true, note: true, xliffFileId: true },
       });
       const project = await prisma.project.findUnique({ where: { id: projectId } });
       if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
 
+      // Use the XLIFF file's language pair when available (takes priority over project defaults)
+      const xliffFile = translations[0]?.xliffFileId
+        ? await prisma.xliffFile.findUnique({ where: { id: translations[0].xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })
+        : null;
+      const sourceLang = xliffFile?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+      const targetLang = xliffFile?.targetLanguage ?? project.targetLanguage ?? 'de';
+
       const glossaryEntries = await prisma.glossaryEntry.findMany({
-        where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+        where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
       });
       const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -255,8 +280,8 @@ export async function aiRoutes(app: FastifyInstance) {
             target: t.target,
             context: t.note ?? undefined,
           })),
-          sourceLanguage: project.sourceLanguage ?? 'en',
-          targetLanguage: project.targetLanguage ?? 'de',
+          sourceLanguage: sourceLang,
+          targetLanguage: targetLang,
           glossary,
           additionalContext,
         });
