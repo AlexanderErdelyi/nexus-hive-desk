@@ -1,0 +1,199 @@
+$ next dev
+▲ Next.js 16.2.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://172.29.16.1:3000
+✓ Ready in 1341ms
+
+ GET / 200 in 681ms (next.js: 334ms, application-code: 347ms)
+ GET /dashboard 200 in 140ms (next.js: 51ms, application-code: 89ms)
+ GET /dashboard 200 in 46ms (next.js: 8ms, application-code: 38ms)
+ GET /projects 200 in 102ms (next.js: 59ms, application-code: 43ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 1181ms (next.js: 962ms, application-code: 218ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 898ms (next.js: 854ms, application-code: 44ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 52ms (next.js: 20ms, application-code: 33ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 100ms (next.js: 18ms, application-code: 83ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 53ms (next.js: 20ms, application-code: 32ms)
+ GET /projects 200 in 27ms (next.js: 6ms, application-code: 21ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 76ms (next.js: 20ms, application-code: 56ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 74ms (next.js: 19ms, application-code: 55ms)
+ GET /login 200 in 102ms (next.js: 49ms, application-code: 53ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 113ms (next.js: 43ms, application-code: 70ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn5mqlt0001mzosodel6lmp 200 in 75ms (next.js: 27ms, application-code: 48ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn5nys709y3mzos9nkx01mu 200 in 71ms (next.js: 30ms, application-code: 42ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 53ms (next.js: 20ms, application-code: 34ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn5onex0kg4mzosd77k93t5 200 in 54ms (next.js: 19ms, application-code: 35ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 51ms (next.js: 20ms, application-code: 31ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 104ms (next.js: 21ms, application-code: 82ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 48ms (next.js: 19ms, application-code: 30ms)
+ GET /projects 200 in 45ms (next.js: 11ms, application-code: 34ms)
+ GET /dashboard 200 in 39ms (next.js: 15ms, application-code: 25ms)
+[browser] Encountered two children with the same key, `ado-pr-mine-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-pr-review-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-wi-1811`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 67ms (next.js: 24ms, application-code: 43ms)
+✓ Compiled in 1542ms
+ GET /login 200 in 636ms (next.js: 120ms, application-code: 517ms)
+ GET /login 200 in 604ms (next.js: 213ms, application-code: 391ms)
+ GET /login 200 in 392ms (next.js: 12ms, application-code: 380ms)
+ GET /login 200 in 391ms (next.js: 45ms, application-code: 346ms)
+ GET /login 200 in 390ms (next.js: 78ms, application-code: 312ms)
+ GET /login 200 in 390ms (next.js: 111ms, application-code: 280ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 649ms (next.js: 142ms, application-code: 508ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 293ms (next.js: 8ms, application-code: 285ms)
+ GET /login 200 in 245ms (next.js: 118ms, application-code: 127ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 291ms (next.js: 12ms, application-code: 280ms)
+ GET /login 200 in 140ms (next.js: 10ms, application-code: 130ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 332ms (next.js: 49ms, application-code: 283ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 331ms (next.js: 117ms, application-code: 214ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 334ms (next.js: 82ms, application-code: 252ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 102ms (next.js: 9ms, application-code: 93ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 49ms (next.js: 7ms, application-code: 42ms)
+✓ Compiled in 240ms
+ GET /login 200 in 283ms (next.js: 93ms, application-code: 189ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm?view=pull-requests 200 in 87ms (next.js: 36ms, application-code: 51ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 368ms (next.js: 125ms, application-code: 243ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 57ms (next.js: 24ms, application-code: 33ms)
+ GET /projects 200 in 169ms (next.js: 112ms, application-code: 57ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 294ms (next.js: 19ms, application-code: 276ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 70ms (next.js: 18ms, application-code: 52ms)
+✓ Compiled in 383ms
+ GET /login 200 in 884ms (next.js: 210ms, application-code: 673ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 482ms (next.js: 305ms, application-code: 177ms)
+✓ Compiled in 191ms
+ GET /login 200 in 447ms (next.js: 105ms, application-code: 342ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 282ms (next.js: 159ms, application-code: 123ms)
+✓ Compiled in 1007ms
+✓ Compiled in 535ms
+ GET /login 200 in 627ms (next.js: 137ms, application-code: 490ms)
+ GET /login 200 in 897ms (next.js: 183ms, application-code: 714ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 820ms (next.js: 311ms, application-code: 509ms)
+ GET /login 200 in 922ms (next.js: 17ms, application-code: 906ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 526ms (next.js: 43ms, application-code: 482ms)
+✓ Compiled in 636ms
+ GET /login 200 in 4.7s (next.js: 459ms, application-code: 4.3s)
+ GET /login 200 in 624ms (next.js: 89ms, application-code: 535ms)
+ GET /login 200 in 623ms (next.js: 127ms, application-code: 496ms)
+ GET /login 200 in 905ms (next.js: 229ms, application-code: 676ms)
+ GET /login 200 in 626ms (next.js: 16ms, application-code: 610ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 934ms (next.js: 134ms, application-code: 800ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 207ms (next.js: 62ms, application-code: 146ms)
+ GET /login 200 in 756ms (next.js: 183ms, application-code: 572ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 305ms (next.js: 16ms, application-code: 288ms)
+✓ Compiled in 144ms
+ GET /login 200 in 544ms (next.js: 110ms, application-code: 434ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 341ms (next.js: 182ms, application-code: 160ms)
+✓ Compiled in 165ms
+ GET /login 200 in 403ms (next.js: 94ms, application-code: 309ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 247ms (next.js: 135ms, application-code: 112ms)
+✓ Compiled in 112ms
+ GET /login 200 in 377ms (next.js: 96ms, application-code: 281ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 214ms (next.js: 126ms, application-code: 88ms)
+✓ Compiled in 118ms
+Failed to proxy http://localhost:3001/api/projects/cmpg15ml80004mzfsc99qg3cm AggregateError: 
+    at ignore-listed frames {
+  code: 'ETIMEDOUT',
+  [errors]: [
+    Error: connect ETIMEDOUT 127.0.0.1:3001
+        at <unknown> (Error: connect ETIMEDOUT 127.0.0.1:3001) {
+      errno: -4039,
+      code: 'ETIMEDOUT',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3001
+    },
+    Error: connect ECONNREFUSED ::1:3001
+        at <unknown> (Error: connect ECONNREFUSED ::1:3001) {
+      errno: -4078,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3001
+    }
+  ]
+}
+AggregateError: 
+    at ignore-listed frames {
+  code: 'ETIMEDOUT',
+  [errors]: [
+    Error: connect ETIMEDOUT 127.0.0.1:3001
+        at <unknown> (Error: connect ETIMEDOUT 127.0.0.1:3001) {
+      errno: -4039,
+      code: 'ETIMEDOUT',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3001
+    },
+    Error: connect ECONNREFUSED ::1:3001
+        at <unknown> (Error: connect ECONNREFUSED ::1:3001) {
+      errno: -4078,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3001
+    }
+  ]
+}
+ GET /login 200 in 565ms (next.js: 156ms, application-code: 410ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 520ms (next.js: 134ms, application-code: 386ms)
+✓ Compiled in 267ms
+ GET /login 200 in 840ms (next.js: 161ms, application-code: 679ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 512ms (next.js: 315ms, application-code: 196ms)
+✓ Compiled in 136ms
+ GET /login 200 in 586ms (next.js: 107ms, application-code: 478ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 391ms (next.js: 173ms, application-code: 217ms)
+✓ Compiled in 318ms
+ GET /login 200 in 824ms (next.js: 146ms, application-code: 677ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 446ms (next.js: 302ms, application-code: 144ms)
+✓ Compiled in 150ms
+ GET /login 200 in 640ms (next.js: 127ms, application-code: 513ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 432ms (next.js: 257ms, application-code: 175ms)
+✓ Compiled in 156ms
+ GET /login 200 in 444ms (next.js: 111ms, application-code: 334ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 251ms (next.js: 172ms, application-code: 79ms)
+✓ Compiled in 275ms
+Failed to proxy http://localhost:3001/api/translations?projectId=cmpg15ml80004mzfsc99qg3cm&xliffFileId=cmpmu0je509y4mz9wdqbgj3a6&untranslatedOnly=true&page=1&pageSize=50 AggregateError: 
+    at ignore-listed frames {
+  code: 'ETIMEDOUT',
+  [errors]: [
+    Error: connect ETIMEDOUT 127.0.0.1:3001
+        at <unknown> (Error: connect ETIMEDOUT 127.0.0.1:3001) {
+      errno: -4039,
+      code: 'ETIMEDOUT',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3001
+    },
+    Error: connect ECONNREFUSED ::1:3001
+        at <unknown> (Error: connect ECONNREFUSED ::1:3001) {
+      errno: -4078,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3001
+    }
+  ]
+}
+AggregateError: 
+    at ignore-listed frames {
+  code: 'ETIMEDOUT',
+  [errors]: [
+    Error: connect ETIMEDOUT 127.0.0.1:3001
+        at <unknown> (Error: connect ETIMEDOUT 127.0.0.1:3001) {
+      errno: -4039,
+      code: 'ETIMEDOUT',
+      syscall: 'connect',
+      address: '127.0.0.1',
+      port: 3001
+    },
+    Error: connect ECONNREFUSED ::1:3001
+        at <unknown> (Error: connect ECONNREFUSED ::1:3001) {
+      errno: -4078,
+      code: 'ECONNREFUSED',
+      syscall: 'connect',
+      address: '::1',
+      port: 3001
+    }
+  ]
+}
+ GET /login 200 in 741ms (next.js: 123ms, application-code: 618ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 531ms (next.js: 195ms, application-code: 336ms)

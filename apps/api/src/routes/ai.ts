@@ -137,11 +137,12 @@ export async function aiRoutes(app: FastifyInstance) {
       projectId: string;
       xliffFileId?: string;
       translationIds?: string[];
+      limit?: number;
       provider?: AIProviderType;
       model?: string;
     };
   }>('/translate-stream', async (req, reply) => {
-    const { projectId, xliffFileId, translationIds, provider, model } = req.body;
+    const { projectId, xliffFileId, translationIds, limit, provider, model } = req.body;
     if (!projectId) {
       return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
     }
@@ -170,8 +171,9 @@ export async function aiRoutes(app: FastifyInstance) {
     }
 
     // Fetch translations + language info in parallel
+    const clampedLimit = limit && limit > 0 ? limit : undefined;
     const [translations, project, xliffFileRecord] = await Promise.all([
-      prisma.translation.findMany({ where, orderBy: { unitId: 'asc' }, select: { id: true, source: true } }),
+      prisma.translation.findMany({ where, orderBy: { unitId: 'asc' }, select: { id: true, source: true }, ...(clampedLimit ? { take: clampedLimit } : {}) }),
       prisma.project.findUnique({ where: { id: projectId } }),
       xliffFileId
         ? prisma.xliffFile.findUnique({ where: { id: xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })

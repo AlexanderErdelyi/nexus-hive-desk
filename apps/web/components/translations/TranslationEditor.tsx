@@ -10,9 +10,10 @@ import { toast } from 'sonner';
 import type { TranslationState } from '@nexus/types';
 import { TranslationRowSkeleton } from '@/components/shared/Skeleton';
 import { EmptyState } from '@/components/shared/EmptyState';
-import { api, getAuthHeaders } from '@/lib/api';
+import { api } from '@/lib/api';
 import { cn, getStateColor, getStateLabel } from '@/lib/utils';
 import { CommitModal } from '@/components/projects/CommitModal';
+import { useBulkTranslate, estimateBatches, estimateDuration } from '@/lib/bulk-translate-context';
 
 interface Translation {
   id: string;
@@ -300,7 +301,6 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [folderObjects, setFolderObjects] = useState<AlObject[]>([]);
   const [folderDragOver, setFolderDragOver] = useState(false);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const bulkAbortControllerRef = useRef<AbortController | null>(null);
   const [page, setPage] = useState(1);
   const [edits, setEdits] = useState<Map<string, { target: string; state: TranslationState }>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -323,7 +323,6 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
   const [tmLoadingIds, setTmLoadingIds] = useState<Set<string>>(new Set());
   const [singleAiIds, setSingleAiIds] = useState<Set<string>>(new Set());
 
-  // ─── VS Code context menu ──────────────────────────────────────────────────
   const [vsCtxMenu, setVsCtxMenu] = useState<{ x: number; y: number; type: 'source' | 'xliff'; unitId: string; note?: string } | null>(null);
 
   function openVsCode(type: 'source' | 'xliff', unitId: string, note?: string) {
@@ -340,13 +339,38 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     setVsCtxMenu(null);
   }
 
-  // ─── Bulk translate state ──────────────────────────────────────────────────
+  // ─── Bulk translate (global context — survives navigation) ───────────────────
   type BulkResult = { id: string; suggestedTarget: string; confidenceScore: number; confidence: string };
+  const bulk = useBulkTranslate();
+  const isMyFile = bulk.xliffFileId === xliffFileId;
+  const bulkTranslating = isMyFile && bulk.isRunning;
+  const bulkProgress = isMyFile ? bulk.progress : { done: 0, total: 0 };
+  const bulkResults = isMyFile ? (bulk.results as BulkResult[]) : [];
+  const bulkDone = isMyFile && bulk.isDone;
+
   const [showBulkPanel, setShowBulkPanel] = useState(false);
-  const [bulkTranslating, setBulkTranslating] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  const [bulkResults, setBulkResults] = useState<BulkResult[]>([]);
-  const [bulkDone, setBulkDone] = useState(false);
+  const [showBulkDialog, setShowBulkDialog] = useState(false);
+  const [bulkLimitInput, setBulkLimitInput] = useState('');
+
+  // Auto-open panel when translation finishes or when navigating back to an in-progress file
+  useEffect(() => {
+    if (isMyFile && (bulk.isRunning || bulk.isDone)) setShowBulkPanel(true);
+  }, [isMyFile, bulk.isRunning, bulk.isDone]);
+
+  // Untranslated count query — only fires when dialog is open
+  const { data: untranslatedData } = useQuery({
+    queryKey: ['untranslated-count', projectId, xliffFileId],
+    queryFn: () => {
+      const params = new URLSearchParams({ projectId, ...(xliffFileId ? { xliffFileId } : {}), untranslatedOnly: 'true', page: '1', pageSize: '1' });
+      return api.get<{ meta: { total: number } }>(`/api/translations?${params}`);
+    },
+    enabled: showBulkDialog && !!xliffFileId,
+    staleTime: 30_000,
+  });
+  const untranslatedTotal = untranslatedData?.meta.total ?? 0;
+  const bulkLimit = bulkLimitInput ? Math.max(1, parseInt(bulkLimitInput, 10) || 0) : undefined;
+  const effectiveCount = bulkLimit ? Math.min(bulkLimit, untranslatedTotal) : untranslatedTotal;
+
 
   const { data: projectData } = useQuery({
     queryKey: ['project-files', projectId],
@@ -571,90 +595,6 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     [projectId, reviewContext]
   );
 
-  // ─── Bulk translate via SSE streaming ─────────────────────────────────────
-  const startBulkTranslate = useCallback(async () => {
-    if (!xliffFileId) return;
-    setBulkTranslating(true);
-    setBulkResults([]);
-    setBulkDone(false);
-    setBulkProgress({ done: 0, total: 0 });
-
-    const controller = new AbortController();
-    bulkAbortControllerRef.current = controller;
-
-    try {
-      const res = await fetch(`${API_URL}/api/ai/translate-stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ projectId, xliffFileId }),
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        let errMsg = 'Failed to start bulk translation';
-        try {
-          const errJson = (await res.json()) as { message?: string };
-          if (errJson.message) errMsg = errJson.message;
-        } catch { /* ignore */ }
-        throw new Error(errMsg);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6)) as {
-              type: string;
-              total?: number;
-              done?: number;
-              results?: Array<{ id: string; suggestedTarget: string; confidenceScore: number; confidence: string }>;
-              message?: string;
-              waitMs?: number;
-              attempt?: number;
-            };
-            if (event.type === 'start') {
-              setBulkProgress({ done: 0, total: event.total ?? 0 });
-            } else if (event.type === 'progress') {
-              setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
-              setBulkResults((prev) => [...prev, ...(event.results ?? [])]);
-            } else if (event.type === 'retry') {
-              const waitSec = Math.round((event.waitMs ?? 30000) / 1000);
-              toast.info(`AI rate limit reached — retrying in ${waitSec}s (attempt ${event.attempt ?? 1}/3)`);
-            } else if (event.type === 'complete') {
-              setBulkDone(true);
-              setBulkProgress({ done: event.done ?? 0, total: event.total ?? 0 });
-              toast.success(`Bulk translation complete — ${event.done} strings ready to review`);
-            } else if (event.type === 'error') {
-              toast.error(event.message ?? 'Bulk translation failed');
-            }
-          } catch { /* skip malformed SSE line */ }
-        }
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        toast.info('Bulk translation cancelled');
-        setBulkDone(true);
-      } else {
-        toast.error(getErrorMessage(error));
-      }
-    } finally {
-      bulkAbortControllerRef.current = null;
-      setBulkTranslating(false);
-    }
-  }, [projectId, xliffFileId]);
-
-  function cancelBulkTranslate() {
-    bulkAbortControllerRef.current?.abort();
-  }
-
   // ─── Push XLIFF as new branch + PR ────────────────────────────────────────
   async function doPushAsPr() {
     if (!currentFile || !xliffFileId) return;
@@ -704,8 +644,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
     });
     toast.success(`Staged ${toApply.length} translations — review highlighted rows, then Save`);
     setShowBulkPanel(false);
-    setBulkResults([]);
-    setBulkDone(false);
+    bulk.clear();
   }
 
   const onDrop = useCallback(
@@ -1056,7 +995,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
               {bulkTranslating && (
                 <button
                   type="button"
-                  onClick={cancelBulkTranslate}
+                  onClick={() => bulk.cancel()}
                   className="mt-2 flex items-center gap-1.5 rounded-lg border border-orange-400 px-3 py-1 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:text-orange-300 dark:hover:bg-orange-900/30"
                 >
                   <X size={11} /> Cancel
@@ -1101,7 +1040,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
             {!bulkTranslating && !bulkDone && (
               <button
                 type="button"
-                onClick={startBulkTranslate}
+                onClick={() => { setBulkLimitInput(''); setShowBulkDialog(true); }}
                 className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
                 <Zap size={14} /> Start Bulk Translate
@@ -1132,7 +1071,7 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setBulkResults([]); setBulkDone(false); setBulkProgress({ done: 0, total: 0 }); }}
+                  onClick={() => bulk.clear()}
                   className="text-sm text-orange-500 hover:text-orange-700 dark:text-orange-400"
                 >
                   Clear
@@ -1879,6 +1818,97 @@ export function TranslationEditor({ projectId, xliffFileId, initialObjectFilter,
         );
       })()
     )}
+    {/* Bulk Translate confirmation dialog */}
+    {showBulkDialog && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900">
+          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+            <div className="flex items-center gap-2">
+              <Zap size={16} className="text-orange-600 dark:text-orange-400" />
+              <h2 className="font-semibold text-gray-900 dark:text-white">Bulk AI Translate</h2>
+            </div>
+            <button onClick={() => setShowBulkDialog(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+              <X size={18} />
+            </button>
+          </div>
+          <div className="space-y-4 p-5">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              {untranslatedTotal > 0
+                ? <>Found <span className="font-semibold text-gray-900 dark:text-white">{untranslatedTotal.toLocaleString()}</span> untranslated strings in <span className="font-medium">{currentFile?.filename ?? 'this file'}</span>.</>
+                : 'Loading untranslated count…'}
+            </p>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                How many strings to translate?
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={untranslatedTotal || undefined}
+                placeholder={`All (${untranslatedTotal.toLocaleString()})`}
+                value={bulkLimitInput}
+                onChange={(e) => setBulkLimitInput(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-500"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-500">
+                Leave blank to translate all. You can also type a number like 100 or 500.
+              </p>
+            </div>
+
+            {effectiveCount > 0 && (
+              <div className="rounded-lg border border-orange-100 bg-orange-50 px-4 py-3 dark:border-orange-800 dark:bg-orange-900/20">
+                <div className="flex items-center gap-2 text-sm text-orange-700 dark:text-orange-300">
+                  <Zap size={13} />
+                  <span>
+                    <span className="font-semibold">{estimateBatches(effectiveCount)} AI requests</span>
+                    {' '}·{' '}
+                    estimated <span className="font-semibold">{estimateDuration(effectiveCount)}</span>
+                  </span>
+                </div>
+                {estimateBatches(effectiveCount) > 150 && (
+                  <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+                    ⚠ This exceeds the 150 req/day limit for gpt-4o-mini. Translation will pause and retry if rate-limited, or you can translate in smaller batches across multiple sessions.
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-orange-600 dark:text-orange-400">
+                  Results are staged for review — nothing is saved until you click Save.
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end gap-3 border-t border-gray-100 px-5 py-4 dark:border-gray-800">
+            <button
+              type="button"
+              onClick={() => setShowBulkDialog(false)}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={effectiveCount === 0}
+              onClick={() => {
+                if (!xliffFileId) return;
+                setShowBulkDialog(false);
+                setShowBulkPanel(true);
+                bulk.start({
+                  projectId,
+                  xliffFileId,
+                  xliffFilename: currentFile?.filename ?? xliffFileId,
+                  ...(bulkLimit ? { limit: bulkLimit } : {}),
+                });
+              }}
+              className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+            >
+              <Zap size={14} />
+              Translate {effectiveCount > 0 ? effectiveCount.toLocaleString() : ''} strings
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Push as PR dialog */}
     {showPushPrDialog && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
