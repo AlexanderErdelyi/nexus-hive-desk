@@ -210,7 +210,9 @@ function fixAllUnescapedAttrQuotes(xml: string): string {
   return out.join('');
 }
 
-function sanitizeXmlAttributeQuotes(xml: string): string {
+function sanitizeXmlAttributeQuotes(xml: string): { result: string; fix2Joins: number; lineShift: number } {
+  const rawLineCount0 = xml.split('\n').length;
+
   // Normalise all line endings to \n so subsequent logic only needs to handle \n.
   xml = xml.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
@@ -225,6 +227,7 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
   // '<') AND the preceding accumulated line is still inside an unclosed opening tag
   // (does not end with '>'), join it onto the preceding line with a space separator.
   // This single heuristic handles both (a) and (b).
+  let fix2Joins = 0;
   {
     const lines = xml.split('\n');
     const joined: string[] = [];
@@ -237,6 +240,7 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
         !joined[joined.length - 1].trimEnd().endsWith('>')
       ) {
         joined[joined.length - 1] += ' ' + trimmed;
+        fix2Joins++;
       } else {
         joined.push(line);
       }
@@ -244,11 +248,13 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
     xml = joined.join('\n');
   }
 
+  const lineShift = rawLineCount0 - xml.split('\n').length;
+
   // Fix 3 — escape unescaped double-quotes inside opening-tag attribute values.
   // BC XLIFF Generator can emit trans-unit ids like id="Table "Customer" - Field "Name""
   xml = fixAllUnescapedAttrQuotes(xml);
 
-  return xml;
+  return { result: xml, fix2Joins, lineShift };
 }
 
 // ─── Parse XLIFF ──────────────────────────────────────────────────────────────
@@ -258,16 +264,21 @@ export function parseXliff(xmlContent: string): ParsedXliff {
 
   // Always sanitize first so BC XLIFF malformations (multi-line opening tags, duplicate
   // XML declarations, unescaped quotes in attribute values) are normalised before validation.
-  const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
+  const { result: sanitized, fix2Joins, lineShift } = sanitizeXmlAttributeQuotes(xmlContent);
 
   const validationResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
   if (validationResult !== true) {
     const err = (validationResult as { err: { msg: string; line: number; col: number } }).err;
     const rawLines = xmlContent.split('\n');
     const sanitizedLines = sanitized.split('\n');
-    const errLine = err.line - 1;
-    const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-    const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
+    const errLine = err.line - 1;  // 0-indexed
+    // Show context in SANI around the error
+    const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 2), errLine + 3)
+      .map((l, i) => `SANI ${errLine - 2 + i + 1}: ${l.substring(0, 500)}`).join('\n');
+    // Show corresponding RAW context (accounting for lineShift)
+    const rawErrLine = errLine + lineShift;
+    const rawCtx = rawLines.slice(Math.max(0, rawErrLine - 2), rawErrLine + 3)
+      .map((l, i) => `RAW  ${rawErrLine - 2 + i + 1}: ${l.substring(0, 500)}`).join('\n');
     let firstDiff = -1;
     for (let d = 0; d < Math.min(rawLines.length, sanitizedLines.length); d++) {
       if (rawLines[d] !== sanitizedLines[d]) { firstDiff = d; break; }
@@ -276,8 +287,8 @@ export function parseXliff(xmlContent: string): ParsedXliff {
       ? rawLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_RAW  ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n') + '\n' +
         sanitizedLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_SANI ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n')
       : '(no divergence found)';
-    console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}\nFirst diff at line ${firstDiff}:\n${diffCtx}`);
-    throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
+    console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg} | lineShift=${lineShift} fix2Joins=${fix2Joins}\n${sanCtx}\n${rawCtx}\nFirst diff at raw line ${firstDiff}:\n${diffCtx}`);
+    throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}`);
   }
 
   const xmlToParse = sanitized;
