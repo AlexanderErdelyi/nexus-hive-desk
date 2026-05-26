@@ -328,7 +328,7 @@ export function parseXliff(xmlContent: string): ParsedXliff {
   const attrs = file as Record<string, unknown>;
 
   const sourceLanguage = String(attrs['@_source-language'] ?? 'en');
-  const targetLanguage = String(attrs['@_target-language'] ?? 'de');
+  const targetLanguage = String(attrs['@_target-language'] ?? '');
 
   const body = file.body as Record<string, unknown> | undefined;
 

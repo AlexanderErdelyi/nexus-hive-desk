@@ -51,7 +51,7 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'sources, sourceLanguage and targetLanguage are required' });
     }
 
-    // Fetch all TM entries for this language pair (project-scoped + global)
+    // Fetch most-used TM entries for this language pair (project-scoped + global), capped for performance
     const entries = await prisma.translationMemory.findMany({
       where: {
         sourceLanguage,
@@ -60,6 +60,8 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
           ? { OR: [{ projectId }, { projectId: null }] }
           : { projectId: null }),
       },
+      orderBy: { usageCount: 'desc' },
+      take: 5000,
     });
 
     const results: Record<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>> = {};

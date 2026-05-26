@@ -113,8 +113,8 @@ export async function projectRoutes(app: FastifyInstance) {
         projectId: project.id,
         filename: data.filename,
         originalXml: xmlContent,
-        sourceLanguage: parsed.sourceLanguage,
-        targetLanguage: parsed.targetLanguage,
+        sourceLanguage: parsed.sourceLanguage || project.sourceLanguage || 'en',
+        targetLanguage: parsed.targetLanguage || project.targetLanguage || 'en',
       },
     });
 
@@ -319,7 +319,14 @@ export async function projectRoutes(app: FastifyInstance) {
     const syncNow = new Date();
     await prisma.xliffFile.update({
       where: { id: file.id },
-      data: { originalXml: remoteXml, lastSyncAt: syncNow, ...(fetchedObjectId ? { remoteObjectId: fetchedObjectId } : {}) },
+      data: {
+        originalXml: remoteXml,
+        lastSyncAt: syncNow,
+        ...(fetchedObjectId ? { remoteObjectId: fetchedObjectId } : {}),
+        // Refresh language metadata from the XLIFF header if present
+        ...(parsed.sourceLanguage ? { sourceLanguage: parsed.sourceLanguage } : {}),
+        ...(parsed.targetLanguage ? { targetLanguage: parsed.targetLanguage } : {}),
+      },
     });
 
     const existing = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
