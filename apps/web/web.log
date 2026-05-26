@@ -253,3 +253,4 @@ AggregateError:
  GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 48ms (next.js: 19ms, application-code: 29ms)
  GET /projects 200 in 27ms (next.js: 7ms, application-code: 21ms)
  GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 69ms (next.js: 16ms, application-code: 52ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn7kiy50001mzkcz3yi2uju 200 in 71ms (next.js: 19ms, application-code: 52ms)

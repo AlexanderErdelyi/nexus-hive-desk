@@ -441,12 +441,16 @@ export function serializeXliff(
 /**
  * Find the `<trans-unit id="...">` block for the given id and replace (or
  * insert) its `<target>` element in-place, preserving all surrounding content.
+ *
+ * The `<target>` element is written without a state attribute — the file is
+ * kept as clean as possible. Nexus infers state from the text content on
+ * re-import (non-empty target → translated).
  */
 function patchTransUnit(
   xml: string,
   unitId: string,
   targetText: string,
-  state: TranslationState,
+  _state: TranslationState,
 ): string {
   const escapedId = escapeRegExp(unitId);
 
@@ -461,7 +465,8 @@ function patchTransUnit(
     const indentMatch = match.match(/^([ \t]*)<(?:source|target)/m);
     const indent = indentMatch ? indentMatch[1] : '        ';
 
-    const newTargetXml = `<target state="${state}">${xmlEscape(targetText)}</target>`;
+    // Write <target> without a state attribute — keep the file clean
+    const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
 
     // Case 1: existing <target ...>...</target> (possibly multi-line)
     if (/<target[\s\S]*?<\/target>/.test(unitBody)) {
