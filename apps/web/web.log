@@ -197,3 +197,55 @@ AggregateError:
 }
  GET /login 200 in 741ms (next.js: 123ms, application-code: 618ms)
  GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 531ms (next.js: 195ms, application-code: 336ms)
+ GET /dashboard 200 in 161ms (next.js: 112ms, application-code: 49ms)
+[browser] Encountered two children with the same key, `ado-pr-mine-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-pr-review-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-wi-1811`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /projects 200 in 165ms (next.js: 114ms, application-code: 51ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 398ms (next.js: 131ms, application-code: 267ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 105ms (next.js: 20ms, application-code: 85ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?xliffFileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 48ms (next.js: 20ms, application-code: 28ms)
+ GET /dashboard 200 in 31ms (next.js: 6ms, application-code: 25ms)
+[browser] Encountered two children with the same key, `ado-pr-mine-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-pr-review-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-wi-1811`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /projects 200 in 27ms (next.js: 7ms, application-code: 21ms)
+ GET /customers 200 in 71ms (next.js: 48ms, application-code: 23ms)
+ GET /agents 200 in 61ms (next.js: 38ms, application-code: 23ms)
+ GET /settings 200 in 70ms (next.js: 45ms, application-code: 25ms)
+ GET /projects 200 in 34ms (next.js: 9ms, application-code: 25ms)
+ GET /dashboard 200 in 32ms (next.js: 5ms, application-code: 26ms)
+[browser] Encountered two children with the same key, `ado-pr-mine-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-pr-review-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-wi-1811`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /projects 200 in 26ms (next.js: 6ms, application-code: 20ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 91ms (next.js: 26ms, application-code: 65ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 72ms (next.js: 18ms, application-code: 53ms)
+ GET /dashboard 200 in 25ms (next.js: 5ms, application-code: 20ms)
+[browser] Encountered two children with the same key, `ado-pr-mine-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-pr-review-145`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+[browser] Encountered two children with the same key, `ado-wi-1811`. Keys should be unique so that components maintain their identity across updates. Non-unique keys may cause children to be duplicated and/or omitted — the behavior is unsupported and could change in a future version. 
+ GET /projects 200 in 27ms (next.js: 6ms, application-code: 21ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 78ms (next.js: 19ms, application-code: 59ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 74ms (next.js: 20ms, application-code: 54ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?xliffFileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 42ms (next.js: 17ms, application-code: 25ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?xliffFileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 41ms (next.js: 17ms, application-code: 24ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 44ms (next.js: 16ms, application-code: 28ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 69ms (next.js: 20ms, application-code: 49ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 70ms (next.js: 18ms, application-code: 53ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 75ms (next.js: 19ms, application-code: 55ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 51ms (next.js: 20ms, application-code: 31ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 63ms (next.js: 18ms, application-code: 45ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?xliffFileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 48ms (next.js: 19ms, application-code: 29ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 59ms (next.js: 21ms, application-code: 38ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 73ms (next.js: 18ms, application-code: 55ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 51ms (next.js: 19ms, application-code: 32ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn7kiy50001mzkcz3yi2uju 200 in 54ms (next.js: 20ms, application-code: 34ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 48ms (next.js: 19ms, application-code: 29ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 75ms (next.js: 19ms, application-code: 56ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 57ms (next.js: 20ms, application-code: 37ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn7kiy50001mzkcz3yi2uju 200 in 69ms (next.js: 21ms, application-code: 48ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 60ms (next.js: 20ms, application-code: 40ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpmu0je509y4mz9wdqbgj3a6 200 in 197ms (next.js: 43ms, application-code: 153ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm 200 in 50ms (next.js: 20ms, application-code: 30ms)
+ GET /projects/cmpg15ml80004mzfsc99qg3cm/translations?fileId=cmpn7kiy50001mzkcz3yi2uju 200 in 75ms (next.js: 19ms, application-code: 56ms)

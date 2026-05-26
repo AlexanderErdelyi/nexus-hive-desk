@@ -24,6 +24,25 @@ const BUILDER_OPTIONS = {
 };
 
 // ─── State mapping ────────────────────────────────────────────────────────────
+// NAB AL Tool prefixes that indicate non-final translation states.
+// These appear at the start of <target> text when a BC XLIFF file is processed by NAB AL Tool.
+const NAB_PREFIX_STATES: Array<{ prefix: RegExp; state: TranslationState }> = [
+  { prefix: /^\[NAB:\s*NOT TRANSLATED\]/i,   state: 'needs-translation' },
+  { prefix: /^\[NAB:\s*REVIEW\]/i,           state: 'needs-review-translation' },
+  { prefix: /^\[NAB:\s*SUGGESTION\]/i,       state: 'needs-review-translation' },
+  { prefix: /^\[NAB:\s*[A-Z _]+\]/i,         state: 'needs-review-translation' }, // catch-all for future NAB prefixes
+];
+
+/** Strip any NAB prefix from target text and return the cleaned text + inferred state. */
+function stripNabPrefix(text: string): { cleaned: string; nabState: TranslationState | null } {
+  for (const { prefix, state } of NAB_PREFIX_STATES) {
+    if (prefix.test(text)) {
+      return { cleaned: text.replace(prefix, '').trim(), nabState: state };
+    }
+  }
+  return { cleaned: text, nabState: null };
+}
+
 function normalizeState(raw?: string, targetText?: string, sourceText?: string): TranslationState {
   const map: Record<string, TranslationState> = {
     new: 'new',
@@ -33,6 +52,12 @@ function normalizeState(raw?: string, targetText?: string, sourceText?: string):
     final: 'final',
     'signed-off': 'signed-off',
   };
+
+  // NAB AL Tool prefixes override everything — they are authoritative about the translation state.
+  if (targetText) {
+    const { nabState } = stripNabPrefix(targetText);
+    if (nabState) return nabState;
+  }
 
   // If source == target (both non-empty), treat as translated regardless of explicit state.
   // BC Xliff Generator copies source → target as a placeholder and marks state="needs-translation".
@@ -340,7 +365,8 @@ export function parseXliff(xmlContent: string): ParsedXliff {
 
     const sourceText = getText(unit.source);
     const target = unit.target as Record<string, unknown> | string | undefined;
-    const targetText = getText(unit.target);
+    const rawTargetText = getText(unit.target);
+    const { cleaned: targetText } = stripNabPrefix(rawTargetText ?? '');
     const targetState = typeof target === 'object' && target !== null
       ? String(target['@_state'] ?? '')
       : '';
@@ -369,7 +395,7 @@ export function parseXliff(xmlContent: string): ParsedXliff {
       id,
       source: sourceText,
       target: targetText,
-      state: normalizeState(targetState, targetText, sourceText),
+      state: normalizeState(targetState, rawTargetText, sourceText),
       note,
       developerNote,
     };
