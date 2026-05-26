@@ -117,6 +117,11 @@ function getText(node: unknown): string {
  *   - optional whitespace then `>` or `/>`  (tag ends here)
  * Every other `"` encountered is an embedded (unescaped) quote and is
  * replaced with `&quot;`.
+ *
+ * Guard: only process occurrences that are actually inside an XML opening
+ * tag (the nearest preceding angle-bracket is `<`, not `>`).  This prevents
+ * false matches on patterns like `from="…"` that appear inside element text
+ * content or inside single-quoted attribute values.
  */
 function fixAttrQuotes(xml: string, attrName: string): string {
   const prefix = `${attrName}="`;
@@ -126,6 +131,29 @@ function fixAttrQuotes(xml: string, attrName: string): string {
   while (pos < xml.length) {
     const start = xml.indexOf(prefix, pos);
     if (start === -1) { parts.push(xml.slice(pos)); break; }
+
+    // Verify this occurrence is inside an XML opening tag, not in text content
+    // or inside another attribute value.  Scan backwards for the nearest `<`
+    // or `>` — if we hit `>` first we are outside a tag, so skip.
+    let insideTag = false;
+    for (let k = start - 1; k >= 0; k--) {
+      if (xml[k] === '<') { insideTag = true; break; }
+      if (xml[k] === '>') { insideTag = false; break; }
+    }
+    if (!insideTag) {
+      // Outside a tag — copy up to and past this byte and keep searching.
+      parts.push(xml.slice(pos, start + prefix.length));
+      pos = start + prefix.length;
+      continue;
+    }
+
+    // Also require the character immediately before attrName to be whitespace
+    // or `<`, ensuring it is not part of a longer identifier.
+    if (start > 0 && !/[\s<]/.test(xml[start - 1])) {
+      parts.push(xml.slice(pos, start + 1));
+      pos = start + 1;
+      continue;
+    }
 
     // Copy everything up to and including the opening `attr="`
     parts.push(xml.slice(pos, start + prefix.length));
@@ -169,8 +197,10 @@ function sanitizeXmlAttributeQuotes(xml: string): string {
 
   // Fix 2 — unescaped `"` inside attribute values.
   // BC XLIFF generator sometimes emits AL object/field names without proper &quot; escaping
-  // in trans-unit id and note attrs, and occasionally in <note> element from/annotates attrs.
+  // in trans-unit id/resname/extradata and note attrs, and in <note> element attrs.
   xml = fixAttrQuotes(xml, 'id');
+  xml = fixAttrQuotes(xml, 'resname');
+  xml = fixAttrQuotes(xml, 'extradata');
   xml = fixAttrQuotes(xml, 'note');
   xml = fixAttrQuotes(xml, 'from');
   xml = fixAttrQuotes(xml, 'annotates');
