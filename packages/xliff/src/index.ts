@@ -1,4 +1,4 @@
-import { XMLBuilder, XMLParser, XMLValidator } from 'fast-xml-parser';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { ParsedXliff, TranslationState, XliffUnit } from '@nexus/types';
 
 const PARSER_OPTIONS = {
@@ -15,13 +15,6 @@ const PARSER_OPTIONS = {
   processEntities: true,
 };
 
-const BUILDER_OPTIONS = {
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  format: true,
-  indentBy: '  ',
-  suppressEmptyNode: false,
-};
 
 // ─── State mapping ────────────────────────────────────────────────────────────
 // NAB AL Tool prefixes that indicate non-final translation states.
@@ -405,90 +398,92 @@ export function parseXliff(xmlContent: string): ParsedXliff {
 }
 
 // ─── Serialize XLIFF ──────────────────────────────────────────────────────────
+
+/** Escape special XML characters in text content (not for attribute values). */
+function xmlEscape(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** Escape a string for use inside a RegExp. */
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Serialize an XLIFF file with targeted in-place replacement.
+ *
+ * Instead of parsing and re-building the entire document (which reformats
+ * every element, adding blank lines and normalizing whitespace), we locate
+ * each `<trans-unit>` that needs updating using a regex and replace ONLY its
+ * `<target>` element. Every other byte in the file is preserved exactly.
+ *
+ * This means untouched trans-units are not modified at all — no extra blank
+ * lines, no added state attributes, no changed indentation.
+ */
 export function serializeXliff(
   original: string,
   updates: Map<string, { target: string; state: TranslationState }>
 ): string {
-  const parser = new XMLParser({
-    ...PARSER_OPTIONS,
-    isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),
-    // preserveOrder:false is the default; being explicit here for clarity.
-    preserveOrder: false,
-  });
+  if (updates.size === 0) return original;
 
-  const parsed = parser.parse(original) as { xliff?: { file?: Record<string, unknown>[] | Record<string, unknown> } };
-  const xliff = parsed?.xliff;
-  const files: Record<string, unknown>[] = Array.isArray(xliff?.file)
-    ? xliff.file
-    : xliff?.file
-      ? [xliff.file]
-      : [];
+  let result = original;
 
-  for (const file of files) {
-    const body = file.body as Record<string, unknown> | undefined;
-
-    // Collect units from direct body or group wrapper (BC XLIFF)
-    let units: Record<string, unknown>[] = Array.isArray(body?.['trans-unit'])
-      ? (body['trans-unit'] as Record<string, unknown>[])
-      : body?.['trans-unit']
-        ? [body['trans-unit'] as Record<string, unknown>]
-        : [];
-
-    const groups: Record<string, unknown>[] = body?.group
-      ? (Array.isArray(body.group) ? (body.group as Record<string, unknown>[]) : [body.group as Record<string, unknown>])
-      : [];
-
-    for (const unit of units) {
-      applyTargetUpdate(unit, updates);
-    }
-
-    for (const grp of groups) {
-      const groupUnits: Record<string, unknown>[] = Array.isArray(grp['trans-unit'])
-        ? (grp['trans-unit'] as Record<string, unknown>[])
-        : grp['trans-unit']
-          ? [grp['trans-unit'] as Record<string, unknown>]
-          : [];
-      for (const unit of groupUnits) {
-        applyTargetUpdate(unit, updates);
-      }
-    }
+  for (const [id, update] of updates) {
+    result = patchTransUnit(result, id, update.target, update.state);
   }
 
-  const builder = new XMLBuilder(BUILDER_OPTIONS);
-  return `<?xml version="1.0" encoding="utf-8"?>\n${builder.build(parsed)}`;
+  return result;
 }
 
 /**
- * Apply a target update to a single trans-unit node in the parsed XML tree.
- *
- * Empty-target fix: when the new target text is an empty string the builder
- * must still emit `<target state="…"></target>` (not the self-closed form
- * `<target state="…"/>`).  fast-xml-parser's XMLBuilder respects
- * `suppressEmptyNode: false` only when the node has an explicit `#text` key.
- * We therefore always set `#text` — using a zero-width non-breaking space as
- * a placeholder that looks empty when rendered, then strip it after building
- * so the final XML truly has `<target …></target>`.
- *
- * Special characters: the builder will XML-encode `&`, `<`, `>` etc. in the
- * target text string, so callers must pass the *decoded* plain-text value
- * (e.g. "A & B"), not pre-encoded XML entities (e.g. "A &amp; B").
+ * Find the `<trans-unit id="...">` block for the given id and replace (or
+ * insert) its `<target>` element in-place, preserving all surrounding content.
  */
-function applyTargetUpdate(
-  unit: Record<string, unknown>,
-  updates: Map<string, { target: string; state: TranslationState }>
-): void {
-  const id = String(unit['@_id'] ?? '');
-  const update = updates.get(id);
-  if (!update) return;
+function patchTransUnit(
+  xml: string,
+  unitId: string,
+  targetText: string,
+  state: TranslationState,
+): string {
+  const escapedId = escapeRegExp(unitId);
 
-  const existingTarget = unit.target;
-  if (typeof existingTarget === 'object' && existingTarget !== null) {
-    (existingTarget as Record<string, unknown>)['#text'] = update.target;
-    (existingTarget as Record<string, unknown>)['@_state'] = update.state;
-  } else {
-    unit.target = { '#text': update.target, '@_state': update.state };
-  }
+  // Match the full <trans-unit id="..."> ... </trans-unit> block.
+  // id may be in double or single quotes.
+  const unitRegex = new RegExp(
+    `(<trans-unit[^>]*?\\bid=["']${escapedId}["'][^>]*>[\\s\\S]*?)<\\/trans-unit>`,
+  );
+
+  return xml.replace(unitRegex, (match, unitBody) => {
+    // Detect the indentation used by <source> or <target> inside this block
+    const indentMatch = match.match(/^([ \t]*)<(?:source|target)/m);
+    const indent = indentMatch ? indentMatch[1] : '        ';
+
+    const newTargetXml = `<target state="${state}">${xmlEscape(targetText)}</target>`;
+
+    // Case 1: existing <target ...>...</target> (possibly multi-line)
+    if (/<target[\s\S]*?<\/target>/.test(unitBody)) {
+      const patched = match.replace(/<target[\s\S]*?<\/target>/, newTargetXml);
+      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
+    }
+
+    // Case 2: self-closing <target/>
+    if (/<target\s*\/>/.test(unitBody)) {
+      const patched = match.replace(/<target\s*\/>/, newTargetXml);
+      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
+    }
+
+    // Case 3: no <target> at all — insert it after </source>
+    const inserted = match.replace(
+      /(<\/source>[^\n]*\n)/,
+      `$1${indent}${newTargetXml}\n`,
+    );
+    return inserted.replace(/<\/trans-unit>$/, '</trans-unit>');
+  });
 }
+
 
 // ─── Filter helpers ───────────────────────────────────────────────────────────
 export function filterUnits(
