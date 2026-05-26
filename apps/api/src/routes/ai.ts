@@ -4,7 +4,7 @@ import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../lib/auth';
 
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 60;
 const REVIEW_BATCH_SIZE = 10;
 
 // Track active bulk translate jobs to prevent duplicate concurrent translations

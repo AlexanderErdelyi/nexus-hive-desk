@@ -323,7 +323,7 @@ export class GitHubModelsProvider implements AIProvider {
 
   constructor(opts: { token: string; model?: string }) {
     this.token = opts.token;
-    this.model = opts.model ?? 'gpt-4o';
+    this.model = opts.model ?? 'gpt-4o-mini';
   }
 
   async translate(request: AITranslateRequest): Promise<AITranslateResponse> {
