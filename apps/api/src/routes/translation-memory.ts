@@ -51,7 +51,7 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'sources, sourceLanguage and targetLanguage are required' });
     }
 
-    // Fetch all TM entries for this language pair (project-scoped + global)
+    // Fetch TM entries for this language pair (project-scoped + global), capped at 5000 most-used
     const entries = await prisma.translationMemory.findMany({
       where: {
         sourceLanguage,
@@ -60,6 +60,8 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
           ? { OR: [{ projectId }, { projectId: null }] }
           : { projectId: null }),
       },
+      orderBy: { usageCount: 'desc' },
+      take: 5000,
     });
 
     const results: Record<string, Array<{ target: string; score: number; usageCount: number; sourceText: string; projectId: string | null }>> = {};
@@ -69,6 +71,10 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       const candidates: Candidate[] = [];
 
       for (const entry of entries) {
+        // Length-ratio pre-filter: skip if lengths differ by more than 40%
+        const maxLen = Math.max(source.length, entry.source.length);
+        if (maxLen > 0 && Math.abs(source.length - entry.source.length) / maxLen > 0.4) continue;
+
         const score = similarity(source, entry.source);
         if (score >= FUZZY_THRESHOLD) {
           // Merge into existing candidate with same target (keep best score + combined usageCount)
