@@ -407,21 +407,16 @@ function xmlEscape(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-/** Escape a string for use inside a RegExp. */
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
  * Serialize an XLIFF file with targeted in-place replacement.
  *
- * Instead of parsing and re-building the entire document (which reformats
- * every element, adding blank lines and normalizing whitespace), we locate
- * each `<trans-unit>` that needs updating using a regex and replace ONLY its
- * `<target>` element. Every other byte in the file is preserved exactly.
+ * Single-pass O(n) implementation: split the XML at `<trans-unit` boundaries
+ * once, look up each unit id in the updates map, patch only those that need it,
+ * then reassemble. This avoids the O(updates × xmlSize) cost of per-unit
+ * full-string regex scans.
  *
- * This means untouched trans-units are not modified at all — no extra blank
- * lines, no added state attributes, no changed indentation.
+ * Untouched trans-units are emitted exactly as-is — no reformatting, no added
+ * state attributes, no indentation changes.
  */
 export function serializeXliff(
   original: string,
@@ -429,64 +424,48 @@ export function serializeXliff(
 ): string {
   if (updates.size === 0) return original;
 
-  let result = original;
+  // Split on every <trans-unit opening tag. The first segment is the XML
+  // preamble before any trans-unit element.
+  const segments = original.split(/(?=<trans-unit[\s>])/);
 
-  for (const [id, update] of updates) {
-    result = patchTransUnit(result, id, update.target, update.state);
+  // Extract the id attribute from the opening <trans-unit ...> tag
+  const ID_RE = /^<trans-unit[^>]*?\bid=["']([^"']+)["']/;
+
+  const out: string[] = [];
+  for (const seg of segments) {
+    const idMatch = seg.match(ID_RE);
+    if (!idMatch) {
+      out.push(seg);
+      continue;
+    }
+    const update = updates.get(idMatch[1]);
+    out.push(update ? applyTargetPatch(seg, update.target) : seg);
   }
 
-  return result;
+  return out.join('');
 }
 
 /**
- * Find the `<trans-unit id="...">` block for the given id and replace (or
- * insert) its `<target>` element in-place, preserving all surrounding content.
- *
- * The `<target>` element is written without a state attribute — the file is
- * kept as clean as possible. Nexus infers state from the text content on
- * re-import (non-empty target → translated).
+ * Replace (or insert) the `<target>` element inside a single `<trans-unit>` block.
+ * Only the `<target>` portion is touched; everything else is preserved exactly.
  */
-function patchTransUnit(
-  xml: string,
-  unitId: string,
-  targetText: string,
-  _state: TranslationState,
-): string {
-  const escapedId = escapeRegExp(unitId);
+function applyTargetPatch(block: string, targetText: string): string {
+  const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
 
-  // Match the full <trans-unit id="..."> ... </trans-unit> block.
-  // id may be in double or single quotes.
-  const unitRegex = new RegExp(
-    `(<trans-unit[^>]*?\\bid=["']${escapedId}["'][^>]*>[\\s\\S]*?)<\\/trans-unit>`,
-  );
+  // Case 1: existing <target ...>...</target> (possibly multi-line)
+  if (/<target[\s\S]*?<\/target>/.test(block)) {
+    return block.replace(/<target[\s\S]*?<\/target>/, newTargetXml);
+  }
 
-  return xml.replace(unitRegex, (match, unitBody) => {
-    // Detect the indentation used by <source> or <target> inside this block
-    const indentMatch = match.match(/^([ \t]*)<(?:source|target)/m);
-    const indent = indentMatch ? indentMatch[1] : '        ';
+  // Case 2: self-closing <target/>
+  if (/<target\s*\/>/.test(block)) {
+    return block.replace(/<target\s*\/>/, newTargetXml);
+  }
 
-    // Write <target> without a state attribute — keep the file clean
-    const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
-
-    // Case 1: existing <target ...>...</target> (possibly multi-line)
-    if (/<target[\s\S]*?<\/target>/.test(unitBody)) {
-      const patched = match.replace(/<target[\s\S]*?<\/target>/, newTargetXml);
-      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
-    }
-
-    // Case 2: self-closing <target/>
-    if (/<target\s*\/>/.test(unitBody)) {
-      const patched = match.replace(/<target\s*\/>/, newTargetXml);
-      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
-    }
-
-    // Case 3: no <target> at all — insert it after </source>
-    const inserted = match.replace(
-      /(<\/source>[^\n]*\n)/,
-      `$1${indent}${newTargetXml}\n`,
-    );
-    return inserted.replace(/<\/trans-unit>$/, '</trans-unit>');
-  });
+  // Case 3: no <target> at all — insert after </source>
+  const indentMatch = block.match(/^([ \t]*)<(?:source|target)/m);
+  const indent = indentMatch ? indentMatch[1] : '        ';
+  return block.replace(/(<\/source>[^\n]*\n)/, `$1${indent}${newTargetXml}\n`);
 }
 
 
