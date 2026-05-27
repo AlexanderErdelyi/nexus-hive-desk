@@ -52,6 +52,14 @@ Rules:
   return { systemPrompt, userPrompt };
 }
 
+const AI_TIMEOUT_MS = 60_000;
+
+function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = AI_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 async function translateWithEndpoint(options: {
   baseURL: string;
   apiKey: string;
@@ -59,11 +67,7 @@ async function translateWithEndpoint(options: {
   request: AITranslateRequest;
 }) {
   const { systemPrompt, userPrompt } = buildPrompts(options.request);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
+  const response = await fetchWithTimeout(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${options.apiKey}`,
@@ -78,23 +82,14 @@ async function translateWithEndpoint(options: {
       temperature: 0.2,
       response_format: { type: 'json_object' },
     }),
-      signal: controller.signal,
-    });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('AI provider request timed out after 60 seconds');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('retry-after');
-    throw new Error(`AI provider rate limit exceeded (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`);
-  }
   if (!response.ok) {
     const err = await response.text();
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after');
+      throw new Error(`AI rate limit reached. ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait a moment and try again.'}`);
+    }
     throw new Error(`AI provider error ${response.status}: ${err}`);
   }
 
@@ -175,11 +170,7 @@ Return ONLY a JSON object:
     }))
   )}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
+  const response = await fetchWithTimeout(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${options.apiKey}`,
@@ -194,23 +185,14 @@ Return ONLY a JSON object:
       temperature: 0.1,
       response_format: { type: 'json_object' },
     }),
-    signal: controller.signal,
-    });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('AI provider request timed out after 60 seconds');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('retry-after');
-    throw new Error(`AI provider rate limit exceeded (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`);
-  }
   if (!response.ok) {
     const err = await response.text();
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after');
+      throw new Error(`AI rate limit reached. ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait a moment and try again.'}`);
+    }
     throw new Error(`AI provider error ${response.status}: ${err}`);
   }
 
@@ -275,11 +257,7 @@ Return 10-30 of the most important terms. Prefer high-confidence BC-specific one
     }))
   )}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
+  const response = await fetchWithTimeout(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -291,21 +269,8 @@ Return 10-30 of the most important terms. Prefer high-confidence BC-specific one
       temperature: 0.2,
       response_format: { type: 'json_object' },
     }),
-    signal: controller.signal,
-    });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('AI provider request timed out after 60 seconds');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('retry-after');
-    throw new Error(`AI provider rate limit exceeded (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`);
-  }
   if (!response.ok) throw new Error(`AI provider error ${response.status}: ${await response.text()}`);
   const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const content = data.choices?.[0]?.message?.content ?? '{}';
@@ -343,11 +308,7 @@ Return ONLY a JSON object:
 
   const userPrompt = `Generate glossary entries for:\n${request.prompt}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  let response: Response;
-  try {
-    response = await fetch(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
+  const response = await fetchWithTimeout(`${options.baseURL.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${options.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -359,21 +320,8 @@ Return ONLY a JSON object:
       temperature: 0.3,
       response_format: { type: 'json_object' },
     }),
-    signal: controller.signal,
-    });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('AI provider request timed out after 60 seconds');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('retry-after');
-    throw new Error(`AI provider rate limit exceeded (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`);
-  }
   if (!response.ok) throw new Error(`AI provider error ${response.status}: ${await response.text()}`);
   const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const content = data.choices?.[0]?.message?.content ?? '{}';
@@ -391,7 +339,7 @@ export class GitHubModelsProvider implements AIProvider {
 
   constructor(opts: { token: string; model?: string }) {
     this.token = opts.token;
-    this.model = opts.model ?? 'gpt-4o';
+    this.model = opts.model ?? 'gpt-4o-mini';
   }
 
   async translate(request: AITranslateRequest): Promise<AITranslateResponse> {

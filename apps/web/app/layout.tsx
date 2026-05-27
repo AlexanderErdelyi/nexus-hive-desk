@@ -6,6 +6,7 @@ import { Providers } from './providers';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { GuidedTour } from '@/components/tour/GuidedTour';
 import { AppNav } from '@/components/shared/AppNav';
+import { BulkTranslateBar } from '@/components/shared/BulkTranslateBar';
 import { KeyboardShortcutsProvider } from '@/components/shared/KeyboardShortcutsProvider';
 import { OfflineBanner } from '@/components/shared/OfflineBanner';
 
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </main>
             <GuidedTour />
             <OfflineBanner />
+            <BulkTranslateBar />
           </div>
           </KeyboardShortcutsProvider>
         </Providers>

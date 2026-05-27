@@ -235,23 +235,35 @@ export async function remoteRoutes(app: FastifyInstance) {
         const baseUrl = conn.baseUrl?.replace(/\/$/, '') ?? '';
         const { branch, path: filePath } = req.query;
 
-        // download=true bypasses ADO's inline size limit for large XLIFF files
-        let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&download=true&api-version=7.1`;
-        if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
+        // Step 1: Fetch metadata to get the blob objectId (SHA-1).
+        // The items endpoint with $format=json&includeContent=false returns metadata only
+        // and does not have the ~5 MB inline content size limit.
+        let metaUrl = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&includeContent=false&$format=json&api-version=7.1`;
+        if (branch) metaUrl += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
 
-        // Get as text ÔÇö omit Content-Type on GET so ADO returns raw file bytes
-        const res = await fetch(url, { headers: { Authorization: azureHeaders(conn.pat).Authorization } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const content = await res.text();
-
-        // Get objectId for commits
         let objectId: string | undefined;
         try {
-          const metaUrl = url + '&includeContent=false&$format=json';
           const meta = await fetchJson(metaUrl, azureHeaders(conn.pat));
           objectId = meta.objectId;
         } catch {
-          // objectId is optional
+          // objectId unavailable — fall back to items download
+        }
+
+        let content: string;
+        if (objectId) {
+          // Step 2: Download via the Blobs endpoint which has no size limit.
+          // The items endpoint truncates responses at ~5 MB, causing large XLIFF files to be incomplete.
+          const blobUrl = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/blobs/${objectId}?$format=text&api-version=7.1`;
+          const blobRes = await fetch(blobUrl, { headers: { Authorization: azureHeaders(conn.pat).Authorization } });
+          if (!blobRes.ok) throw new Error(`HTTP ${blobRes.status}`);
+          content = await blobRes.text();
+        } else {
+          // Fallback: use items endpoint (may truncate files > ~5 MB)
+          let url = `${baseUrl}/${encodeURIComponent(req.params.project)}/_apis/git/repositories/${encodeURIComponent(req.params.repoId)}/items?path=${encodeURIComponent(filePath)}&$format=text&download=true&api-version=7.1`;
+          if (branch) url += `&versionDescriptor.version=${encodeURIComponent(branch)}&versionDescriptor.versionType=branch`;
+          const res = await fetch(url, { headers: { Authorization: azureHeaders(conn.pat).Authorization } });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          content = await res.text();
         }
 
         return { data: { path: filePath, content, objectId } };
@@ -1446,7 +1458,7 @@ export async function remoteRoutes(app: FastifyInstance) {
         const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
         const xliffUpdates = new Map(
           translations
-            .filter((t) => t.target !== '')
+            .filter((t) => t.target)
             .map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
         );
         const content = serializeXliff(file.originalXml, xliffUpdates);
@@ -1569,7 +1581,7 @@ export async function remoteRoutes(app: FastifyInstance) {
         const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
         const xliffUpdates = new Map(
           translations
-            .filter((t) => t.target !== '')
+            .filter((t) => t.target)
             .map((t) => [t.unitId, { target: t.target, state: t.state as TranslationState }])
         );
         const content = serializeXliff(file.originalXml, xliffUpdates);

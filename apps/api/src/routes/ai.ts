@@ -4,8 +4,11 @@ import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../lib/auth';
 
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 60;
 const REVIEW_BATCH_SIZE = 10;
+
+// Track active bulk translate jobs to prevent duplicate concurrent translations
+const activeTranslations = new Set<string>();
 
 async function translateTranslations(options: {
   translationIds: string[];
@@ -22,14 +25,22 @@ async function translateTranslations(options: {
   const translations = await prisma.translation.findMany({
     where: { id: { in: translationIds } },
     orderBy: { unitId: 'asc' },
+    select: { id: true, source: true, xliffFileId: true },
   });
   if (!translations.length) return { suggestions: [], translated: 0 };
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new Error('Project not found');
 
+  // Use the XLIFF file's language pair when available (takes priority over project defaults)
+  const xliffFile = translations[0].xliffFileId
+    ? await prisma.xliffFile.findUnique({ where: { id: translations[0].xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })
+    : null;
+  const sourceLang = xliffFile?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+  const targetLang = xliffFile?.targetLanguage ?? project.targetLanguage ?? 'de';
+
   const glossaryEntries = await prisma.glossaryEntry.findMany({
-    where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+    where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
   });
   const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -45,8 +56,8 @@ async function translateTranslations(options: {
     const batch = translations.slice(i, i + BATCH_SIZE);
     const response = await provider.translate({
       units: batch.map((t) => ({ id: t.id, source: t.source })),
-      sourceLanguage: project.sourceLanguage ?? 'en',
-      targetLanguage: project.targetLanguage ?? 'de',
+      sourceLanguage: sourceLang,
+      targetLanguage: targetLang,
       glossary,
     });
     allResults.push(...response.results.map((r) => ({ id: r.id, suggestedTarget: r.translatedText })));
@@ -126,11 +137,12 @@ export async function aiRoutes(app: FastifyInstance) {
       projectId: string;
       xliffFileId?: string;
       translationIds?: string[];
+      limit?: number;
       provider?: AIProviderType;
       model?: string;
     };
   }>('/translate-stream', async (req, reply) => {
-    const { projectId, xliffFileId, translationIds, provider, model } = req.body;
+    const { projectId, xliffFileId, translationIds, limit, provider, model } = req.body;
     if (!projectId) {
       return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
     }
@@ -138,37 +150,54 @@ export async function aiRoutes(app: FastifyInstance) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
 
-    // Resolve the list of IDs to translate
-    let ids: string[];
+    // Prevent duplicate concurrent bulk translations for the same file
+    const lockKey = xliffFileId ?? translationIds?.join(',') ?? projectId;
+    if (activeTranslations.has(lockKey)) {
+      return reply.status(409).send({ error: 'conflict', message: 'Bulk translation already in progress for this file. Please wait for it to finish.' });
+    }
+
+    // Build translation where-clause directly (avoid huge IN clause for xliffFileId path)
+    type TranslationWhere =
+      | { id: { in: string[] } }
+      | { xliffFileId: string; OR: Array<{ state: string } | { target: string }> };
+
+    let where: TranslationWhere;
     if (translationIds?.length) {
-      ids = translationIds;
+      where = { id: { in: translationIds } };
     } else if (xliffFileId) {
-      const rows = await prisma.translation.findMany({
-        where: { xliffFileId, OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }] },
-        select: { id: true },
-        orderBy: { unitId: 'asc' },
-      });
-      ids = rows.map((r) => r.id);
+      where = { xliffFileId, OR: [{ state: 'new' }, { state: 'needs-translation' }, { target: '' }] };
     } else {
       return reply.status(400).send({ error: 'validation', message: 'xliffFileId or translationIds required' });
     }
 
-    if (!ids.length) {
+    // Fetch translations + language info in parallel
+    const clampedLimit = limit && limit > 0 ? limit : undefined;
+    const [translations, project, xliffFileRecord] = await Promise.all([
+      prisma.translation.findMany({ where, orderBy: { unitId: 'asc' }, select: { id: true, source: true }, ...(clampedLimit ? { take: clampedLimit } : {}) }),
+      prisma.project.findUnique({ where: { id: projectId } }),
+      xliffFileId
+        ? prisma.xliffFile.findUnique({ where: { id: xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })
+        : translationIds?.length
+          ? prisma.translation.findFirst({ where: { id: { in: translationIds.slice(0, 1) } }, select: { xliffFileId: true } })
+              .then(t => t?.xliffFileId ? prisma.xliffFile.findUnique({ where: { id: t.xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } }) : null)
+          : Promise.resolve(null),
+    ]);
+
+    if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
+
+    if (!translations.length) {
       reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       reply.raw.write(`data: ${JSON.stringify({ type: 'complete', done: 0, total: 0 })}\n\n`);
       reply.raw.end();
       return;
     }
 
-    const translations = await prisma.translation.findMany({
-      where: { id: { in: ids } },
-      orderBy: { unitId: 'asc' },
-    });
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
+    // Use the XLIFF file's language pair when available (takes priority over project defaults)
+    const sourceLang = (xliffFileRecord as { sourceLanguage?: string } | null)?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+    const targetLang = (xliffFileRecord as { targetLanguage?: string } | null)?.targetLanguage ?? project.targetLanguage ?? 'de';
 
     const glossaryEntries = await prisma.glossaryEntry.findMany({
-      where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+      where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
     });
     const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -182,16 +211,36 @@ export async function aiRoutes(app: FastifyInstance) {
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     reply.raw.write(`data: ${JSON.stringify({ type: 'start', total })}\n\n`);
 
+    activeTranslations.add(lockKey);
     let done = 0;
     try {
       for (let i = 0; i < translations.length; i += BATCH_SIZE) {
         const batch = translations.slice(i, i + BATCH_SIZE);
-        const response = await providerInstance.translate({
-          units: batch.map((t) => ({ id: t.id, source: t.source })),
-          sourceLanguage: project.sourceLanguage ?? 'en',
-          targetLanguage: project.targetLanguage ?? 'de',
-          glossary,
-        });
+        let response;
+        // Retry up to 3 times on 429 rate limit
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            response = await providerInstance.translate({
+              units: batch.map((t) => ({ id: t.id, source: t.source })),
+              sourceLanguage: sourceLang,
+              targetLanguage: targetLang,
+              glossary,
+            });
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('429') && attempt < 2) {
+              // Parse retry-after if present, default to 30s
+              const retryAfterMatch = msg.match(/"retry_after"\s*:\s*(\d+)/);
+              const waitMs = retryAfterMatch ? parseInt(retryAfterMatch[1]) * 1000 : 30_000;
+              reply.raw.write(`data: ${JSON.stringify({ type: 'retry', waitMs, attempt: attempt + 1 })}\n\n`);
+              await new Promise((res) => setTimeout(res, waitMs));
+            } else {
+              throw err;
+            }
+          }
+        }
+        if (!response) break;
         done += batch.length;
         const results = response.results.map((r) => ({
           id: r.id,
@@ -205,6 +254,8 @@ export async function aiRoutes(app: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       reply.raw.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`);
+    } finally {
+      activeTranslations.delete(lockKey);
     }
     reply.raw.end();
   });
@@ -230,12 +281,20 @@ export async function aiRoutes(app: FastifyInstance) {
       const translations = await prisma.translation.findMany({
         where: { id: { in: translationIds } },
         orderBy: { unitId: 'asc' },
+        select: { id: true, source: true, target: true, note: true, xliffFileId: true },
       });
       const project = await prisma.project.findUnique({ where: { id: projectId } });
       if (!project) return reply.status(404).send({ error: 'not_found', message: 'Project not found' });
 
+      // Use the XLIFF file's language pair when available (takes priority over project defaults)
+      const xliffFile = translations[0]?.xliffFileId
+        ? await prisma.xliffFile.findUnique({ where: { id: translations[0].xliffFileId }, select: { sourceLanguage: true, targetLanguage: true } })
+        : null;
+      const sourceLang = xliffFile?.sourceLanguage ?? project.sourceLanguage ?? 'en';
+      const targetLang = xliffFile?.targetLanguage ?? project.targetLanguage ?? 'de';
+
       const glossaryEntries = await prisma.glossaryEntry.findMany({
-        where: { projectId, sourceLanguage: project.sourceLanguage ?? undefined, targetLanguage: project.targetLanguage ?? undefined },
+        where: { projectId, sourceLanguage: sourceLang, targetLanguage: targetLang },
       });
       const glossary = glossaryEntries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
 
@@ -255,8 +314,8 @@ export async function aiRoutes(app: FastifyInstance) {
             target: t.target,
             context: t.note ?? undefined,
           })),
-          sourceLanguage: project.sourceLanguage ?? 'en',
-          targetLanguage: project.targetLanguage ?? 'de',
+          sourceLanguage: sourceLang,
+          targetLanguage: targetLang,
           glossary,
           additionalContext,
         });
@@ -493,6 +552,114 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
       const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
       const parsed = JSON.parse(content) as { suggestions?: unknown[]; summary?: string };
       return { data: { suggestions: parsed.suggestions ?? [], summary: parsed.summary ?? '' } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.status(500).send({ error: 'ai_error', message });
+    }
+  });
+
+  // ─── Dashboard AI insights ──────────────────────────────────────────────────
+  app.post<{
+    Body: {
+      projects: Array<{
+        name: string;
+        capabilities: string;
+        openPrs: number;
+        translationPct: number | null;
+        alReviewed: number;
+        recentActivity: number;
+      }>;
+      /** DevOps events from connected repos (PRs, work items) */
+      devopsEvents?: Array<{
+        type: string;
+        projectName: string;
+        label: string;
+        detail: string | null;
+      }>;
+    };
+  }>('/dashboard-insights', async (req, reply) => {
+    const { projects, devopsEvents } = req.body;
+    if (!projects?.length) return reply.status(400).send({ error: 'validation', message: 'projects is required' });
+
+    const token = process.env.GITHUB_TOKEN;
+    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+
+    const projectSummary = projects.map((p) => {
+      const parts = [`Project "${p.name}":`];
+      if (p.openPrs > 0) parts.push(`${p.openPrs} open PR${p.openPrs !== 1 ? 's' : ''} awaiting review`);
+      if (p.translationPct !== null) parts.push(`translation ${p.translationPct}% complete`);
+      if (p.alReviewed > 0) parts.push(`${p.alReviewed} AL health issues reviewed`);
+      if (p.recentActivity > 0) parts.push(`${p.recentActivity} recent change${p.recentActivity !== 1 ? 's' : ''} in last 7 days`);
+      const caps = p.capabilities.split(',').map((c) => c.trim()).filter(Boolean);
+      parts.push(`capabilities: ${caps.join(', ')}`);
+      return parts.join(', ');
+    }).join('\n');
+
+    // Build devops context section
+    let devopsSection = '';
+    if (devopsEvents && devopsEvents.length > 0) {
+      const reviewRequested = devopsEvents.filter((e) => e.type === 'pr_review_requested');
+      const myPrs = devopsEvents.filter((e) => e.type === 'pr_created');
+      const approvedPrs = devopsEvents.filter((e) => e.type === 'pr_approved');
+      const rejectedPrs = devopsEvents.filter((e) => e.type === 'pr_rejected');
+      const workItems = devopsEvents.filter((e) => e.type === 'work_item_assigned');
+      const issues = devopsEvents.filter((e) => e.type === 'issue_assigned');
+
+      const lines: string[] = ['\nDevOps activity for the current user:'];
+      if (reviewRequested.length) lines.push(`- ${reviewRequested.length} PR(s) waiting for my review: ${reviewRequested.slice(0, 3).map((e) => `"${e.label}"`).join(', ')}`);
+      if (myPrs.length) lines.push(`- ${myPrs.length} of my PR(s) are open and awaiting merge`);
+      if (approvedPrs.length) lines.push(`- ${approvedPrs.length} of my PR(s) were approved — ready to merge`);
+      if (rejectedPrs.length) lines.push(`- ${rejectedPrs.length} of my PR(s) were rejected — need attention`);
+      if (workItems.length) lines.push(`- ${workItems.length} work item(s) assigned to me recently changed: ${workItems.slice(0, 3).map((e) => `"${e.label}" (${e.detail ?? ''})`).join(', ')}`);
+      if (issues.length) lines.push(`- ${issues.length} GitHub issue(s) assigned to me`);
+      devopsSection = lines.join('\n');
+    }
+
+    const prompt = `You are a software project manager assistant. Based on the following project status and DevOps activity, provide 3-5 prioritized action items for today.
+
+${projectSummary}
+${devopsSection}
+
+Return a JSON object:
+{
+  "insights": [
+    {
+      "priority": "high" | "medium" | "low",
+      "projectName": "exact project name or null if cross-project",
+      "action": "short imperative sentence (max 12 words)",
+      "reason": "1 sentence explaining why this matters now"
+    }
+  ],
+  "summary": "1 sentence overall status assessment"
+}
+
+Prioritize: PRs waiting for my review (high urgency), rejected PRs (high), approved PRs ready to merge (medium), assigned work items, translations below 70%, stale work. Order by urgency.`;
+
+    try {
+      const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.AI_MODEL ?? 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'You are a project management assistant. Respond only with valid JSON.' },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.4,
+          response_format: { type: 'json_object' },
+          max_tokens: 800,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => response.statusText);
+        return reply.status(502).send({ error: 'ai_error', message: `AI API error: ${text}` });
+      }
+
+      const aiResponse = await response.json() as { choices: Array<{ message: { content: string } }> };
+      const content = aiResponse.choices?.[0]?.message?.content ?? '{}';
+      const parsed = JSON.parse(content) as { insights?: unknown[]; summary?: string };
+      return { data: { insights: parsed.insights ?? [], summary: parsed.summary ?? '' } };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return reply.status(500).send({ error: 'ai_error', message });

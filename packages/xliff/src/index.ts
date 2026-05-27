@@ -1,4 +1,4 @@
-import { XMLBuilder, XMLParser, XMLValidator } from 'fast-xml-parser';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { ParsedXliff, TranslationState, XliffUnit } from '@nexus/types';
 
 const PARSER_OPTIONS = {
@@ -15,15 +15,27 @@ const PARSER_OPTIONS = {
   processEntities: true,
 };
 
-const BUILDER_OPTIONS = {
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  format: true,
-  indentBy: '  ',
-  suppressEmptyNode: false,
-};
 
 // ─── State mapping ────────────────────────────────────────────────────────────
+// NAB AL Tool prefixes that indicate non-final translation states.
+// These appear at the start of <target> text when a BC XLIFF file is processed by NAB AL Tool.
+const NAB_PREFIX_STATES: Array<{ prefix: RegExp; state: TranslationState }> = [
+  { prefix: /^\[NAB:\s*NOT TRANSLATED\]/i,   state: 'needs-translation' },
+  { prefix: /^\[NAB:\s*REVIEW\]/i,           state: 'needs-review-translation' },
+  { prefix: /^\[NAB:\s*SUGGESTION\]/i,       state: 'needs-review-translation' },
+  { prefix: /^\[NAB:\s*[A-Z _]+\]/i,         state: 'needs-review-translation' }, // catch-all for future NAB prefixes
+];
+
+/** Strip any NAB prefix from target text and return the cleaned text + inferred state. */
+function stripNabPrefix(text: string): { cleaned: string; nabState: TranslationState | null } {
+  for (const { prefix, state } of NAB_PREFIX_STATES) {
+    if (prefix.test(text)) {
+      return { cleaned: text.replace(prefix, '').trim(), nabState: state };
+    }
+  }
+  return { cleaned: text, nabState: null };
+}
+
 function normalizeState(raw?: string, targetText?: string, sourceText?: string): TranslationState {
   const map: Record<string, TranslationState> = {
     new: 'new',
@@ -33,6 +45,12 @@ function normalizeState(raw?: string, targetText?: string, sourceText?: string):
     final: 'final',
     'signed-off': 'signed-off',
   };
+
+  // NAB AL Tool prefixes override everything — they are authoritative about the translation state.
+  if (targetText) {
+    const { nabState } = stripNabPrefix(targetText);
+    if (nabState) return nabState;
+  }
 
   // If source == target (both non-empty), treat as translated regardless of explicit state.
   // BC Xliff Generator copies source → target as a placeholder and marks state="needs-translation".
@@ -103,79 +121,158 @@ function getText(node: unknown): string {
 // ─── XML pre-processor ────────────────────────────────────────────────────────
 // BC Xliff Generator can produce malformed XML in several ways:
 //  1. AL object/field names with double-quote chars end up unescaped in
-//     trans-unit id and note attribute values (e.g. note="Table "Cust." ...")
+//     trans-unit id and note attribute values (e.g. id="Table "Cust." ...")
 //  2. Duplicate <?xml?> processing instructions at the top of the file
 // Both issues are fixed here before handing the content to fast-xml-parser.
 
 /**
- * Fix unescaped double-quotes inside the value of a named XML attribute.
+ * Single-pass XML pre-processor that escapes unescaped double-quotes inside
+ * attribute values of opening tags.
  *
- * Strategy: scan character-by-character after the opening `attr="`.
- * A `"` is treated as the TRUE closing delimiter only when the very next
- * characters match one of:
- *   - whitespace then a XML name-start char (next attribute follows)
- *   - optional whitespace then `>` or `/>`  (tag ends here)
- * Every other `"` encountered is an embedded (unescaped) quote and is
- * replaced with `&quot;`.
+ * Operates as a lightweight state machine:
+ *   TEXT → enters tag on '<'
+ *   TAG  → copies tag name and whitespace/attribute-names/= as-is;
+ *          on '"' enters ATTR_VALUE, on '>' or '/>' returns to TEXT
+ *   ATTR_VALUE → accumulates chars; on '"' uses the same closing-quote
+ *                heuristic (next attr or end-of-tag follows) to decide if
+ *                this is the real closing delimiter; otherwise treats it as
+ *                an embedded quote and replaces with &quot;
+ *
+ * Processing in a single pass eliminates the risk of one per-attribute pass
+ * corrupting the output consumed by a subsequent pass.
  */
-function fixAttrQuotes(xml: string, attrName: string): string {
-  const prefix = `${attrName}="`;
-  const parts: string[] = [];
-  let pos = 0;
+function fixAllUnescapedAttrQuotes(xml: string): string {
+  const out: string[] = [];
+  let i = 0;
 
-  while (pos < xml.length) {
-    const start = xml.indexOf(prefix, pos);
-    if (start === -1) { parts.push(xml.slice(pos)); break; }
+  while (i < xml.length) {
+    // ── TEXT content ── copy until next '<'
+    const ltPos = xml.indexOf('<', i);
+    if (ltPos === -1) { out.push(xml.slice(i)); break; }
+    out.push(xml.slice(i, ltPos));
+    i = ltPos; // i points at '<'
 
-    // Copy everything up to and including the opening `attr="`
-    parts.push(xml.slice(pos, start + prefix.length));
-    let i = start + prefix.length;
-    let value = '';
+    const next = i + 1 < xml.length ? xml[i + 1] : '';
 
-    while (i < xml.length) {
-      const ch = xml[i];
-      if (ch !== '"') { value += ch; i++; continue; }
+    // ── Closing tag, comment/CDATA/DOCTYPE, or processing instruction ──
+    // Copy character-by-character until '>' (simple but safe for XLIFF).
+    if (next === '/' || next === '!' || next === '?') {
+      const gtPos = xml.indexOf('>', i);
+      if (gtPos === -1) { out.push(xml.slice(i)); i = xml.length; break; }
+      out.push(xml.slice(i, gtPos + 1));
+      i = gtPos + 1;
+      continue;
+    }
 
-      // Is this the TRUE closing quote?
-      // A closing quote must be followed by:
-      //   - a next XML attribute (whitespace, an XML name-start char, then '=')
-      //   - or the end of the opening tag (optional whitespace, then '>' or '/>')
-      // Crucially we require '=' after the attribute name — otherwise "word word"
-      // inside an attribute value would be misidentified as a next attribute.
-      const after = xml.slice(i + 1);
-      const isEnd =
-        /^\s+[a-zA-Z_:][a-zA-Z0-9_:.\-]*\s*=/.test(after) || // next attr (requires '=')
-        /^\s*\/?>/.test(after);            // end of tag: />  or  >  (with optional space)
-
-      if (isEnd) {
-        parts.push(value.replace(/"/g, '&quot;'), '"');
-        pos = i + 1;
-        break;
-      }
-      value += '"';
+    // ── Opening tag ── copy '<' and tag name
+    out.push('<');
+    i++;
+    while (i < xml.length && /[a-zA-Z0-9_:.-]/.test(xml[i])) {
+      out.push(xml[i]);
       i++;
     }
 
-    // Ran off end without finding a closing quote — just emit as-is
-    if (i >= xml.length) { parts.push(value); pos = xml.length; break; }
+    // ── Attribute list ── process until '>' or '/>'
+    while (i < xml.length) {
+      const ch = xml[i];
+
+      if (ch === '>') { out.push('>'); i++; break; }
+      if (ch === '/' && i + 1 < xml.length && xml[i + 1] === '>') {
+        out.push('/>'); i += 2; break;
+      }
+
+      if (ch === '"') {
+        // Double-quoted attribute value — fix any embedded unescaped quotes.
+        out.push('"');
+        i++;
+        let value = '';
+        while (i < xml.length) {
+          const vc = xml[i];
+          if (vc !== '"') { value += vc; i++; continue; }
+
+          // Is this the TRUE closing quote?
+          // Closing = followed by: next attribute (whitespace+name+`=`)
+          //                     OR end of tag (optional whitespace + `>` / `/>`)
+          const after = xml.slice(i + 1);
+          const isEnd =
+            /^\s+[a-zA-Z_:][a-zA-Z0-9_:.\-]*\s*=/.test(after) ||
+            /^\s*\/?>/.test(after);
+
+          if (isEnd) {
+            out.push(value.replace(/"/g, '&quot;'), '"');
+            i++;
+            break;
+          }
+          value += '"';
+          i++;
+        }
+        if (i >= xml.length) { out.push(value); } // ran off end
+        continue;
+      }
+
+      if (ch === "'") {
+        // Single-quoted attribute value — copy verbatim (no fix needed for '"').
+        out.push("'");
+        i++;
+        while (i < xml.length && xml[i] !== "'") { out.push(xml[i]); i++; }
+        if (i < xml.length) { out.push("'"); i++; }
+        continue;
+      }
+
+      // Whitespace, attribute name characters, '=' — copy as-is.
+      out.push(ch);
+      i++;
+    }
   }
 
-  return parts.join('');
+  return out.join('');
 }
 
-function sanitizeXmlAttributeQuotes(xml: string): string {
+function sanitizeXmlAttributeQuotes(xml: string): { result: string; fix2Joins: number; lineShift: number } {
+  const rawLineCount0 = xml.split('\n').length;
+
+  // Normalise all line endings to \n so subsequent logic only needs to handle \n.
+  xml = xml.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
   // Fix 1 — duplicate XML declarations.  Keep only the first <?xml ... ?> line.
   xml = xml.replace(/((<\?xml[^?]*\?>)\s*)+/s, '$2\n');
 
-  // Fix 2 — unescaped `"` inside attribute values.
-  // BC XLIFF generator sometimes emits AL object/field names without proper &quot; escaping
-  // in trans-unit id and note attrs, and occasionally in <note> element from/annotates attrs.
-  xml = fixAttrQuotes(xml, 'id');
-  xml = fixAttrQuotes(xml, 'note');
-  xml = fixAttrQuotes(xml, 'from');
-  xml = fixAttrQuotes(xml, 'annotates');
+  // Fix 2 — join continuation lines.
+  // BC XLIFF Generator can emit opening tags that span multiple lines in two ways:
+  //   a) Attribute VALUE split:  <note from="NAB\n          AL Language Tool" ...>
+  //   b) Attribute LIST split:   <trans-unit id="..."\n          size-unit="char" ...>
+  // Strategy: if a line does not start a new XML node (trimmed form does not begin with
+  // '<') AND the preceding accumulated line is still inside an unclosed opening tag
+  // (does not end with '>'), join it onto the preceding line with a space separator.
+  // This single heuristic handles both (a) and (b).
+  let fix2Joins = 0;
+  {
+    const lines = xml.split('\n');
+    const joined: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trimStart();
+      if (
+        joined.length > 0 &&
+        trimmed.length > 0 &&
+        !trimmed.startsWith('<') &&
+        !joined[joined.length - 1].trimEnd().endsWith('>')
+      ) {
+        joined[joined.length - 1] += ' ' + trimmed;
+        fix2Joins++;
+      } else {
+        joined.push(line);
+      }
+    }
+    xml = joined.join('\n');
+  }
 
-  return xml;
+  const lineShift = rawLineCount0 - xml.split('\n').length;
+
+  // Fix 3 — escape unescaped double-quotes inside opening-tag attribute values.
+  // BC XLIFF Generator can emit trans-unit ids like id="Table "Customer" - Field "Name""
+  xml = fixAllUnescapedAttrQuotes(xml);
+
+  return { result: xml, fix2Joins, lineShift };
 }
 
 // ─── Parse XLIFF ──────────────────────────────────────────────────────────────
@@ -183,32 +280,43 @@ export function parseXliff(xmlContent: string): ParsedXliff {
   // Strip UTF-8 BOM (\uFEFF) — some editors / ADO add it; fast-xml-parser rejects it
   xmlContent = xmlContent.replace(/^\uFEFF/, '');
 
-  // Validate first to get a proper human-readable error instead of a JS TypeError
-  const validationResult = XMLValidator.validate(xmlContent, { allowBooleanAttributes: false });
+  // Always sanitize first so BC XLIFF malformations (multi-line opening tags, duplicate
+  // XML declarations, unescaped quotes in attribute values) are normalised before validation.
+  const { result: sanitized, fix2Joins, lineShift } = sanitizeXmlAttributeQuotes(xmlContent);
+
+  const validationResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
   if (validationResult !== true) {
-    // Try to fix common issues (unescaped quotes in attribute values) then re-validate
-    const sanitized = sanitizeXmlAttributeQuotes(xmlContent);
-    const retryResult = XMLValidator.validate(sanitized, { allowBooleanAttributes: false });
-    if (retryResult !== true) {
-      const err = (retryResult as { err: { msg: string; line: number; col: number } }).err;
-      // Include the raw lines around the error in the thrown message for diagnosis
-      const rawLines = xmlContent.split('\n');
-      const sanitizedLines = sanitized.split('\n');
-      const errLine = err.line - 1;
-      const rawCtx = rawLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `RAW  ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-      const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 1), errLine + 2).map((l, i) => `SANI ${errLine - 1 + i + 1}: ${l.substring(0, 200)}`).join('\n');
-      console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}\n${sanCtx}`);
-      throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}\n${rawCtx}`);
+    const err = (validationResult as { err: { msg: string; line: number; col: number } }).err;
+    const rawLines = xmlContent.split('\n');
+    const sanitizedLines = sanitized.split('\n');
+    const errLine = err.line - 1;  // 0-indexed
+    // Show context in SANI around the error
+    const sanCtx = sanitizedLines.slice(Math.max(0, errLine - 2), errLine + 3)
+      .map((l, i) => `SANI ${errLine - 2 + i + 1}: ${l.substring(0, 500)}`).join('\n');
+    // Show corresponding RAW context (accounting for lineShift)
+    const rawErrLine = errLine + lineShift;
+    const rawCtx = rawLines.slice(Math.max(0, rawErrLine - 2), rawErrLine + 3)
+      .map((l, i) => `RAW  ${rawErrLine - 2 + i + 1}: ${l.substring(0, 500)}`).join('\n');
+    let firstDiff = -1;
+    for (let d = 0; d < Math.min(rawLines.length, sanitizedLines.length); d++) {
+      if (rawLines[d] !== sanitizedLines[d]) { firstDiff = d; break; }
     }
-    xmlContent = sanitized;
+    const diffCtx = firstDiff >= 0
+      ? rawLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_RAW  ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n') + '\n' +
+        sanitizedLines.slice(Math.max(0, firstDiff - 1), firstDiff + 3).map((l, i) => `DIFF_SANI ${firstDiff + i}: ${l.substring(0, 300)}`).join('\n')
+      : '(no divergence found)';
+    console.error(`[XLIFF] parse error line ${err.line}, col ${err.col}: ${err.msg} | lineShift=${lineShift} fix2Joins=${fix2Joins}\n${sanCtx}\n${rawCtx}\nFirst diff at raw line ${firstDiff}:\n${diffCtx}`);
+    throw new Error(`Invalid XML at line ${err.line}, col ${err.col}: ${err.msg}`);
   }
+
+  const xmlToParse = sanitized;
 
   const parser = new XMLParser({
     ...PARSER_OPTIONS,
     isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),
   });
 
-  const parsed = parser.parse(xmlContent) as { xliff?: { file?: unknown } };
+  const parsed = parser.parse(xmlToParse) as { xliff?: { file?: unknown } };
   const xliff = parsed?.xliff;
 
   if (!xliff) throw new Error('Invalid XLIFF: missing <xliff> root element');
@@ -220,8 +328,7 @@ export function parseXliff(xmlContent: string): ParsedXliff {
   const attrs = file as Record<string, unknown>;
 
   const sourceLanguage = String(attrs['@_source-language'] ?? 'en');
-  const rawTargetLang = attrs['@_target-language'];
-  const targetLanguage = rawTargetLang ? String(rawTargetLang) : '';
+  const targetLanguage = String(attrs['@_target-language'] ?? '');
 
   const body = file.body as Record<string, unknown> | undefined;
 
@@ -251,7 +358,8 @@ export function parseXliff(xmlContent: string): ParsedXliff {
 
     const sourceText = getText(unit.source);
     const target = unit.target as Record<string, unknown> | string | undefined;
-    const targetText = getText(unit.target);
+    const rawTargetText = getText(unit.target);
+    const { cleaned: targetText } = stripNabPrefix(rawTargetText ?? '');
     const targetState = typeof target === 'object' && target !== null
       ? String(target['@_state'] ?? '')
       : '';
@@ -280,7 +388,7 @@ export function parseXliff(xmlContent: string): ParsedXliff {
       id,
       source: sourceText,
       target: targetText,
-      state: normalizeState(targetState, targetText, sourceText),
+      state: normalizeState(targetState, rawTargetText, sourceText),
       note,
       developerNote,
     };
@@ -290,90 +398,97 @@ export function parseXliff(xmlContent: string): ParsedXliff {
 }
 
 // ─── Serialize XLIFF ──────────────────────────────────────────────────────────
+
+/** Escape special XML characters in text content (not for attribute values). */
+function xmlEscape(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** Escape a string for use inside a RegExp. */
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Serialize an XLIFF file with targeted in-place replacement.
+ *
+ * Instead of parsing and re-building the entire document (which reformats
+ * every element, adding blank lines and normalizing whitespace), we locate
+ * each `<trans-unit>` that needs updating using a regex and replace ONLY its
+ * `<target>` element. Every other byte in the file is preserved exactly.
+ *
+ * This means untouched trans-units are not modified at all — no extra blank
+ * lines, no added state attributes, no changed indentation.
+ */
 export function serializeXliff(
   original: string,
   updates: Map<string, { target: string; state: TranslationState }>
 ): string {
-  const parser = new XMLParser({
-    ...PARSER_OPTIONS,
-    isArray: (name) => ['trans-unit', 'file', 'note', 'group'].includes(name),
-    // preserveOrder:false is the default; being explicit here for clarity.
-    preserveOrder: false,
-  });
+  if (updates.size === 0) return original;
 
-  const parsed = parser.parse(original) as { xliff?: { file?: Record<string, unknown>[] | Record<string, unknown> } };
-  const xliff = parsed?.xliff;
-  const files: Record<string, unknown>[] = Array.isArray(xliff?.file)
-    ? xliff.file
-    : xliff?.file
-      ? [xliff.file]
-      : [];
+  let result = original;
 
-  for (const file of files) {
-    const body = file.body as Record<string, unknown> | undefined;
-
-    // Collect units from direct body or group wrapper (BC XLIFF)
-    let units: Record<string, unknown>[] = Array.isArray(body?.['trans-unit'])
-      ? (body['trans-unit'] as Record<string, unknown>[])
-      : body?.['trans-unit']
-        ? [body['trans-unit'] as Record<string, unknown>]
-        : [];
-
-    const groups: Record<string, unknown>[] = body?.group
-      ? (Array.isArray(body.group) ? (body.group as Record<string, unknown>[]) : [body.group as Record<string, unknown>])
-      : [];
-
-    for (const unit of units) {
-      applyTargetUpdate(unit, updates);
-    }
-
-    for (const grp of groups) {
-      const groupUnits: Record<string, unknown>[] = Array.isArray(grp['trans-unit'])
-        ? (grp['trans-unit'] as Record<string, unknown>[])
-        : grp['trans-unit']
-          ? [grp['trans-unit'] as Record<string, unknown>]
-          : [];
-      for (const unit of groupUnits) {
-        applyTargetUpdate(unit, updates);
-      }
-    }
+  for (const [id, update] of updates) {
+    result = patchTransUnit(result, id, update.target, update.state);
   }
 
-  const builder = new XMLBuilder(BUILDER_OPTIONS);
-  return `<?xml version="1.0" encoding="utf-8"?>\n${builder.build(parsed)}`;
+  return result;
 }
 
 /**
- * Apply a target update to a single trans-unit node in the parsed XML tree.
+ * Find the `<trans-unit id="...">` block for the given id and replace (or
+ * insert) its `<target>` element in-place, preserving all surrounding content.
  *
- * Empty-target fix: when the new target text is an empty string the builder
- * must still emit `<target state="…"></target>` (not the self-closed form
- * `<target state="…"/>`).  fast-xml-parser's XMLBuilder respects
- * `suppressEmptyNode: false` only when the node has an explicit `#text` key.
- * We therefore always set `#text` — using a zero-width non-breaking space as
- * a placeholder that looks empty when rendered, then strip it after building
- * so the final XML truly has `<target …></target>`.
- *
- * Special characters: the builder will XML-encode `&`, `<`, `>` etc. in the
- * target text string, so callers must pass the *decoded* plain-text value
- * (e.g. "A & B"), not pre-encoded XML entities (e.g. "A &amp; B").
+ * The `<target>` element is written without a state attribute — the file is
+ * kept as clean as possible. Nexus infers state from the text content on
+ * re-import (non-empty target → translated).
  */
-function applyTargetUpdate(
-  unit: Record<string, unknown>,
-  updates: Map<string, { target: string; state: TranslationState }>
-): void {
-  const id = String(unit['@_id'] ?? '');
-  const update = updates.get(id);
-  if (!update) return;
+function patchTransUnit(
+  xml: string,
+  unitId: string,
+  targetText: string,
+  _state: TranslationState,
+): string {
+  const escapedId = escapeRegExp(unitId);
 
-  const existingTarget = unit.target;
-  if (typeof existingTarget === 'object' && existingTarget !== null) {
-    (existingTarget as Record<string, unknown>)['#text'] = update.target;
-    (existingTarget as Record<string, unknown>)['@_state'] = update.state;
-  } else {
-    unit.target = { '#text': update.target, '@_state': update.state };
-  }
+  // Match the full <trans-unit id="..."> ... </trans-unit> block.
+  // id may be in double or single quotes.
+  const unitRegex = new RegExp(
+    `(<trans-unit[^>]*?\\bid=["']${escapedId}["'][^>]*>[\\s\\S]*?)<\\/trans-unit>`,
+  );
+
+  return xml.replace(unitRegex, (match, unitBody) => {
+    // Detect the indentation used by <source> or <target> inside this block
+    const indentMatch = match.match(/^([ \t]*)<(?:source|target)/m);
+    const indent = indentMatch ? indentMatch[1] : '        ';
+
+    // Write <target> without a state attribute — keep the file clean
+    const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
+
+    // Case 1: existing <target ...>...</target> (possibly multi-line)
+    if (/<target[\s\S]*?<\/target>/.test(unitBody)) {
+      const patched = match.replace(/<target[\s\S]*?<\/target>/, newTargetXml);
+      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
+    }
+
+    // Case 2: self-closing <target/>
+    if (/<target\s*\/>/.test(unitBody)) {
+      const patched = match.replace(/<target\s*\/>/, newTargetXml);
+      return patched.replace(/<\/trans-unit>$/, '</trans-unit>');
+    }
+
+    // Case 3: no <target> at all — insert it after </source>
+    const inserted = match.replace(
+      /(<\/source>[^\n]*\n)/,
+      `$1${indent}${newTargetXml}\n`,
+    );
+    return inserted.replace(/<\/trans-unit>$/, '</trans-unit>');
+  });
 }
+
 
 // ─── Filter helpers ───────────────────────────────────────────────────────────
 export function filterUnits(

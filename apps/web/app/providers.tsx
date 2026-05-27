@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from 'next-themes';
 import { useState } from 'react';
 import { AuthProvider } from '@/lib/auth-context';
+import { BulkTranslateProvider } from '@/lib/bulk-translate-context';
 import { TourProvider } from '@/components/tour/TourContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -18,7 +19,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <TourProvider>{children}</TourProvider>
+          <BulkTranslateProvider>
+            <TourProvider>{children}</TourProvider>
+          </BulkTranslateProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>

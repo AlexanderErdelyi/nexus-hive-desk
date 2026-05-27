@@ -25,6 +25,10 @@ function similarity(a: string, b: string): number {
   if (a === b) return 1;                        // exact case-sensitive match → 100%
   const maxLen = Math.max(a.length, b.length);
   if (maxLen === 0) return 1;
+  // Quick length-ratio pre-filter: if strings differ in length by >40%, Levenshtein
+  // score can never reach FUZZY_THRESHOLD (0.75), so skip the expensive computation.
+  const minLen = Math.min(a.length, b.length);
+  if (minLen / maxLen < 0.6) return 0;
   // Case-insensitive fuzzy score, capped at 0.99 so it never shows as "100%" when case differs
   const fuzzy = 1 - levenshtein(a.toLowerCase(), b.toLowerCase()) / maxLen;
   return Math.min(fuzzy, 0.99);
@@ -51,7 +55,7 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'sources, sourceLanguage and targetLanguage are required' });
     }
 
-    // Fetch TM entries for this language pair (project-scoped + global), capped at 5000 most-used
+    // Fetch most-used TM entries for this language pair (project-scoped + global), capped for performance
     const entries = await prisma.translationMemory.findMany({
       where: {
         sourceLanguage,
@@ -71,10 +75,6 @@ export async function translationMemoryRoutes(app: FastifyInstance) {
       const candidates: Candidate[] = [];
 
       for (const entry of entries) {
-        // Length-ratio pre-filter: skip if lengths differ by more than 40%
-        const maxLen = Math.max(source.length, entry.source.length);
-        if (maxLen > 0 && Math.abs(source.length - entry.source.length) / maxLen > 0.4) continue;
-
         const score = similarity(source, entry.source);
         if (score >= FUZZY_THRESHOLD) {
           // Merge into existing candidate with same target (keep best score + combined usageCount)
