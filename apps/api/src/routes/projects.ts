@@ -114,7 +114,7 @@ export async function projectRoutes(app: FastifyInstance) {
         filename: data.filename,
         originalXml: xmlContent,
         sourceLanguage: parsed.sourceLanguage,
-        targetLanguage: parsed.targetLanguage,
+        targetLanguage: parsed.targetLanguage || project.targetLanguage || '',
       },
     });
 
@@ -174,10 +174,12 @@ export async function projectRoutes(app: FastifyInstance) {
 
     const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
     const updates = new Map(
-      translations.map((translation) => [
-        translation.unitId,
-        { target: translation.target, state: translation.state as TranslationState },
-      ])
+      translations
+        .filter((translation) => translation.target !== '')
+        .map((translation) => [
+          translation.unitId,
+          { target: translation.target, state: translation.state as TranslationState },
+        ])
     );
 
     const xml = serializeXliff(file.originalXml, updates);
@@ -221,10 +223,12 @@ export async function projectRoutes(app: FastifyInstance) {
 
     const translations = await prisma.translation.findMany({ where: { xliffFileId: file.id } });
     const updates = new Map(
-      translations.map((translation) => [
-        translation.unitId,
-        { target: translation.target, state: translation.state as TranslationState },
-      ])
+      translations
+        .filter((translation) => translation.target !== '')
+        .map((translation) => [
+          translation.unitId,
+          { target: translation.target, state: translation.state as TranslationState },
+        ])
     );
 
     const xml = serializeXliff(file.originalXml, updates);
