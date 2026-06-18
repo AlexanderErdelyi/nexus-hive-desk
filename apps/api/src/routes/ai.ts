@@ -1,8 +1,9 @@
-import { createProvider } from '@nexus/ai';
+﻿import { createProvider } from '@nexus/ai';
 import { prisma } from '@nexus/db';
 import type { AIProviderType, TranslationState } from '@nexus/types';
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../lib/auth';
+import { resolveToken } from '../lib/resolve-token';
 
 const BATCH_SIZE = 60;
 const REVIEW_BATCH_SIZE = 10;
@@ -10,17 +11,26 @@ const REVIEW_BATCH_SIZE = 10;
 // Track active bulk translate jobs to prevent duplicate concurrent translations
 const activeTranslations = new Set<string>();
 
+/** Resolve GitHub token: DB user token first, then env var fallback. */
+async function resolveGithubToken(userId: string, projectId?: string): Promise<string> {
+  const resolved = await resolveToken(userId, 'github', { projectId });
+  if (resolved) return resolved.token;
+  const envToken = process.env.GITHUB_TOKEN;
+  if (envToken) return envToken;
+  throw new Error('No GitHub token configured. Add one in Settings → Personal Access Tokens.');
+}
+
 async function translateTranslations(options: {
   translationIds: string[];
   projectId: string;
+  userId: string;
   providerType?: AIProviderType;
   model?: string;
   dryRun?: boolean;
 }) {
-  const { translationIds, projectId, providerType, model, dryRun = false } = options;
+  const { translationIds, projectId, userId, providerType, model, dryRun = false } = options;
 
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error('AI provider token not configured');
+  const token = await resolveGithubToken(userId, projectId);
 
   const translations = await prisma.translation.findMany({
     where: { id: { in: translationIds } },
@@ -90,7 +100,7 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'translationIds and projectId are required' });
     }
     try {
-      const result = await translateTranslations({ translationIds, projectId, providerType: provider, model, dryRun: true });
+      const result = await translateTranslations({ translationIds, projectId, userId: req.user.sub, providerType: provider, model, dryRun: true });
       if (!result.suggestions.length) {
         return reply.status(404).send({ error: 'not_found', message: 'No translations found' });
       }
@@ -118,6 +128,7 @@ export async function aiRoutes(app: FastifyInstance) {
       const result = await translateTranslations({
         translationIds: untranslated.map((t) => t.id),
         projectId,
+        userId: req.user.sub,
         providerType: provider,
         model,
         dryRun: false,
@@ -147,8 +158,8 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'projectId is required' });
     }
 
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     // Prevent duplicate concurrent bulk translations for the same file
     const lockKey = xliffFileId ?? translationIds?.join(',') ?? projectId;
@@ -274,8 +285,8 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'translationIds and projectId are required' });
     }
 
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     try {
       const translations = await prisma.translation.findMany({
@@ -342,8 +353,8 @@ export async function aiRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: 'validation', message: 'type and description are required' });
     }
 
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     const baseURL = 'https://models.inference.ai.azure.com';
     const model = process.env.AI_MODEL ?? 'gpt-4o-mini';
@@ -446,8 +457,8 @@ Write professional, clear, testable content. Respond in the same language as the
     if (!prompt?.trim()) {
       return reply.status(400).send({ error: 'validation', message: 'prompt is required' });
     }
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     try {
       const response = await fetch('https://models.inference.ai.azure.com/chat/completions', {
@@ -490,8 +501,8 @@ Write professional, clear, testable content. Respond in the same language as the
     if (!files?.length) {
       return reply.status(400).send({ error: 'validation', message: 'files is required' });
     }
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     const diffSummary = files
       .slice(0, 20)
@@ -581,8 +592,8 @@ Focus on: bugs, security issues, performance problems, missing error handling, a
     const { projects, devopsEvents } = req.body;
     if (!projects?.length) return reply.status(400).send({ error: 'validation', message: 'projects is required' });
 
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return reply.status(500).send({ error: 'config', message: 'AI provider token not configured' });
+    let token: string;
+    try { token = await resolveGithubToken(req.user.sub); } catch (err) { return reply.status(500).send({ error: 'config', message: err instanceof Error ? err.message : 'AI provider token not configured' }); }
 
     const projectSummary = projects.map((p) => {
       const parts = [`Project "${p.name}":`];
