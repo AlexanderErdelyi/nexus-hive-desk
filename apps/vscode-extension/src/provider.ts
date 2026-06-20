@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 import { createProvider } from '@nexus/ai';
 import type { AIProvider } from '@nexus/ai';
+import { CopilotProvider } from './copilotProvider';
 
 const SECRET_KEY = 'nexus.translator.token';
 
 export function getConfig() {
   const cfg = vscode.workspace.getConfiguration('nexus.translator');
   return {
-    provider: cfg.get<string>('provider', 'openai'),
+    provider: cfg.get<string>('provider', 'github-copilot'),
     token: cfg.get<string>('token', ''),
     model: cfg.get<string>('model', '') || undefined,
     baseUrl: cfg.get<string>('baseUrl', '') || undefined,
@@ -32,13 +33,19 @@ export async function storeToken(context: vscode.ExtensionContext, token: string
 }
 
 export async function createAIProvider(context: vscode.ExtensionContext): Promise<AIProvider> {
+  const config = getConfig();
+
+  // GitHub Copilot: use the built-in VS Code LM API — no key required
+  if (config.provider === 'github-copilot') {
+    return new CopilotProvider(config.model);
+  }
+
   const token = await getToken(context);
   if (!token) {
     throw new Error(
       'Nexus Translator: API token is not configured. Run "Nexus: Set API Token (Secure)" or set nexus.translator.token in Settings.'
     );
   }
-  const config = getConfig();
   return createProvider({
     type: config.provider as Parameters<typeof createProvider>[0]['type'],
     token,

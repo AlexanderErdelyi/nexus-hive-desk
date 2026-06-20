@@ -94,6 +94,11 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'reviewAll':
           await handleReviewAll(document, webviewPanel, this.context);
           break;
+
+        case 'openAsText':
+          // Open the same file in the default text editor (bypasses our custom editor)
+          await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+          break;
       }
     });
 

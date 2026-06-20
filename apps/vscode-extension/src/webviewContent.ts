@@ -107,6 +107,13 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       border: 1px solid var(--vscode-button-border, transparent);
     }
     .btn-secondary:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3)); }
+    .btn-ghost {
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      border: 1px solid transparent;
+      font-size: 11px;
+    }
+    .btn-ghost:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); border-color: var(--vscode-widget-border, transparent); }
     button:disabled { opacity: 0.45; cursor: default; }
 
     /* ─── Unit list ─── */
@@ -313,6 +320,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     <div class="toolbar-spacer"></div>
     <button id="btn-translate-all" class="btn-primary" title="AI-translate all untranslated units">⚡ Translate Untranslated</button>
     <button id="btn-review-all" class="btn-secondary" title="AI review all translated units">🔍 Review</button>
+    <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the default text editor">📄 Raw XML</button>
   </div>
 
   <!-- Unit list (scrollable) -->
@@ -652,6 +660,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     });
     document.getElementById('btn-review-all').addEventListener('click', function () {
       vscode.postMessage({ type: 'reviewAll' });
+    });
+    document.getElementById('btn-open-text').addEventListener('click', function () {
+      vscode.postMessage({ type: 'openAsText' });
     });
     document.getElementById('btn-save').addEventListener('click', function () {
       vscode.postMessage({ type: 'save' });

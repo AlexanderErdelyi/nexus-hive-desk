@@ -6,7 +6,7 @@
   "publisher": "nexus",
   "private": true,
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.90.0"
   },
   "categories": ["Other"],
   "keywords": ["translation", "xliff", "localization", "business central", "al"],
@@ -77,13 +77,14 @@
       "properties": {
         "nexus.translator.provider": {
           "type": "string",
-          "enum": ["github-models", "openai", "azure-openai"],
+          "enum": ["github-copilot", "github-models", "openai", "azure-openai"],
           "enumDescriptions": [
+            "GitHub Copilot (no API key needed — uses your existing Copilot subscription)",
             "GitHub Models (requires GitHub token)",
             "OpenAI API",
             "Azure OpenAI Service"
           ],
-          "default": "openai",
+          "default": "github-copilot",
           "description": "AI provider used for translations."
         },
         "nexus.translator.token": {
