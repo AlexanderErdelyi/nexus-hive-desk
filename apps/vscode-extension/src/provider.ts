@@ -42,9 +42,21 @@ export async function createAIProvider(context: vscode.ExtensionContext): Promis
 
   const token = await getToken(context);
   if (!token) {
-    throw new Error(
-      'Nexus Translator: API token is not configured. Run "Nexus: Set API Token (Secure)" or set nexus.translator.token in Settings.'
+    const choice = await vscode.window.showErrorMessage(
+      `Nexus Translator: No API token configured for "${config.provider}".`,
+      'Switch to GitHub Copilot (no key needed)',
+      'Set API Token'
     );
+    if (choice === 'Switch to GitHub Copilot (no key needed)') {
+      await vscode.workspace.getConfiguration('nexus.translator').update(
+        'provider', 'github-copilot', vscode.ConfigurationTarget.Global
+      );
+      return new CopilotProvider(config.model);
+    }
+    if (choice === 'Set API Token') {
+      await vscode.commands.executeCommand('nexus.setApiToken');
+    }
+    throw new Error('Translation cancelled: no API token configured.');
   }
   return createProvider({
     type: config.provider as Parameters<typeof createProvider>[0]['type'],

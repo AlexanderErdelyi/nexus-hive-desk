@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { pendingFilters } from '../state';
+import { TranslationEditorProvider } from '../translationEditor';
 
 export function registerFindInNexusTranslator(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -40,7 +41,12 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
           xliffUri = chosen.uri;
         }
 
-        // Store filter so the editor can apply it when it opens
+        // If the panel is already open, send the filter directly and focus it
+        if (filterStr && TranslationEditorProvider.applyFilter(xliffUri, filterStr)) {
+          return;
+        }
+
+        // Otherwise store filter so the editor applies it when it opens
         if (filterStr) {
           pendingFilters.set(xliffUri.toString(), filterStr);
         }

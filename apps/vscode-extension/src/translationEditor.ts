@@ -12,6 +12,18 @@ import { pendingFilters } from './state';
 export class TranslationEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'nexus.translationEditor';
 
+  /** Registry of all currently open translation editor panels, keyed by document URI. */
+  private static readonly activePanels = new Map<string, vscode.WebviewPanel>();
+
+  /** If the document is already open in a panel, apply a search filter and focus it. */
+  public static applyFilter(uri: vscode.Uri, filter: string): boolean {
+    const panel = TranslationEditorProvider.activePanels.get(uri.toString());
+    if (!panel) return false;
+    panel.reveal(undefined, false);
+    panel.webview.postMessage({ type: 'setFilter', filter, state: 'all' });
+    return true;
+  }
+
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
       TranslationEditorProvider.viewType,
@@ -38,15 +50,16 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       getNonce()
     );
 
+    // Register this panel so commands can find it even when already open
+    const uriKey = document.uri.toString();
+    TranslationEditorProvider.activePanels.set(uriKey, webviewPanel);
+
     // Track pending in-memory changes for this editor instance.
-    // Written to the document only on explicit Save (button or Ctrl+S).
     const pendingChanges = new Map<string, { target: string; state: TranslationState }>();
 
     const sendInit = () => {
       try {
         const parsed = parseXliff(document.getText());
-        // Consume any pending filter (set by findInNexusTranslator command)
-        const uriKey = document.uri.toString();
         const initialFilter = pendingFilters.get(uriKey);
         if (initialFilter) pendingFilters.delete(uriKey);
         webviewPanel.webview.postMessage({
@@ -143,6 +156,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     });
 
     webviewPanel.onDidDispose(() => {
+      TranslationEditorProvider.activePanels.delete(uriKey);
       msgHandler.dispose();
       willSaveHandler.dispose();
       changeHandler.dispose();
@@ -374,7 +388,7 @@ async function goToSource(unitId: string): Promise<void> {
   // Match the AL object declaration at the start of a line, e.g. "page 50100 CustomerList"
   const searchRegex = new RegExp(`^\\s*${objType}\\s+${objNumber}\\b`, 'im');
 
-  const files = await vscode.workspace.findFiles('**/*.al', '**/node_modules/**', 200);
+  const files = await vscode.workspace.findFiles('**/*.al', '**/node_modules/**');
 
   for (const fileUri of files) {
     let text: string;
