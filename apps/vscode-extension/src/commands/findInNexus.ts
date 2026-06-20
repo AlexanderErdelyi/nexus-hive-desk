@@ -21,12 +21,20 @@ const AL_TYPE_MAP: Record<string, string> = {
 const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?(?:\s+extends\s+["']?[^"'{\n]*["']?)?\s*[{(]/im;
 
 /**
- * Extracts the value from an AL property assignment on a given line.
- * e.g. `Caption = 'IC - Adjustment Company';` → `IC - Adjustment Company`
+ * Extracts the translatable text value from an AL property/label line.
+ * Priority: Label 'text' → property = 'text' (skipping Comment = '...')
  */
 function extractLineValue(lineText: string): string | null {
-  const m = /=\s*['"]([^'"]+)['"]/i.exec(lineText);
-  return m ? m[1].trim() : null;
+  // AL Label variable: `MyLabel: Label 'text'[, Comment = '...']`
+  const labelMatch = /\bLabel\s+['"]([^'"]+)['"]/i.exec(lineText);
+  if (labelMatch) return labelMatch[1].trim();
+
+  // Property assignment (Caption, ToolTip, etc.) but NOT Comment metadata:
+  // look for `Word = 'value'` where Word is not "Comment"
+  const propMatch = /\b(?!Comment\b)([A-Za-z_]\w*)\s*=\s*['"]([^'"]+)['"]/i.exec(lineText);
+  if (propMatch) return propMatch[2].trim();
+
+  return null;
 }
 
 /** Parse an AL file's text and return its "{ObjectType} {ObjectName}" filter token, or null. */
