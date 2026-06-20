@@ -92,7 +92,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     // Track pending in-memory changes for this editor instance.
     const pendingChanges = new Map<string, { target: string; state: TranslationState }>();
 
-    const sendInit = () => {
+    const sendInit = async () => {
       try {
         const parsed = parseXliff(document.getText());
         const initialFilter = pendingFilters.get(uriKey);
@@ -116,10 +116,27 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           diffUnitIds: initialUnitIds ?? null,
         });
         // Fire-and-forget: compute TM suggestions and push them once ready
+        // Also auto-populate TM from this file if TM is empty (first use)
+        const tm = getTmManager(this.context);
+        const srcLang2 = parsed.sourceLanguage || getConfig().sourceLanguage;
+        const tgtLang2 = parsed.targetLanguage || getConfig().targetLanguage;
+        const existingEntries = await tm.getAll(srcLang2, tgtLang2);
+        if (existingEntries.length === 0) {
+          // TM is empty — silently seed it from current file's translated units
+          const confirmed = parsed.units.filter(
+            (u) => u.target && u.target.trim() && (u.state === 'translated' || u.state === 'final' || u.state === 'signed-off')
+          );
+          if (confirmed.length > 0) {
+            await tm.upsertBatch(
+              confirmed.map((u) => ({ source: u.source, target: u.target })),
+              srcLang2, tgtLang2
+            );
+          }
+        }
         void sendTmSuggestions(
           parsed.units,
-          parsed.sourceLanguage || getConfig().sourceLanguage,
-          parsed.targetLanguage || getConfig().targetLanguage
+          srcLang2,
+          tgtLang2
         );
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
@@ -163,7 +180,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const msgHandler = webviewPanel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type as string) {
         case 'ready':
-          sendInit();
+          void sendInit();
           break;
 
         case 'updateUnit':
@@ -211,6 +228,52 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
             msg.id as string, msg.source as string
           );
           break;
+
+        case 'qualityCheck': {
+          // Validate placeholders and find inconsistencies inline
+          const parsed2 = parseXliff(document.getText());
+          const issues: Array<{ id: string; type: 'placeholder' | 'inconsistency'; message: string }> = [];
+
+          // 1. Placeholder check: find %1, %2, {0}, {1} in source but not in target
+          const placeholderRe = /%\d+|\{[\d]+\}/g;
+          for (const unit of parsed2.units) {
+            if (!unit.target || !unit.target.trim()) continue;
+            const srcPh = Array.from(new Set((unit.source.match(placeholderRe) || []).map((p) => p.toLowerCase())));
+            const tgtPh = Array.from(new Set((unit.target.match(placeholderRe) || []).map((p) => p.toLowerCase())));
+            const missing = srcPh.filter((p) => !tgtPh.includes(p));
+            const extra = tgtPh.filter((p) => !srcPh.includes(p));
+            if (missing.length > 0) {
+              issues.push({ id: unit.id, type: 'placeholder', message: `Missing placeholder(s): ${missing.join(', ')}` });
+            } else if (extra.length > 0) {
+              issues.push({ id: unit.id, type: 'placeholder', message: `Extra placeholder(s) in target: ${extra.join(', ')}` });
+            }
+          }
+
+          // 2. Inconsistency check: same source → different targets
+          const srcToTargets = new Map<string, { id: string; target: string }[]>();
+          for (const unit of parsed2.units) {
+            if (!unit.target || !unit.target.trim()) continue;
+            const key = unit.source.trim().toLowerCase();
+            if (!srcToTargets.has(key)) srcToTargets.set(key, []);
+            srcToTargets.get(key)!.push({ id: unit.id, target: unit.target.trim() });
+          }
+          for (const [, entries] of srcToTargets) {
+            const uniqueTargets = [...new Set(entries.map((e) => e.target))];
+            if (uniqueTargets.length > 1) {
+              for (const entry of entries) {
+                const others = uniqueTargets.filter((t) => t !== entry.target);
+                issues.push({
+                  id: entry.id,
+                  type: 'inconsistency',
+                  message: `Inconsistent: also translated as "${others[0]}"`,
+                });
+              }
+            }
+          }
+
+          webviewPanel.webview.postMessage({ type: 'qualityResults', issues });
+          break;
+        }
 
         case 'reviewAll':
           await handleReviewAll(document, webviewPanel, this.context);
@@ -273,7 +336,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       if (e.reason === vscode.TextDocumentChangeReason.Undo ||
           e.reason === vscode.TextDocumentChangeReason.Redo) {
         pendingChanges.clear();
-        sendInit();
+        void sendInit();
       }
     });
 

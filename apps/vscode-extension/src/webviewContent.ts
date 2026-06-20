@@ -382,7 +382,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-translate-all" class="btn-primary" title="AI-translate all untranslated units">&#9889; Translate Untranslated</button>
   <button id="btn-review-all" class="btn-secondary" title="AI review all translated units">&#128269; Review</button>
   <button id="btn-populate-tm" class="btn-secondary" title="Import all translated units into Translation Memory">&#8597; Populate TM</button>
-  <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
+    <button id="btn-quality-check" class="btn-secondary" title="Check placeholder consistency and translation inconsistencies">&#128270; Quality Check</button>
+    <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
 </div>
 
 <!-- Object-filter chips (shown when filtering by AL objects) -->
@@ -454,6 +455,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var duplicateTargetIds = new Set();
   var diffUnitIds = null; // Set<string> | null — when set, only show these unit IDs (from diff view)
   var glossaryTerms = []; // array of {sourceTerm, targetTerm}
+  var qualityIssues = {}; // unitId → {type, message}[]
 
   // ─── Message handler ───────────────────────────────────────────────────────
   window.addEventListener('message', function (event) {
@@ -466,7 +468,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       tgtLang = msg.targetLanguage || '';
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
-      selectedIds = new Set(); tmSuggestions = {};
+      selectedIds = new Set(); tmSuggestions = {}; qualityIssues = {};
       duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
       diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : null;
       filterState = 'all';
@@ -532,7 +534,23 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       duplicateTargetIds = new Set(msg.ids || []);
       renderList();
 
-    } else if (msg.type === 'bulkStatusUpdated') {
+        } else if (msg.type === 'qualityResults') {
+          qualityIssues = {};
+          var issues = msg.issues || [];
+          issues.forEach(function (iss) {
+            if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
+            qualityIssues[iss.id].push(iss);
+          });
+          renderList();
+          var critical = issues.filter(function (i) { return i.type === 'placeholder'; }).length;
+          var warnings = issues.filter(function (i) { return i.type === 'inconsistency'; }).length;
+          if (issues.length === 0) {
+            showNotif('✓ Quality check passed — no issues found!', 'success');
+          } else {
+            showNotif('Quality: ' + critical + ' critical placeholder issue(s), ' + warnings + ' inconsistency warning(s).', 'error');
+          }
+
+        } else if (msg.type === 'bulkStatusUpdated') {
       (msg.items || []).forEach(function (it) {
         var u = findUnit(it.id);
         if (u) { u.state = it.state; if (it.target != null) u.target = it.target; }
@@ -791,12 +809,22 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         '<button class="btn-tm-apply" data-id="' + esc(unit.id) + '" data-target="' + esc(best.target) + '">Apply</button>' +
         '</div>';
     }
-    var tgtHtml =
-      '<div class="col-tgt">' +
-        '<textarea class="target-input" data-id="' + esc(unit.id) + '" rows="2"' + (isLoading ? ' disabled' : '') + '>' + esc(unit.target) + '</textarea>' +
-        tmHtml +
-        rvHtml +
-      '</div>';
+    var qIssues = qualityIssues[unit.id] || [];
+        var qHtml = '';
+        if (qIssues.length > 0) {
+          qHtml = qIssues.map(function (qi) {
+            var color = qi.type === 'placeholder' ? '#f48771' : '#dcdcaa';
+            var icon = qi.type === 'placeholder' ? '🔴' : '🟡';
+            return '<div class="q-issue" style="color:' + color + ';font-size:10px;margin-top:3px;">' + icon + ' ' + esc(qi.message) + '</div>';
+          }).join('');
+        }
+        var tgtHtml =
+          '<div class="col-tgt">' +
+            '<textarea class="target-input" data-id="' + esc(unit.id) + '" rows="2"' + (isLoading ? ' disabled' : '') + '>' + esc(unit.target) + '</textarea>' +
+            tmHtml +
+            rvHtml +
+            qHtml +
+          '</div>';
 
     // ── State cell ────────────────────────────────────────────────────────────
     var aiBtn = isLoading
@@ -888,7 +916,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   document.getElementById('btn-translate-all').addEventListener('click', function () { vscode.postMessage({ type: 'translateAll' }); });
   document.getElementById('btn-review-all').addEventListener('click',    function () { vscode.postMessage({ type: 'reviewAll' }); });
   document.getElementById('btn-populate-tm').addEventListener('click',   function () { vscode.postMessage({ type: 'populateTm' }); });
-  document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
+    document.getElementById('btn-quality-check').addEventListener('click', function () { vscode.postMessage({ type: 'qualityCheck' }); });
+    document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
   document.getElementById('btn-save').addEventListener('click',          function () { vscode.postMessage({ type: 'save' }); });
 
   // ─── Bulk actions & selection ────────────────────────────────────────────────
