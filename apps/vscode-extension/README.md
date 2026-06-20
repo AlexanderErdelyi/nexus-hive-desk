@@ -276,6 +276,12 @@ Copilot: ✓ Deleted
 |---|---|
 | `list_xliff_files` | List all `.xlf` files in the workspace |
 | `read_xliff_translations` | Read and parse translation units from a file |
+| `get_new_units` | Diff an XLIFF against git HEAD — returns only units added/modified by the AL Sync Translation step |
+| `write_translations` | Write `{id, target, state}[]` back to the XLIFF file (the "apply" step) |
+| `set_unit_states` | Bulk set the translation state for unit IDs (approve/reject reviewed) |
+| `get_translation_progress` | Per-file and overall % translated statistics |
+| `validate_placeholders` | Find units where `%1`/`%2`/`{0}` etc. are missing from the target |
+| `find_inconsistencies` | Find the same source translated differently in the same file |
 | `analyze_translations_for_glossary` | Prepare translation data for glossary analysis |
 | `get_glossary` | Get current glossary entries |
 | `add_glossary_term` | Add a new term pair |
