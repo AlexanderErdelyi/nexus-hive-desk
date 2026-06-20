@@ -8,6 +8,11 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlexanderErdelyi/nexus-hive-desk"
+  },
   "categories": ["Other"],
   "keywords": ["translation", "xliff", "localization", "business central", "al"],
   "activationEvents": [],
