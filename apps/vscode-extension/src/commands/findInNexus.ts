@@ -84,21 +84,34 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
   );
 }
 
+/** Recursively collect all .al file URIs under a directory. */
+async function findAlFilesInDir(dirUri: vscode.Uri): Promise<vscode.Uri[]> {
+  const result: vscode.Uri[] = [];
+  let entries: [string, vscode.FileType][];
+  try { entries = await vscode.workspace.fs.readDirectory(dirUri); }
+  catch { return result; }
+  for (const [name, type] of entries) {
+    const child = vscode.Uri.joinPath(dirUri, name);
+    if (type === vscode.FileType.Directory) {
+      result.push(...await findAlFilesInDir(child));
+    } else if (type === vscode.FileType.File && name.toLowerCase().endsWith('.al')) {
+      result.push(child);
+    }
+  }
+  return result;
+}
+
 /** Returns a comma-separated "{ObjectType} {ObjectName}" filter string for the given resource. */
 async function resolveFilter(uri: vscode.Uri): Promise<string | null> {
   let stat: vscode.FileStat;
   try {
     stat = await vscode.workspace.fs.stat(uri);
   } catch {
-    // Not found — treat as file, try to parse as AL
     return null;
   }
 
   if (stat.type === vscode.FileType.Directory) {
-    // Read all .al files in the folder recursively
-    const alFiles = await vscode.workspace.findFiles(
-      new vscode.RelativePattern(uri, '**/*.al')
-    );
+    const alFiles = await findAlFilesInDir(uri);
     const seen = new Set<string>();
     const filters: string[] = [];
     for (const fileUri of alFiles) {
