@@ -125,7 +125,8 @@
     "build": "node esbuild.js",
     "dev": "node esbuild.js --watch",
     "type-check": "tsc --noEmit",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "install-ext": "vsce package --no-dependencies && code --install-extension nexus-translator-0.1.0.vsix"
   },
   "dependencies": {
     "@nexus/ai": "workspace:*",
@@ -133,6 +134,7 @@
     "@nexus/types": "workspace:*"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.2.1",
     "@types/vscode": "^1.85.0",
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
