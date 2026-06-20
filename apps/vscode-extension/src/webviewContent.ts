@@ -307,6 +307,12 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 <!-- Toolbar -->
 <div id="toolbar">
   <input id="search-input" class="toolbar-search" type="search" placeholder="&#128269;  Search source, target or ID&hellip;" autocomplete="off">
+  <select id="search-in" class="toolbar-select" title="Search in">
+    <option value="all">All fields</option>
+    <option value="source">Source</option>
+    <option value="target">Target</option>
+    <option value="objectName">Object name</option>
+  </select>
   <select id="state-filter" class="toolbar-select">
     <option value="all">All States</option>
     <option value="new">New</option>
@@ -315,6 +321,23 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     <option value="translated">Translated</option>
     <option value="final">Final</option>
     <option value="signed-off">Signed Off</option>
+  </select>
+  <select id="type-filter" class="toolbar-select" title="Filter by object type">
+    <option value="">All Types</option>
+    <option value="Table">Table</option>
+    <option value="TableExtension">TableExtension</option>
+    <option value="Page">Page</option>
+    <option value="PageExtension">PageExtension</option>
+    <option value="PageCustomization">PageCustomization</option>
+    <option value="Codeunit">Codeunit</option>
+    <option value="Report">Report</option>
+    <option value="ReportExtension">ReportExtension</option>
+    <option value="XMLPort">XMLPort</option>
+    <option value="Query">Query</option>
+    <option value="Enum">Enum</option>
+    <option value="EnumExtension">EnumExtension</option>
+    <option value="Interface">Interface</option>
+    <option value="PermissionSet">PermissionSet</option>
   </select>
   <div class="tb-spacer"></div>
   <button id="btn-translate-all" class="btn-primary" title="AI-translate all untranslated units">&#9889; Translate Untranslated</button>
@@ -356,7 +379,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
   // ─── State ─────────────────────────────────────────────────────────────────
   var units = [], srcLang = '', tgtLang = '', fileName = '';
-  var filterSearch = '', filterState = 'all', objectFilters = [];
+  var filterSearch = '', filterState = 'all', filterType = '', searchIn = 'all', objectFilters = [];
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null;
 
@@ -373,9 +396,13 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
       filterSearch = '';
       filterState = 'all';
+      filterType = '';
+      searchIn = 'all';
       objectFilters = msg.objectFilters || [];
       document.getElementById('search-input').value = '';
       document.getElementById('state-filter').value = 'all';
+      document.getElementById('type-filter').value = '';
+      document.getElementById('search-in').value = 'all';
       renderAll();
 
     } else if (msg.type === 'setFilter') {
@@ -439,7 +466,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var q = filterSearch.toLowerCase();
     return units.filter(function (u) {
       if (filterState !== 'all' && u.state !== filterState) return false;
-      // Object-filter: note must start with one of the selected "ObjectType ObjectName" pairs
+      // Object type filter: note must start with "{filterType} "
+      if (filterType && !(u.note && u.note.startsWith(filterType + ' '))) return false;
+      // Object-filter chips: note must start with one of the selected "ObjectType ObjectName - " prefixes
       if (objectFilters.length > 0) {
         var noteOk = objectFilters.some(function (f) {
           return u.note && u.note.startsWith(f + ' - ');
@@ -447,6 +476,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         if (!noteOk) return false;
       }
       if (!q) return true;
+      // searchIn scoping
+      if (searchIn === 'source') return u.source.toLowerCase().indexOf(q) >= 0;
+      if (searchIn === 'target') return u.target.toLowerCase().indexOf(q) >= 0;
+      if (searchIn === 'objectName') return !!(u.note && u.note.toLowerCase().indexOf(q) >= 0);
+      // 'all'
       return u.source.toLowerCase().indexOf(q) >= 0 ||
              u.target.toLowerCase().indexOf(q) >= 0 ||
              u.id.toLowerCase().indexOf(q) >= 0 ||
@@ -664,8 +698,14 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   document.getElementById('search-input').addEventListener('input', function () {
     filterSearch = this.value; visibleCount = 100; renderList(); renderFooter();
   });
+  document.getElementById('search-in').addEventListener('change', function () {
+    searchIn = this.value; visibleCount = 100; renderList(); renderFooter();
+  });
   document.getElementById('state-filter').addEventListener('change', function () {
     filterState = this.value; visibleCount = 100; renderList(); renderFooter();
+  });
+  document.getElementById('type-filter').addEventListener('change', function () {
+    filterType = this.value; visibleCount = 100; renderList(); renderFooter();
   });
   document.getElementById('btn-translate-all').addEventListener('click', function () { vscode.postMessage({ type: 'translateAll' }); });
   document.getElementById('btn-review-all').addEventListener('click',    function () { vscode.postMessage({ type: 'reviewAll' }); });

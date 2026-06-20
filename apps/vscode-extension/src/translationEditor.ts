@@ -402,10 +402,26 @@ async function goToSource(note: string): Promise<void> {
     return;
   }
 
-  // The property value from the last segment — used to find the specific line
-  const lastPart = parts[parts.length - 1];
-  const lastSpace = lastPart.indexOf(' ');
-  const propertyValue = lastSpace >= 0 ? lastPart.substring(lastSpace + 1) : lastPart;
+  // Parse member name (from middle segment) for precise field/method navigation
+  // Note format: "{ObjectType} {ObjectName} - [{MemberType} {MemberName} -] {PropertyType} {PropName}"
+  // For "Table Authorization - Field Address2 - Property Caption":
+  //   memberName = "Address2"  (search for this → lands on the field declaration)
+  // For "Codeunit PIM Export - NamedType FileSuffixLbl":
+  //   propertyValue = "FileSuffixLbl" (unique label name → found directly)
+  let searchText: string | undefined;
+  if (parts.length >= 3) {
+    // 3-segment note: member-level property — navigate by member name
+    const mid = parts[1];
+    const midSpace = mid.indexOf(' ');
+    const memberName = midSpace >= 0 ? mid.substring(midSpace + 1).trim() : mid.trim();
+    if (memberName) searchText = memberName;
+  }
+  // Fallback: use the last segment's value (e.g. unique NamedType label)
+  if (!searchText) {
+    const lastPart = parts[parts.length - 1];
+    const lastSpace = lastPart.indexOf(' ');
+    searchText = lastSpace >= 0 ? lastPart.substring(lastSpace + 1) : lastPart;
+  }
 
   // AL object declaration regex — matches "tableextension 50200 "My Name" {"
   const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
@@ -426,17 +442,20 @@ async function goToSource(note: string): Promise<void> {
 
     const doc = await vscode.workspace.openTextDocument(fileUri);
 
-    // Try to find the property value for a more precise line
-    let line = 0;
-    if (propertyValue) {
+    // Find the specific member/property line by name.
+    // Field names in AL are quoted: field(12; "Address2"; ...) → search for '"Address2"'
+    let targetLine = -1;
+    if (searchText) {
       const lines = text.split('\n');
-      const idx = lines.findIndex((l) => l.includes(propertyValue));
-      if (idx >= 0) line = idx;
+      // Try quoted first (AL field/method names), then unquoted
+      const quotedIdx = lines.findIndex((l) => l.includes(`"${searchText}"`));
+      const rawIdx    = lines.findIndex((l) => l.includes(searchText!));
+      targetLine = quotedIdx >= 0 ? quotedIdx : rawIdx;
     }
 
-    const pos = doc.positionAt(line > 0 ? text.split('\n').slice(0, line).join('\n').length + 1 : 0);
+    const pos = new vscode.Position(Math.max(0, targetLine), 0);
     await vscode.window.showTextDocument(doc, {
-      selection: new vscode.Range(line > 0 ? new vscode.Position(line, 0) : pos, line > 0 ? new vscode.Position(line, 0) : pos),
+      selection: new vscode.Range(pos, pos),
       preserveFocus: false,
     });
     return;
