@@ -381,6 +381,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-cleanup-dupes" class="btn-secondary" hidden title="Remove duplicate &lt;target&gt; elements">&#9888; Clean up duplicates</button>
   <button id="btn-translate-all" class="btn-primary" title="AI-translate all untranslated units">&#9889; Translate Untranslated</button>
   <button id="btn-review-all" class="btn-secondary" title="AI review all translated units">&#128269; Review</button>
+  <button id="btn-populate-tm" class="btn-secondary" title="Import all translated units into Translation Memory">&#8597; Populate TM</button>
   <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
 </div>
 
@@ -548,6 +549,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       });
       renderAll();
       showNotif('Ready to save \u2014 click Save to remove duplicate targets.', 'success');
+
+    } else if (msg.type === 'notification') {
+      showNotif(msg.message, msg.level || 'success', 3000);
     }
   });
 
@@ -883,6 +887,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
   document.getElementById('btn-translate-all').addEventListener('click', function () { vscode.postMessage({ type: 'translateAll' }); });
   document.getElementById('btn-review-all').addEventListener('click',    function () { vscode.postMessage({ type: 'reviewAll' }); });
+  document.getElementById('btn-populate-tm').addEventListener('click',   function () { vscode.postMessage({ type: 'populateTm' }); });
   document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
   document.getElementById('btn-save').addEventListener('click',          function () { vscode.postMessage({ type: 'save' }); });
 
@@ -945,11 +950,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     }).join('');
   }
 
-  function showNotif(msg, type) {
+  function showNotif(msg, type, durationMs) {
     var el = document.getElementById('notif');
     el.textContent = msg; el.className = 'notif-' + type; el.classList.remove('hidden');
     if (notifTimer) clearTimeout(notifTimer);
-    notifTimer = setTimeout(function () { el.classList.add('hidden'); }, 4500);
+    notifTimer = setTimeout(function () { el.classList.add('hidden'); }, durationMs || 4500);
   }
 
   // ─── Column resize ────────────────────────────────────────────────────────────

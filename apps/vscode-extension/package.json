@@ -54,6 +54,11 @@
       {
         "command": "nexus.manageGlossary",
         "title": "Nexus: Manage Glossary & TM"
+      },
+      {
+        "command": "nexus.populateTmFromFile",
+        "title": "Nexus: Populate TM from File",
+        "icon": "$(database)"
       }
     ],
     "customEditors": [
@@ -95,6 +100,11 @@
           "command": "nexus.manageGlossary",
           "when": "resourceExtname == .xlf",
           "group": "nexus@4"
+        },
+        {
+          "command": "nexus.populateTmFromFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@5"
         }
       ],
       "editor/context": [
@@ -125,6 +135,12 @@
           "command": "nexus.findInNexusTranslator",
           "when": "resourceExtname == .al",
           "group": "navigation"
+        },
+        {
+          "command": "nexus.populateTmFromFile",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation",
+          "icon": "$(database)"
         }
       ],
       "commandPalette": [
@@ -154,6 +170,9 @@
         },
         {
           "command": "nexus.manageGlossary"
+        },
+        {
+          "command": "nexus.populateTmFromFile"
         }
       ]
     },

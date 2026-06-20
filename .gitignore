@@ -10,3 +10,6 @@ dist/
 prisma/dev.db
 
 apps/api/.recordings-cache/
+
+# Shared Translation Memory / Glossary store (user-specific)
+.nexus/

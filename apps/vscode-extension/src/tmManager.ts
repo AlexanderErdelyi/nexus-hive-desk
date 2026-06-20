@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -56,16 +57,59 @@ const FUZZY_THRESHOLD = 0.75;
 export class TmManager {
   private entries: TmEntry[] = [];
   private loaded = false;
-  private readonly fileUri: vscode.Uri;
+  private readonly fileName = 'tm.json';
+  private readonly globalUri: vscode.Uri;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
-    this.fileUri = vscode.Uri.joinPath(context.globalStorageUri, 'translation-memory.json');
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly workspaceRoot?: string
+  ) {
+    // Fallback location in VS Code's per-user global storage.
+    this.globalUri = vscode.Uri.joinPath(context.globalStorageUri, 'translation-memory.json');
+  }
+
+  /** Resolve the workspace-relative .nexus URI (the canonical write target). */
+  private workspaceUri(): vscode.Uri | undefined {
+    if (!this.workspaceRoot) return undefined;
+    return vscode.Uri.file(path.join(this.workspaceRoot, '.nexus', this.fileName));
+  }
+
+  private async fileExists(uri: vscode.Uri): Promise<boolean> {
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Where data is written. Workspace-relative `.nexus/` is preferred so the MCP
+   * server and extension share the same store; otherwise fall back to globalStorage.
+   */
+  private async getStoragePath(): Promise<vscode.Uri> {
+    const wsUri = this.workspaceUri();
+    if (this.workspaceRoot && wsUri) {
+      try {
+        await vscode.workspace.fs.createDirectory(
+          vscode.Uri.file(path.join(this.workspaceRoot, '.nexus'))
+        );
+      } catch {
+        // Directory may already exist — ignore
+      }
+      return wsUri;
+    }
+    return this.globalUri;
   }
 
   private async ensureLoaded(): Promise<void> {
     if (this.loaded) return;
+    // Priority: workspace-relative .nexus file wins if present; else globalStorage.
+    let readUri = this.globalUri;
+    const wsUri = this.workspaceUri();
+    if (wsUri && (await this.fileExists(wsUri))) readUri = wsUri;
     try {
-      const bytes = await vscode.workspace.fs.readFile(this.fileUri);
+      const bytes = await vscode.workspace.fs.readFile(readUri);
       const text = new TextDecoder().decode(bytes);
       const data = JSON.parse(text) as TmEntry[];
       this.entries = Array.isArray(data) ? data : [];
@@ -77,13 +121,16 @@ export class TmManager {
   }
 
   private async persist(): Promise<void> {
-    try {
-      await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
-    } catch {
-      // Directory may already exist — ignore
+    const target = await this.getStoragePath();
+    if (!this.workspaceUri()) {
+      try {
+        await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+      } catch {
+        // Directory may already exist — ignore
+      }
     }
     const text = JSON.stringify(this.entries, null, 2);
-    await vscode.workspace.fs.writeFile(this.fileUri, new TextEncoder().encode(text));
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(text));
   }
 
   /** Find up to 3 TM matches (sorted by score DESC) for each requested source string. */
@@ -222,7 +269,15 @@ export class TmManager {
 
 let instance: TmManager | undefined;
 
-export function getTmManager(context: vscode.ExtensionContext): TmManager {
-  if (!instance) instance = new TmManager(context);
+export function getTmManager(
+  context: vscode.ExtensionContext,
+  workspaceRoot?: string
+): TmManager {
+  if (!instance) {
+    instance = new TmManager(
+      context,
+      workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    );
+  }
   return instance;
 }

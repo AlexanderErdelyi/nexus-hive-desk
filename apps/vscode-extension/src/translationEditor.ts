@@ -216,6 +216,25 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           await handleReviewAll(document, webviewPanel, this.context);
           break;
 
+        case 'populateTm': {
+          const parsed = parseXliff(document.getText());
+          const srcLang = parsed.sourceLanguage || getConfig().sourceLanguage;
+          const tgtLang = parsed.targetLanguage || getConfig().targetLanguage;
+          const toImport = parsed.units.filter(
+            (u) => u.target && ['translated', 'final', 'signed-off'].includes(u.state || '')
+          );
+          await getTmManager(this.context).upsertBatch(
+            toImport.map((u) => ({ source: u.source, target: u.target })),
+            srcLang,
+            tgtLang
+          );
+          webviewPanel.webview.postMessage({
+            type: 'notification',
+            message: `Imported ${toImport.length} units into TM`,
+          });
+          break;
+        }
+
         case 'openAsText':
           // Open the same file in the default text editor (bypasses our custom editor)
           await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
