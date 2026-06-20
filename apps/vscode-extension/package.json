@@ -1,0 +1,133 @@
+{
+  "name": "nexus-translator",
+  "displayName": "Nexus Translator",
+  "description": "AI-powered translation for Business Central XLIFF files",
+  "version": "0.1.0",
+  "publisher": "nexus",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["translation", "xliff", "localization", "business central", "al"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nexus.translateSelection",
+        "title": "Nexus: Translate Selected Text"
+      },
+      {
+        "command": "nexus.translateXliffFile",
+        "title": "Nexus: Translate XLIFF File (Untranslated Units)"
+      },
+      {
+        "command": "nexus.reviewXliffFile",
+        "title": "Nexus: Review XLIFF File Translations"
+      },
+      {
+        "command": "nexus.setApiToken",
+        "title": "Nexus: Set API Token (Secure)"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "nexus.translateSelection",
+          "when": "editorHasSelection",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.translateXliffFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@2"
+        },
+        {
+          "command": "nexus.reviewXliffFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nexus.translateSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "nexus.translateXliffFile",
+          "when": "resourceExtname == .xlf"
+        },
+        {
+          "command": "nexus.reviewXliffFile",
+          "when": "resourceExtname == .xlf"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Nexus Translator",
+      "properties": {
+        "nexus.translator.provider": {
+          "type": "string",
+          "enum": ["github-models", "openai", "azure-openai"],
+          "enumDescriptions": [
+            "GitHub Models (requires GitHub token)",
+            "OpenAI API",
+            "Azure OpenAI Service"
+          ],
+          "default": "openai",
+          "description": "AI provider used for translations."
+        },
+        "nexus.translator.token": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API token/key for the AI provider. **Tip:** use `Nexus: Set API Token (Secure)` to store it in VS Code's secret storage instead of plain settings."
+        },
+        "nexus.translator.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "AI model name. Leave empty to use the provider default (`gpt-4o-mini` for GitHub Models, `gpt-4o` for OpenAI/Azure)."
+        },
+        "nexus.translator.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for the AI provider. Required for azure-openai; optional for openai."
+        },
+        "nexus.translator.sourceLanguage": {
+          "type": "string",
+          "default": "en-US",
+          "description": "Source language code used when the XLIFF file does not specify one (e.g. en-US)."
+        },
+        "nexus.translator.targetLanguage": {
+          "type": "string",
+          "default": "de-DE",
+          "description": "Target language code used when the XLIFF file does not specify one (e.g. de-DE)."
+        },
+        "nexus.translator.batchSize": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Number of translation units sent to the AI in a single request. Reduce if you hit token limits."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "dev": "node esbuild.js --watch",
+    "type-check": "tsc --noEmit",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@nexus/ai": "workspace:*",
+    "@nexus/xliff": "workspace:*",
+    "@nexus/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "esbuild": "^0.24.0"
+  }
+}
