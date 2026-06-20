@@ -15,7 +15,7 @@
   },
   "categories": ["Other"],
   "keywords": ["translation", "xliff", "localization", "business central", "al"],
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
