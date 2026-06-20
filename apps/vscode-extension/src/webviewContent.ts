@@ -113,16 +113,25 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     /* ─── Column headers ─── */
     #col-headers {
       display: grid;
-      grid-template-columns: 180px 1fr 1.5fr 145px;
+      grid-template-columns: var(--col-widths, 180px 1fr 1.5fr 145px);
       padding: 3px 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
       flex-shrink: 0;
       background: var(--vscode-sideBar-background, var(--vscode-editor-background));
     }
     .col-hdr {
+      position: relative;
       padding: 3px 10px;
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.06em; color: var(--vscode-descriptionForeground);
+    }
+    .col-resize-handle {
+      position: absolute; right: 0; top: 0; bottom: 0; width: 5px;
+      cursor: col-resize; z-index: 10;
+    }
+    .col-resize-handle:hover, .col-resize-handle.dragging {
+      background: var(--vscode-focusBorder, #0078d4);
+      opacity: 0.5;
     }
 
     /* ─── Unit list ─── */
@@ -131,7 +140,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     /* ─── Unit row ─── */
     .unit-row {
       display: grid;
-      grid-template-columns: 180px 1fr 1.5fr 145px;
+      grid-template-columns: var(--col-widths, 180px 1fr 1.5fr 145px);
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.08));
       min-height: 56px;
       transition: background 0.1s;
@@ -350,9 +359,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
 <!-- Column headers -->
 <div id="col-headers">
-  <div class="col-hdr">Context</div>
-  <div class="col-hdr">Source</div>
-  <div class="col-hdr">Target</div>
+  <div class="col-hdr">Context<div class="col-resize-handle" data-col="ctx"></div></div>
+  <div class="col-hdr">Source<div class="col-resize-handle" data-col="src"></div></div>
+  <div class="col-hdr">Target<div class="col-resize-handle" data-col="tgt"></div></div>
   <div class="col-hdr">State</div>
 </div>
 
@@ -394,15 +403,15 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       tgtLang = msg.targetLanguage || '';
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
-      filterSearch = '';
       filterState = 'all';
       filterType = '';
-      searchIn = 'all';
       objectFilters = msg.objectFilters || [];
-      document.getElementById('search-input').value = '';
+      filterSearch = msg.filterSearch || '';
+      searchIn = filterSearch ? 'source' : 'all';
+      document.getElementById('search-input').value = filterSearch;
       document.getElementById('state-filter').value = 'all';
       document.getElementById('type-filter').value = '';
-      document.getElementById('search-in').value = 'all';
+      document.getElementById('search-in').value = searchIn;
       renderAll();
 
     } else if (msg.type === 'setFilter') {
@@ -736,6 +745,39 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     if (notifTimer) clearTimeout(notifTimer);
     notifTimer = setTimeout(function () { el.classList.add('hidden'); }, 4500);
   }
+
+  // ─── Column resize ────────────────────────────────────────────────────────────
+  var colPx = { ctx: 180, src: 0, tgt: 0 }; // 0 = not yet measured (will use flex)
+  function applyColWidths() {
+    var w = colPx;
+    var src = w.src > 0 ? w.src + 'px' : '1fr';
+    var tgt = w.tgt > 0 ? w.tgt + 'px' : '1.5fr';
+    document.documentElement.style.setProperty('--col-widths', w.ctx + 'px ' + src + ' ' + tgt + ' 145px');
+  }
+  document.querySelectorAll('.col-resize-handle').forEach(function (handle) {
+    handle.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var col = handle.getAttribute('data-col');
+      // Measure actual px widths from the header cells before dragging
+      var hdrs = document.querySelectorAll('#col-headers .col-hdr');
+      if (colPx.src === 0) { colPx.src = hdrs[1].getBoundingClientRect().width; }
+      if (colPx.tgt === 0) { colPx.tgt = hdrs[2].getBoundingClientRect().width; }
+      var startX = e.clientX;
+      var startW = colPx[col];
+      handle.classList.add('dragging');
+      function onMove(ev) {
+        colPx[col] = Math.max(80, startW + (ev.clientX - startX));
+        applyColWidths();
+      }
+      function onUp() {
+        handle.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
 
   // ─── Boot ──────────────────────────────────────────────────────────────────
   vscode.postMessage({ type: 'ready' });

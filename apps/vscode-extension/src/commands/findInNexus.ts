@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { pendingFilters } from '../state';
+import { pendingFilters, pendingSearches } from '../state';
 import { TranslationEditorProvider } from '../translationEditor';
 
 /** Maps lowercase AL keyword → BC XLIFF object type string (matches Xliff Generator note prefix) */
@@ -13,8 +13,21 @@ const AL_TYPE_MAP: Record<string, string> = {
   profile: 'Profile', interface: 'Interface', permissionset: 'PermissionSet',
 };
 
-/** Regex matching the first object declaration in an AL file. Group 1 = keyword, 2 = name. */
-const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
+/**
+ * Regex matching the first object declaration in an AL file.
+ * Group 1 = keyword, 2 = object name.
+ * Handles both plain and quoted names, and the `extends "..."` clause used by extension types.
+ */
+const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?(?:\s+extends\s+["']?[^"'{\n]*["']?)?\s*[{(]/im;
+
+/**
+ * Extracts the value from an AL property assignment on a given line.
+ * e.g. `Caption = 'IC - Adjustment Company';` → `IC - Adjustment Company`
+ */
+function extractLineValue(lineText: string): string | null {
+  const m = /=\s*['"]([^'"]+)['"]/i.exec(lineText);
+  return m ? m[1].trim() : null;
+}
 
 /** Parse an AL file's text and return its "{ObjectType} {ObjectName}" filter token, or null. */
 function parseAlFilter(text: string): string | null {
@@ -35,6 +48,15 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
         if (!target) {
           vscode.window.showErrorMessage('No file or folder selected.');
           return;
+        }
+
+        // If triggered from an AL file editor, grab the caption/value at the cursor line
+        let initialSearch: string | undefined;
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.uri.fsPath.toLowerCase().endsWith('.al')) {
+          const lineText = editor.document.lineAt(editor.selection.active.line).text;
+          const extracted = extractLineValue(lineText);
+          if (extracted) initialSearch = extracted;
         }
 
         // Determine the search filter string from the selected resource
@@ -65,13 +87,16 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
         }
 
         // If the panel is already open, send the filter directly and focus it
-        if (filterStr && TranslationEditorProvider.applyFilter(xliffUri, filterStr)) {
+        if (filterStr && TranslationEditorProvider.applyFilter(xliffUri, filterStr, initialSearch)) {
           return;
         }
 
         // Otherwise store filter so the editor applies it when it opens
         if (filterStr) {
           pendingFilters.set(xliffUri.toString(), filterStr);
+        }
+        if (initialSearch) {
+          pendingSearches.set(xliffUri.toString(), initialSearch);
         }
 
         await vscode.commands.executeCommand(

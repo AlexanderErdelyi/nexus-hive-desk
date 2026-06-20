@@ -5,7 +5,7 @@ import type { TranslationState } from '@nexus/xliff';
 import type { AIProvider, AITranslateResult } from '@nexus/ai';
 import { createAIProvider, getConfig } from './provider';
 import { getWebviewContent } from './webviewContent';
-import { pendingFilters } from './state';
+import { pendingFilters, pendingSearches } from './state';
 
 // ─── Provider registration ────────────────────────────────────────────────────
 
@@ -16,12 +16,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
   private static readonly activePanels = new Map<string, vscode.WebviewPanel>();
 
   /** If the document is already open in a panel, apply a search filter and focus it. */
-  public static applyFilter(uri: vscode.Uri, filter: string): boolean {
+  public static applyFilter(uri: vscode.Uri, filter: string, searchText?: string): boolean {
     const panel = TranslationEditorProvider.activePanels.get(uri.toString());
     if (!panel) return false;
     panel.reveal(undefined, false);
     const objectFilters = filter.split(',').map((f) => f.trim()).filter(Boolean);
-    panel.webview.postMessage({ type: 'setFilter', objectFilters, state: 'all' });
+    panel.webview.postMessage({ type: 'setFilter', filter: searchText || '', objectFilters, state: 'all' });
     return true;
   }
 
@@ -63,6 +63,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         const parsed = parseXliff(document.getText());
         const initialFilter = pendingFilters.get(uriKey);
         if (initialFilter) pendingFilters.delete(uriKey);
+        const initialSearch = pendingSearches.get(uriKey);
+        if (initialSearch) pendingSearches.delete(uriKey);
         const objectFilters = initialFilter
           ? initialFilter.split(',').map((f) => f.trim()).filter(Boolean)
           : [];
@@ -73,6 +75,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           targetLanguage: parsed.targetLanguage,
           fileName: path.basename(document.fileName),
           objectFilters,
+          filterSearch: initialSearch || '',
         });
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
