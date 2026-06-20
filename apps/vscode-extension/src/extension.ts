@@ -65,7 +65,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Open / find commands
   registerOpenInNexus(context);
   registerFindInNexusTranslator(context);
-  registerShowTranslationDiff(context);
+  registerShowTranslationDiff(context, context.extensionUri);
 
   // Glossary & Translation Memory management panel
   registerManageGlossary(context);

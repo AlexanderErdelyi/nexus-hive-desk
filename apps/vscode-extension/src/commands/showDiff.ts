@@ -258,7 +258,10 @@ function resolveBaseline(fsPath: string): { content: string; label: string } | n
   return null;
 }
 
-export function registerShowTranslationDiff(context: vscode.ExtensionContext): void {
+export function registerShowTranslationDiff(
+  context: vscode.ExtensionContext,
+  extensionUri: vscode.Uri
+): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('nexus.showTranslationDiff', async (uri?: vscode.Uri) => {
       const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -305,7 +308,7 @@ export function registerShowTranslationDiff(context: vscode.ExtensionContext): v
         'nexus.translationDiff',
         `Diff: ${fileName}`,
         vscode.ViewColumn.Beside,
-        { enableScripts: true }
+        { enableScripts: true, localResourceRoots: [extensionUri] }
       );
 
       const nonce = getNonce();
