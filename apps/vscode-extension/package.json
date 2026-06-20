@@ -31,6 +31,14 @@
         "title": "Nexus: Set API Token (Secure)"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "nexus.translationEditor",
+        "displayName": "Nexus Translation Editor",
+        "selector": [{ "filenamePattern": "*.xlf" }],
+        "priority": "default"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
