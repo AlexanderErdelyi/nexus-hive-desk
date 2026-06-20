@@ -3,6 +3,29 @@ import * as path from 'path';
 import { pendingFilters } from '../state';
 import { TranslationEditorProvider } from '../translationEditor';
 
+/** Maps lowercase AL keyword → BC XLIFF object type string (matches Xliff Generator note prefix) */
+const AL_TYPE_MAP: Record<string, string> = {
+  table: 'Table', tableextension: 'TableExtension',
+  page: 'Page', pageextension: 'PageExtension', pagecustomization: 'PageCustomization',
+  codeunit: 'Codeunit', report: 'Report', reportextension: 'ReportExtension',
+  xmlport: 'XMLPort', query: 'Query',
+  enum: 'Enum', enumextension: 'EnumExtension',
+  profile: 'Profile', interface: 'Interface', permissionset: 'PermissionSet',
+};
+
+/** Regex matching the first object declaration in an AL file. Group 1 = keyword, 2 = name. */
+const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
+
+/** Parse an AL file's text and return its "{ObjectType} {ObjectName}" filter token, or null. */
+function parseAlFilter(text: string): string | null {
+  const m = AL_OBJECT_RE.exec(text);
+  if (!m) return null;
+  const bcType = AL_TYPE_MAP[m[1].toLowerCase()];
+  if (!bcType) return null;
+  const name = m[2].trim().replace(/^["']|["']$/g, '');
+  return `${bcType} ${name}`;
+}
+
 export function registerFindInNexusTranslator(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
@@ -16,7 +39,7 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
 
         // Determine the search filter string from the selected resource
         const filterStr = await resolveFilter(target);
-        if (filterStr === null) return; // user cancelled
+        if (filterStr === null) return; // user cancelled or no objects found
 
         // Find all .xlf files in the workspace
         const xliffs = await vscode.workspace.findFiles('**/*.xlf', '**/node_modules/**');
@@ -61,32 +84,48 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
   );
 }
 
+/** Returns a comma-separated "{ObjectType} {ObjectName}" filter string for the given resource. */
 async function resolveFilter(uri: vscode.Uri): Promise<string | null> {
   let stat: vscode.FileStat;
   try {
     stat = await vscode.workspace.fs.stat(uri);
   } catch {
-    return path.basename(uri.fsPath, path.extname(uri.fsPath));
+    // Not found — treat as file, try to parse as AL
+    return null;
   }
 
   if (stat.type === vscode.FileType.Directory) {
-    return path.basename(uri.fsPath);
+    // Read all .al files in the folder recursively
+    const alFiles = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(uri, '**/*.al')
+    );
+    const seen = new Set<string>();
+    const filters: string[] = [];
+    for (const fileUri of alFiles) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        const text = new TextDecoder().decode(bytes);
+        const f = parseAlFilter(text);
+        if (f && !seen.has(f)) { seen.add(f); filters.push(f); }
+      } catch { /* skip */ }
+    }
+    if (filters.length === 0) {
+      vscode.window.showWarningMessage('No BC AL objects found in folder.');
+      return null;
+    }
+    return filters.join(',');
   }
 
-  // For .al files: try to extract the BC object type + number from the file content
-  // e.g. "page 50100 CustomerList" → filter by "page 50100"
+  // For .al files: parse and return "ObjectType ObjectName"
   if (uri.fsPath.toLowerCase().endsWith('.al')) {
     try {
       const bytes = await vscode.workspace.fs.readFile(uri);
       const text = new TextDecoder().decode(bytes);
-      const m = text.match(
-        /^\s*(page|table|codeunit|report|query|xmlport|enum|interface|permissionset)\s+(\d+)/im
-      );
-      if (m) return `${m[1].toLowerCase()} ${m[2]}`;
+      const f = parseAlFilter(text);
+      if (f) return f;
     } catch { /* ignore */ }
-    return path.basename(uri.fsPath, '.al');
+    return null;
   }
 
-  // Fallback: filename stem
-  return path.basename(uri.fsPath, path.extname(uri.fsPath));
+  return null;
 }

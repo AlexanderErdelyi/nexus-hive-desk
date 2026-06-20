@@ -71,6 +71,32 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       border-radius: 3px; font-size: 12px; font-family: inherit;
     }
     .tb-spacer { flex: 1; }
+
+    /* ─── Object filter chips bar ─── */
+    #filter-chips-bar {
+      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+      padding: 4px 16px;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      background: rgba(0,120,215,0.06);
+      flex-shrink: 0;
+    }
+    .filter-chips-label { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+    .filter-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 1px 7px 1px 8px; border-radius: 10px;
+      background: rgba(0,120,215,0.15); color: var(--vscode-foreground);
+      border: 1px solid rgba(0,120,215,0.35); font-size: 11px;
+    }
+    .filter-chip-x {
+      background: none; border: none; padding: 0 1px; height: auto; min-width: 0;
+      cursor: pointer; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1;
+    }
+    .filter-chip-x:hover { color: var(--vscode-errorForeground); }
+    .filter-chip-clear {
+      background: none; border: none; height: auto; padding: 2px 5px;
+      cursor: pointer; font-size: 11px; color: var(--vscode-descriptionForeground);
+    }
+    .filter-chip-clear:hover { color: var(--vscode-foreground); }
     button {
       height: 26px; padding: 0 10px; border: none; border-radius: 3px;
       cursor: pointer; font-size: 12px; font-family: inherit;
@@ -296,6 +322,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
 </div>
 
+<!-- Object-filter chips (shown when filtering by AL objects) -->
+<div id="filter-chips-bar" hidden></div>
+
 <!-- Column headers -->
 <div id="col-headers">
   <div class="col-hdr">Context</div>
@@ -327,7 +356,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
   // ─── State ─────────────────────────────────────────────────────────────────
   var units = [], srcLang = '', tgtLang = '', fileName = '';
-  var filterSearch = '', filterState = 'all';
+  var filterSearch = '', filterState = 'all', objectFilters = [];
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null;
 
@@ -342,19 +371,21 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       tgtLang = msg.targetLanguage || '';
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
-      if (msg.initialFilter) {
-        filterSearch = msg.initialFilter;
-        document.getElementById('search-input').value = filterSearch;
-      }
+      filterSearch = '';
+      filterState = 'all';
+      objectFilters = msg.objectFilters || [];
+      document.getElementById('search-input').value = '';
+      document.getElementById('state-filter').value = 'all';
       renderAll();
 
     } else if (msg.type === 'setFilter') {
       filterSearch = msg.filter || '';
       filterState  = msg.state  || 'all';
+      objectFilters = msg.objectFilters || [];
       document.getElementById('search-input').value  = filterSearch;
       document.getElementById('state-filter').value  = filterState;
       visibleCount = 100;
-      renderList(); renderFooter();
+      renderAll();
 
     } else if (msg.type === 'translating') {
       (msg.ids || []).forEach(function (id) { loadingSet.add(id); });
@@ -393,7 +424,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  function renderAll() { renderHeader(); renderList(); renderFooter(); }
+  function renderAll() { renderHeader(); renderFilterChips(); renderList(); renderFooter(); }
 
   function getStats() {
     var total = units.length, translated = 0, needsTrans = 0;
@@ -408,6 +439,13 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var q = filterSearch.toLowerCase();
     return units.filter(function (u) {
       if (filterState !== 'all' && u.state !== filterState) return false;
+      // Object-filter: note must start with one of the selected "ObjectType ObjectName" pairs
+      if (objectFilters.length > 0) {
+        var noteOk = objectFilters.some(function (f) {
+          return u.note && u.note.startsWith(f + ' - ');
+        });
+        if (!noteOk) return false;
+      }
       if (!q) return true;
       return u.source.toLowerCase().indexOf(q) >= 0 ||
              u.target.toLowerCase().indexOf(q) >= 0 ||
@@ -416,8 +454,30 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     });
   }
 
+  function renderFilterChips() {
+    var bar = document.getElementById('filter-chips-bar');
+    if (objectFilters.length === 0) { bar.hidden = true; bar.innerHTML = ''; return; }
+    bar.hidden = false;
+    var html = '<span class="filter-chips-label">Filter:</span>';
+    objectFilters.forEach(function (f, i) {
+      html += '<span class="filter-chip">' + esc(f) +
+        '<button class="filter-chip-x" data-idx="' + i + '" title="Remove filter">\u00d7</button></span>';
+    });
+    html += '<button class="filter-chip-clear" id="btn-clear-obj-filter">Clear all</button>';
+    bar.innerHTML = html;
+    bar.querySelectorAll('.filter-chip-x').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var idx = parseInt(this.getAttribute('data-idx'), 10);
+        objectFilters.splice(idx, 1);
+        visibleCount = 100; renderAll();
+      });
+    });
+    document.getElementById('btn-clear-obj-filter').addEventListener('click', function () {
+      objectFilters = []; visibleCount = 100; renderAll();
+    });
+  }
+
   function renderHeader() {
-    var s = getStats();
     document.getElementById('hdr-file').textContent  = fileName || 'Translation Editor';
     document.getElementById('hdr-langs').textContent = srcLang && tgtLang ? srcLang + ' \u2192 ' + tgtLang : '';
     var needsEl = document.getElementById('hdr-needs');
@@ -451,7 +511,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     el.querySelectorAll('.btn-ai-row').forEach(function (btn) { btn.addEventListener('click', onTranslateSingle); });
     el.querySelectorAll('.btn-go-src').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        vscode.postMessage({ type: 'goToSource', id: this.getAttribute('data-id') });
+        vscode.postMessage({ type: 'goToSource', note: this.getAttribute('data-note') });
       });
     });
     var btnMore = document.getElementById('btn-load-more');
@@ -471,36 +531,35 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   // ─── Context parser ────────────────────────────────────────────────────────
   // BC XLIFF Xliff-Generator note format (human-readable):
   //   "Table NobilisTable - Property Caption"
+  //   "TableExtension NOBXRechnungEMailQueueExt - Field Name - Property Caption"
   //   "Codeunit PIM Export - NamedType FileSuffixLbl"
-  //   "Table NobilisTable - Method UpdateAuth - NamedType 2266612977"
-  // Fallback: unit ID (numeric IDs)
   function parseContext(unit) {
     var source = unit.note || unit.id;
     var parts  = source.split(' - ');
-    var m = parts[0].match(/^(Page|Table|Codeunit|Report|Query|XmlPort|Enum|Interface|PermissionSet)\s+(.+)/i);
+    // Match ObjectType (including *Extension variants) + ObjectName
+    var m = parts[0].match(/^(TableExtension|PageExtension|PageCustomization|ReportExtension|EnumExtension|Table|Page|Codeunit|Report|XMLPort|Query|Enum|Interface|PermissionSet|Profile)\s+(.+)/i);
     if (!m) return { type: 'other', name: trunc(source, 40), prop: '' };
 
     var type = m[1];
     var name = m[2].trim();
 
-    // Build a readable property label from remaining segments
     var rest = parts.slice(1).map(function (p) {
       return p.replace(/^(Property|NamedType|Control|Action|Field|Method)\s*/i, '').trim();
     }).filter(Boolean);
-    var prop = rest.join(' \u203a ');  // " › "
+    var prop = rest.join(' \u203a ');
 
     return { type: type, name: name, prop: prop };
   }
 
   function badgeClass(type) {
     switch ((type || '').toLowerCase()) {
-      case 'table':       return 'badge-table';
-      case 'page':        return 'badge-page';
-      case 'codeunit':    return 'badge-codeunit';
-      case 'report':      return 'badge-report';
-      case 'query':       return 'badge-query';
-      case 'enum': case 'interface': case 'permissionset': return 'badge-enum';
-      default:            return 'badge-other';
+      case 'table': case 'tableextension':   return 'badge-table';
+      case 'page':  case 'pageextension': case 'pagecustomization': return 'badge-page';
+      case 'codeunit':  return 'badge-codeunit';
+      case 'report': case 'reportextension': return 'badge-report';
+      case 'query':     return 'badge-query';
+      case 'enum': case 'enumextension': case 'interface': case 'permissionset': case 'profile': return 'badge-enum';
+      default:          return 'badge-other';
     }
   }
 
@@ -518,7 +577,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         '<span class="obj-badge ' + badgeClass(ctx.type) + '">' + esc(ctx.type) + '</span>' +
         '<div class="obj-name" title="' + esc(unit.note || unit.id) + '">' + esc(trunc(ctx.name, 36)) + '</div>' +
         (ctx.prop ? '<div class="obj-prop">' + esc(trunc(ctx.prop, 40)) + '</div>' : '') +
-        '<button class="btn-go-src" data-id="' + esc(unit.id) + '" title="Go to AL source">&#10548; Go to Source</button>' +
+        '<button class="btn-go-src" data-note="' + esc(unit.note || '') + '" title="Go to AL source">&#10548; Go to Source</button>' +
       '</div>';
 
     // ── Source cell ───────────────────────────────────────────────────────────

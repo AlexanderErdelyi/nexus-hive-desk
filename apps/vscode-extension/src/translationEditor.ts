@@ -20,7 +20,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const panel = TranslationEditorProvider.activePanels.get(uri.toString());
     if (!panel) return false;
     panel.reveal(undefined, false);
-    panel.webview.postMessage({ type: 'setFilter', filter, state: 'all' });
+    const objectFilters = filter.split(',').map((f) => f.trim()).filter(Boolean);
+    panel.webview.postMessage({ type: 'setFilter', objectFilters, state: 'all' });
     return true;
   }
 
@@ -62,13 +63,16 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         const parsed = parseXliff(document.getText());
         const initialFilter = pendingFilters.get(uriKey);
         if (initialFilter) pendingFilters.delete(uriKey);
+        const objectFilters = initialFilter
+          ? initialFilter.split(',').map((f) => f.trim()).filter(Boolean)
+          : [];
         webviewPanel.webview.postMessage({
           type: 'init',
           units: parsed.units,
           sourceLanguage: parsed.sourceLanguage,
           targetLanguage: parsed.targetLanguage,
           fileName: path.basename(document.fileName),
-          initialFilter,
+          objectFilters,
         });
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
@@ -120,7 +124,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           break;
 
         case 'goToSource':
-          await goToSource(msg.id as string);
+          await goToSource(msg.note as string);
           break;
       }
     });
@@ -367,26 +371,44 @@ function getNonce(): string {
 
 // ─── Go to source ─────────────────────────────────────────────────────────────
 
-async function goToSource(unitId: string): Promise<void> {
-  // BC XLIFF unit IDs: "Page 50100 - NamedType::Caption"
-  //                    "Table 50100 - Field 1 - NamedType::FieldCaption"
-  const bcMatch = unitId.match(
-    /^(Page|Table|Codeunit|Report|Query|XmlPort|Enum|Interface|PermissionSet)\s+(\d+)/i
-  );
+const BC_OBJECT_TYPES_LOWER = new Set([
+  'table', 'tableextension', 'page', 'pageextension', 'pagecustomization',
+  'codeunit', 'report', 'reportextension', 'xmlport', 'query',
+  'enum', 'enumextension', 'profile', 'interface', 'permissionset',
+]);
 
-  if (!bcMatch) {
-    // Fallback: search panel
+/**
+ * Navigate to the AL source file for the given BC XLIFF Xliff-Generator note.
+ * Note format: "{ObjectType} {ObjectName} - [{MemberType} {MemberName} -] {PropertyType} {PropName}"
+ * Mirrors the web app's vscode-link API logic.
+ */
+async function goToSource(note: string): Promise<void> {
+  if (!note) {
+    vscode.window.showWarningMessage('No source note available for this unit.');
+    return;
+  }
+
+  const parts = note.split(' - ');
+  const firstSpace = parts[0].indexOf(' ');
+  const objectType = firstSpace >= 0 ? parts[0].substring(0, firstSpace) : '';
+  const objectName = firstSpace >= 0 ? parts[0].substring(firstSpace + 1).trim() : '';
+
+  if (!BC_OBJECT_TYPES_LOWER.has(objectType.toLowerCase()) || !objectName) {
+    // Can't parse — open workspace search as fallback
     await vscode.commands.executeCommand('workbench.action.findInFiles', {
-      query: unitId.split(' - ')[0].trim(),
+      query: note.split(' - ')[0].trim(),
       triggerSearch: true,
     });
     return;
   }
 
-  const objType = bcMatch[1].toLowerCase();
-  const objNumber = bcMatch[2];
-  // Match the AL object declaration at the start of a line, e.g. "page 50100 CustomerList"
-  const searchRegex = new RegExp(`^\\s*${objType}\\s+${objNumber}\\b`, 'im');
+  // The property value from the last segment — used to find the specific line
+  const lastPart = parts[parts.length - 1];
+  const lastSpace = lastPart.indexOf(' ');
+  const propertyValue = lastSpace >= 0 ? lastPart.substring(lastSpace + 1) : lastPart;
+
+  // AL object declaration regex — matches "tableextension 50200 "My Name" {"
+  const AL_OBJECT_RE = /^(tableextension|table|pagecustomization|pageextension|page|codeunit|reportextension|report|xmlport|query|enumextension|enum|profile|interface|permissionset)\s+\d+\s+["']?([^"'{\n]+?)["']?\s*[{(]/im;
 
   const files = await vscode.workspace.findFiles('**/*.al', '**/node_modules/**');
 
@@ -397,24 +419,34 @@ async function goToSource(unitId: string): Promise<void> {
       text = new TextDecoder().decode(bytes);
     } catch { continue; }
 
-    const match = searchRegex.exec(text);
-    if (match) {
-      const doc = await vscode.workspace.openTextDocument(fileUri);
-      const pos = doc.positionAt(match.index);
-      await vscode.window.showTextDocument(doc, {
-        selection: new vscode.Range(pos, pos),
-        preserveFocus: false,
-      });
-      return;
+    const m = AL_OBJECT_RE.exec(text);
+    if (!m) continue;
+    const declaredName = m[2].trim().replace(/^["']|["']$/g, '');
+    if (declaredName.toLowerCase() !== objectName.toLowerCase()) continue;
+
+    const doc = await vscode.workspace.openTextDocument(fileUri);
+
+    // Try to find the property value for a more precise line
+    let line = 0;
+    if (propertyValue) {
+      const lines = text.split('\n');
+      const idx = lines.findIndex((l) => l.includes(propertyValue));
+      if (idx >= 0) line = idx;
     }
+
+    const pos = doc.positionAt(line > 0 ? text.split('\n').slice(0, line).join('\n').length + 1 : 0);
+    await vscode.window.showTextDocument(doc, {
+      selection: new vscode.Range(line > 0 ? new vscode.Position(line, 0) : pos, line > 0 ? new vscode.Position(line, 0) : pos),
+      preserveFocus: false,
+    });
+    return;
   }
 
-  // No match found — open the search panel as fallback
   vscode.window.showWarningMessage(
-    `Could not find ${bcMatch[1]} ${objNumber} in .al files. Opening workspace search.`
+    `Could not find ${objectType} "${objectName}" in .al files. Opening workspace search.`
   );
   await vscode.commands.executeCommand('workbench.action.findInFiles', {
-    query: `${objType} ${objNumber}`,
+    query: objectName,
     triggerSearch: true,
     filesToInclude: '*.al',
   });
