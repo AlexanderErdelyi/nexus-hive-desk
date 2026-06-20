@@ -478,6 +478,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   }
 
   function renderHeader() {
+    var s = getStats();
     document.getElementById('hdr-file').textContent  = fileName || 'Translation Editor';
     document.getElementById('hdr-langs').textContent = srcLang && tgtLang ? srcLang + ' \u2192 ' + tgtLang : '';
     var needsEl = document.getElementById('hdr-needs');
