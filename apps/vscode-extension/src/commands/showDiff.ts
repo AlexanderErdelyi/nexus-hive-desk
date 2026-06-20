@@ -21,26 +21,40 @@ function getNonce(): string {
   return text;
 }
 
-function getBaselineContent(fsPath: string): string | null {
-  const wsFolders = vscode.workspace.workspaceFolders;
-  if (!wsFolders || wsFolders.length === 0) return null;
+/** Resolve git root for a file and return { gitRoot, relPath } or null. */
+function resolveGitInfo(fsPath: string): { gitRoot: string; relPath: string } | null {
+  const fileDir = path.dirname(fsPath);
+  try {
+    const gitRoot = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: fileDir,
+      encoding: 'utf-8',
+    }).trim().replace(/\//g, path.sep);
 
-  // Try each workspace folder to find the right git root
-  for (const wsFolder of wsFolders) {
-    const relPath = path.relative(wsFolder.uri.fsPath, fsPath).replace(/\\/g, '/');
-    if (relPath.startsWith('..')) continue; // not inside this workspace folder
+    const relPath = path.relative(gitRoot, fsPath).replace(/\\/g, '/');
+    return { gitRoot, relPath };
+  } catch {
+    return null;
+  }
+}
+
+function getBaselineContent(fsPath: string): string | null {
+  const info = resolveGitInfo(fsPath);
+  if (!info) return null;
+  const { gitRoot, relPath } = info;
+
+  // Try HEAD first, then the index (staged version) as fallback
+  for (const ref of [`HEAD:${relPath}`, `:${relPath}`]) {
     try {
-      const result = cp.execFileSync('git', ['show', `HEAD:${relPath}`], {
-        cwd: wsFolder.uri.fsPath,
+      const result = cp.execFileSync('git', ['show', ref], {
+        cwd: gitRoot,
         maxBuffer: 50 * 1024 * 1024,
       });
       return result.toString('utf-8');
     } catch {
-      // HEAD doesn't have this file yet (new file) — return null
-      return null;
+      // try next ref
     }
   }
-  return null;
+  return null; // untracked new file
 }
 
 function computeDiff(oldUnits: XliffUnit[], newUnits: XliffUnit[]): UnitDiff[] {
@@ -70,7 +84,8 @@ function getDiffHtml(
   cspSource: string,
   nonce: string,
   fileName: string,
-  diffs: UnitDiff[]
+  diffs: UnitDiff[],
+  baselineLabel: string
 ): string {
   const added = diffs.filter((d) => d.type === 'added').length;
   const removed = diffs.filter((d) => d.type === 'removed').length;
@@ -128,7 +143,9 @@ function getDiffHtml(
       background: var(--vscode-editor-background);
       padding: 16px;
     }
-    h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+    .baseline-label { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 12px; }
+    .baseline-label code { font-family: var(--vscode-editor-font-family, monospace); }
     .summary {
       display: flex; gap: 16px; margin-bottom: 16px;
       padding: 10px 14px;
@@ -168,8 +185,9 @@ function getDiffHtml(
 </head>
 <body>
   <h2>Translation Changes — ${esc(fileName)}</h2>
+  <p class="baseline-label">Compared to: <code>${esc(baselineLabel)}</code></p>
   ${diffs.length === 0
-    ? '<div class="empty-state">✓ No translation changes compared to HEAD</div>'
+    ? `<div class="empty-state">✓ No translation changes compared to ${esc(baselineLabel)}</div>`
     : `<div class="summary">
         <div class="sum-item"><div class="sum-dot" style="background:#dcdcaa"></div>${modified} modified</div>
         <div class="sum-item"><div class="sum-dot" style="background:#4ec9b0"></div>${added} added</div>
@@ -187,6 +205,31 @@ function getDiffHtml(
 
 // ─── Command ──────────────────────────────────────────────────────────────────
 
+/** Resolve baseline content and label. Tries HEAD then index (:path). */
+function resolveBaseline(fsPath: string): { content: string; label: string } | null {
+  const info = resolveGitInfo(fsPath);
+  if (!info) return null;
+  const { gitRoot, relPath } = info;
+
+  const candidates = [
+    { ref: `HEAD:${relPath}`, label: 'HEAD' },
+    { ref: `:${relPath}`,     label: 'index (staged)' },
+  ];
+
+  for (const { ref, label } of candidates) {
+    try {
+      const content = cp.execFileSync('git', ['show', ref], {
+        cwd: gitRoot,
+        maxBuffer: 50 * 1024 * 1024,
+      }).toString('utf-8');
+      return { content, label };
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
 export function registerShowTranslationDiff(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('nexus.showTranslationDiff', async (uri?: vscode.Uri) => {
@@ -197,7 +240,6 @@ export function registerShowTranslationDiff(context: vscode.ExtensionContext): v
       }
 
       const currentText = (await vscode.workspace.fs.readFile(target)).toString();
-      const baselineText = getBaselineContent(target.fsPath);
 
       let currentParsed;
       try {
@@ -207,16 +249,20 @@ export function registerShowTranslationDiff(context: vscode.ExtensionContext): v
         return;
       }
 
-      if (!baselineText) {
-        vscode.window.showInformationMessage('No baseline found in git HEAD (new file or not tracked). Showing all units as added.');
-      }
-
+      const baseline = resolveBaseline(target.fsPath);
       let oldUnits: XliffUnit[] = [];
-      if (baselineText) {
+      let baselineLabel = 'git HEAD';
+
+      if (!baseline) {
+        vscode.window.showWarningMessage(
+          'No git baseline found — file may be untracked. Showing all units as new.'
+        );
+      } else {
+        baselineLabel = baseline.label;
         try {
-          oldUnits = parseXliff(baselineText).units;
+          oldUnits = parseXliff(baseline.content).units;
         } catch {
-          // baseline is unparseable — treat everything as added
+          vscode.window.showWarningMessage('Baseline XLIFF could not be parsed — showing all units as new.');
         }
       }
 
@@ -230,7 +276,7 @@ export function registerShowTranslationDiff(context: vscode.ExtensionContext): v
       );
 
       const nonce = getNonce();
-      panel.webview.html = getDiffHtml(panel.webview.cspSource, nonce, fileName, diffs);
+      panel.webview.html = getDiffHtml(panel.webview.cspSource, nonce, fileName, diffs, baselineLabel);
     })
   );
 }
