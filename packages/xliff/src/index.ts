@@ -357,8 +357,22 @@ export function parseXliff(xmlContent: string): ParsedXliff {
     const id = String(unit['@_id'] ?? '');
 
     const sourceText = getText(unit.source);
-    const target = unit.target as Record<string, unknown> | string | undefined;
-    const rawTargetText = getText(unit.target);
+
+    // Handle multiple <target> elements (NAB AL Tool may insert several suggestions).
+    // Prefer the first target WITHOUT a NAB prefix (= confirmed translation);
+    // fall back to the first element if all carry a NAB prefix.
+    let targetNode: unknown = unit.target;
+    if (Array.isArray(unit.target) && unit.target.length > 0) {
+      const targets = unit.target as unknown[];
+      const confirmed = targets.find((t) => {
+        const txt = getText(t);
+        return !NAB_PREFIX_STATES.some(({ prefix }) => prefix.test(txt));
+      });
+      targetNode = confirmed ?? targets[0];
+    }
+
+    const target = targetNode as Record<string, unknown> | string | undefined;
+    const rawTargetText = getText(targetNode);
     const { cleaned: targetText } = stripNabPrefix(rawTargetText ?? '');
     const targetState = typeof target === 'object' && target !== null
       ? String(target['@_state'] ?? '')

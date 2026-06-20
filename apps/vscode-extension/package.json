@@ -39,6 +39,11 @@
         "title": "Find in Nexus Translator"
       },
       {
+        "command": "nexus.showTranslationDiff",
+        "title": "Nexus: Show Translation Changes",
+        "icon": "$(diff)"
+      },
+      {
         "command": "nexus.setNexusAsDefaultXlfEditor",
         "title": "Nexus: Use Nexus as Default .xlf Editor"
       },
@@ -57,6 +62,11 @@
     ],
     "menus": {
       "explorer/context": [
+        {
+          "command": "nexus.showTranslationDiff",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@1"
+        },
         {
           "command": "nexus.openInNexusEditor",
           "when": "resourceExtname == .xlf",
@@ -91,6 +101,12 @@
         }
       ],
       "editor/title": [
+        {
+          "command": "nexus.showTranslationDiff",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation",
+          "icon": "$(diff)"
+        },
         {
           "command": "nexus.openInNexusEditor",
           "when": "resourceExtname == .xlf",

@@ -6,6 +6,7 @@ import { registerReviewXliffFile } from './commands/reviewXliffFile';
 import { registerSetApiToken } from './commands/setApiToken';
 import { registerOpenInNexus } from './commands/openInNexus';
 import { registerFindInNexusTranslator } from './commands/findInNexus';
+import { registerShowTranslationDiff } from './commands/showDiff';
 
 export function activate(context: vscode.ExtensionContext): void {
   // Custom editor: opens .xlf files with the full translation UI panel
@@ -20,6 +21,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Open / find commands
   registerOpenInNexus(context);
   registerFindInNexusTranslator(context);
+  registerShowTranslationDiff(context);
 }
 
 export function deactivate(): void {}
