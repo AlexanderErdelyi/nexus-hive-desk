@@ -114,6 +114,20 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       font-size: 11px;
     }
     .btn-ghost:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); border-color: var(--vscode-widget-border, transparent); }
+    .btn-go-source {
+      background: transparent;
+      border: none;
+      color: var(--vscode-textLink-foreground);
+      font-size: 11px;
+      padding: 1px 5px;
+      cursor: pointer;
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 0.15s;
+      margin-left: auto;
+    }
+    .unit-card:hover .btn-go-source { opacity: 1; }
+    .btn-go-source:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
     button:disabled { opacity: 0.45; cursor: default; }
 
     /* ─── Unit list ─── */
@@ -373,6 +387,12 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         reviewMap = {};
         loadingSet = new Set();
         visibleCount = 80;
+        // Apply initial filter from "Find in Nexus Translator" command
+        if (msg.initialFilter) {
+          filterSearch = msg.initialFilter;
+          var searchEl = document.getElementById('search-input');
+          if (searchEl) searchEl.value = filterSearch;
+        }
         renderAll();
 
       } else if (msg.type === 'translating') {
@@ -498,6 +518,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       el.querySelectorAll('.btn-ai-single').forEach(function (btn) {
         btn.addEventListener('click', onTranslateSingle);
       });
+      el.querySelectorAll('.btn-go-source').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          vscode.postMessage({ type: 'goToSource', id: this.getAttribute('data-id') });
+        });
+      });
       var btnLoadMore = document.getElementById('btn-load-more');
       if (btnLoadMore) {
         btnLoadMore.addEventListener('click', function () {
@@ -540,6 +565,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             confBadge +
             loadingOverlay +
             '<span class="unit-id" title="' + esc(unit.id) + '">' + esc(trunc(unit.id, 90)) + '</span>' +
+            '<button class="btn-go-source" data-id="' + esc(unit.id) + '" title="Go to source in AL file">⤴ Source</button>' +
           '</div>' +
           '<div class="source-row">' +
             '<span class="source-label">SRC</span>' +

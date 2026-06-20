@@ -29,6 +29,22 @@
       {
         "command": "nexus.setApiToken",
         "title": "Nexus: Set API Token (Secure)"
+      },
+      {
+        "command": "nexus.openInNexusEditor",
+        "title": "Open in Nexus Translator"
+      },
+      {
+        "command": "nexus.findInNexusTranslator",
+        "title": "Find in Nexus Translator"
+      },
+      {
+        "command": "nexus.setNexusAsDefaultXlfEditor",
+        "title": "Nexus: Use Nexus as Default .xlf Editor"
+      },
+      {
+        "command": "nexus.setTextAsDefaultXlfEditor",
+        "title": "Nexus: Use Text (Raw XML) as Default .xlf Editor"
       }
     ],
     "customEditors": [
@@ -36,14 +52,19 @@
         "viewType": "nexus.translationEditor",
         "displayName": "Nexus Translation Editor",
         "selector": [{ "filenamePattern": "*.xlf" }],
-        "priority": "default"
+        "priority": "option"
       }
     ],
     "menus": {
-      "editor/context": [
+      "explorer/context": [
         {
-          "command": "nexus.translateSelection",
-          "when": "editorHasSelection",
+          "command": "nexus.openInNexusEditor",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al || explorerResourceIsFolder",
           "group": "nexus@1"
         },
         {
@@ -55,6 +76,30 @@
           "command": "nexus.reviewXliffFile",
           "when": "resourceExtname == .xlf",
           "group": "nexus@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "nexus.translateSelection",
+          "when": "editorHasSelection",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al",
+          "group": "nexus@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "nexus.openInNexusEditor",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
@@ -69,6 +114,18 @@
         {
           "command": "nexus.reviewXliffFile",
           "when": "resourceExtname == .xlf"
+        },
+        {
+          "command": "nexus.openInNexusEditor"
+        },
+        {
+          "command": "nexus.findInNexusTranslator"
+        },
+        {
+          "command": "nexus.setNexusAsDefaultXlfEditor"
+        },
+        {
+          "command": "nexus.setTextAsDefaultXlfEditor"
         }
       ]
     },

@@ -5,6 +5,7 @@ import type { TranslationState } from '@nexus/xliff';
 import type { AIProvider, AITranslateResult } from '@nexus/ai';
 import { createAIProvider, getConfig } from './provider';
 import { getWebviewContent } from './webviewContent';
+import { pendingFilters } from './state';
 
 // ─── Provider registration ────────────────────────────────────────────────────
 
@@ -44,12 +45,17 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const sendInit = () => {
       try {
         const parsed = parseXliff(document.getText());
+        // Consume any pending filter (set by findInNexusTranslator command)
+        const uriKey = document.uri.toString();
+        const initialFilter = pendingFilters.get(uriKey);
+        if (initialFilter) pendingFilters.delete(uriKey);
         webviewPanel.webview.postMessage({
           type: 'init',
           units: parsed.units,
           sourceLanguage: parsed.sourceLanguage,
           targetLanguage: parsed.targetLanguage,
           fileName: path.basename(document.fileName),
+          initialFilter,
         });
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
@@ -98,6 +104,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'openAsText':
           // Open the same file in the default text editor (bypasses our custom editor)
           await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+          break;
+
+        case 'goToSource':
+          await goToSource(msg.id as string);
           break;
       }
     });
@@ -339,4 +349,59 @@ function getNonce(): string {
   let nonce = '';
   for (let i = 0; i < 32; i++) nonce += chars[Math.floor(Math.random() * chars.length)];
   return nonce;
+}
+
+// ─── Go to source ─────────────────────────────────────────────────────────────
+
+async function goToSource(unitId: string): Promise<void> {
+  // BC XLIFF unit IDs: "Page 50100 - NamedType::Caption"
+  //                    "Table 50100 - Field 1 - NamedType::FieldCaption"
+  const bcMatch = unitId.match(
+    /^(Page|Table|Codeunit|Report|Query|XmlPort|Enum|Interface|PermissionSet)\s+(\d+)/i
+  );
+
+  if (!bcMatch) {
+    // Fallback: search panel
+    await vscode.commands.executeCommand('workbench.action.findInFiles', {
+      query: unitId.split(' - ')[0].trim(),
+      triggerSearch: true,
+    });
+    return;
+  }
+
+  const objType = bcMatch[1].toLowerCase();
+  const objNumber = bcMatch[2];
+  // Match the AL object declaration at the start of a line, e.g. "page 50100 CustomerList"
+  const searchRegex = new RegExp(`^\\s*${objType}\\s+${objNumber}\\b`, 'im');
+
+  const files = await vscode.workspace.findFiles('**/*.al', '**/node_modules/**', 200);
+
+  for (const fileUri of files) {
+    let text: string;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(fileUri);
+      text = new TextDecoder().decode(bytes);
+    } catch { continue; }
+
+    const match = searchRegex.exec(text);
+    if (match) {
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      const pos = doc.positionAt(match.index);
+      await vscode.window.showTextDocument(doc, {
+        selection: new vscode.Range(pos, pos),
+        preserveFocus: false,
+      });
+      return;
+    }
+  }
+
+  // No match found — open the search panel as fallback
+  vscode.window.showWarningMessage(
+    `Could not find ${bcMatch[1]} ${objNumber} in .al files. Opening workspace search.`
+  );
+  await vscode.commands.executeCommand('workbench.action.findInFiles', {
+    query: `${objType} ${objNumber}`,
+    triggerSearch: true,
+    filesToInclude: '*.al',
+  });
 }
