@@ -1,11 +1,45 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseXliff, serializeXliff, filterUnits } from '@nexus/xliff';
-import type { TranslationState } from '@nexus/xliff';
-import type { AIProvider, AITranslateResult } from '@nexus/ai';
+import type { TranslationState, XliffUnit } from '@nexus/xliff';
+import type { AIProvider } from '@nexus/ai';
 import { createAIProvider, getConfig } from './provider';
 import { getWebviewContent } from './webviewContent';
 import { pendingFilters, pendingSearches } from './state';
+import { getTmManager } from './tmManager';
+import type { TmMatch } from './tmManager';
+import { getGlossaryManager } from './glossaryManager';
+
+// ─── Glossary helper ───────────────────────────────────────────────────────────
+
+/** Load glossary terms for the given language pair, shaped for the AI translate request. */
+async function loadGlossary(
+  context: vscode.ExtensionContext,
+  srcLang: string,
+  tgtLang: string
+): Promise<Array<{ sourceTerm: string; targetTerm: string }>> {
+  try {
+    const entries = await getGlossaryManager(context).getAll(srcLang, tgtLang);
+    return entries.map((e) => ({ sourceTerm: e.sourceTerm, targetTerm: e.targetTerm }));
+  } catch {
+    return [];
+  }
+}
+
+// ─── Duplicate <target> detection ──────────────────────────────────────────────
+
+/** Returns the ids of trans-units that contain more than one <target> element. */
+function findDuplicateTargetIds(xmlText: string): string[] {
+  const duplicates: string[] = [];
+  const unitRe = /<trans-unit\b[^>]*\bid="([^"]+)"[\s\S]*?<\/trans-unit>/g;
+  let m: RegExpExecArray | null;
+  while ((m = unitRe.exec(xmlText)) !== null) {
+    const block = m[0];
+    const targetCount = (block.match(/<target\b/g) ?? []).length;
+    if (targetCount > 1) duplicates.push(m[1]);
+  }
+  return duplicates;
+}
 
 // ─── Provider registration ────────────────────────────────────────────────────
 
@@ -76,12 +110,48 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           fileName: path.basename(document.fileName),
           objectFilters,
           filterSearch: initialSearch || '',
+          duplicateTargetIds: findDuplicateTargetIds(document.getText()),
         });
+        // Fire-and-forget: compute TM suggestions and push them once ready
+        void sendTmSuggestions(
+          parsed.units,
+          parsed.sourceLanguage || getConfig().sourceLanguage,
+          parsed.targetLanguage || getConfig().targetLanguage
+        );
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
           type: 'error',
           message: `Failed to parse XLIFF: ${(err as Error).message}`,
         });
+      }
+    };
+
+    // ─── TM suggestions ──────────────────────────────────────────────────────
+    // Look up local Translation Memory matches for untranslated (and exact-match)
+    // units and push them to the webview as inline suggestion pills.
+
+    const sendTmSuggestions = async (units: XliffUnit[], srcLang: string, tgtLang: string) => {
+      try {
+        const tm = getTmManager(this.context);
+        // Look up all units' sources — show suggestions for untranslated units and
+        // exact (100%) confirmations for already-translated ones.
+        const sources = units.map((u) => u.source).filter(Boolean);
+        if (sources.length === 0) return;
+        const suggestions = await tm.lookup(sources, srcLang, tgtLang);
+        const byId: Record<string, TmMatch[]> = {};
+        for (const unit of units) {
+          const matches = suggestions[unit.source];
+          if (!matches || matches.length === 0) continue;
+          // For units that already have a target, only keep an exact (100%) confirmation
+          if (unit.target && unit.target.trim()) {
+            if (matches[0].score >= 100) byId[unit.id] = matches;
+          } else {
+            byId[unit.id] = matches;
+          }
+        }
+        webviewPanel.webview.postMessage({ type: 'tmSuggestions', suggestions: byId });
+      } catch {
+        // TM is best-effort — ignore failures
       }
     };
 
@@ -101,13 +171,35 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           break;
 
         case 'save':
-          await doSave(document, webviewPanel, pendingChanges);
+          await doSave(document, webviewPanel, pendingChanges, this.context);
           pendingChanges.clear();
           webviewPanel.webview.postMessage({ type: 'saved' });
           break;
 
         case 'translateAll':
           await handleTranslateAll(document, webviewPanel, pendingChanges, this.context);
+          break;
+
+        case 'bulkTranslate':
+          await handleBulkTranslate(document, webviewPanel, pendingChanges, this.context, msg.ids as string[]);
+          break;
+
+        case 'bulkTmApply':
+          await handleBulkTmApply(document, webviewPanel, pendingChanges, this.context, msg.items as { id: string; source: string }[]);
+          break;
+
+        case 'bulkSetStatus':
+          handleBulkSetStatus(pendingChanges, webviewPanel, msg.items as { id: string; target: string; state: TranslationState }[]);
+          break;
+
+        case 'cleanupDuplicates':
+          handleCleanupDuplicates(document, webviewPanel, pendingChanges, msg.ids as string[]);
+          break;
+
+        case 'upsertTm':
+          await getTmManager(this.context).upsert(
+            msg.source as string, msg.target as string, msg.srcLang as string, msg.tgtLang as string
+          );
           break;
 
         case 'translateUnit':
@@ -143,9 +235,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       const fullRange = new vscode.Range(0, 0, document.lineCount, 0);
       e.waitUntil(Promise.resolve([new vscode.TextEdit(fullRange, newContent)]));
 
-      // Notify webview after the save completes
+      // Notify webview after the save completes, and harvest confirmed units into TM
       setTimeout(() => {
         pendingChanges.clear();
+        void populateTmFromContent(this.context, newContent);
         webviewPanel.webview.postMessage({ type: 'saved' });
       }, 150);
     });
@@ -176,7 +269,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
 async function doSave(
   document: vscode.TextDocument,
   _webviewPanel: vscode.WebviewPanel,
-  changes: Map<string, { target: string; state: TranslationState }>
+  changes: Map<string, { target: string; state: TranslationState }>,
+  context: vscode.ExtensionContext
 ): Promise<void> {
   if (changes.size === 0) {
     await document.save();
@@ -188,6 +282,27 @@ async function doSave(
   edit.replace(document.uri, fullRange, newContent);
   await vscode.workspace.applyEdit(edit);
   await document.save();
+  await populateTmFromContent(context, newContent);
+}
+
+/** Harvest confirmed (translated/final) units from XLIFF content into local TM. */
+async function populateTmFromContent(context: vscode.ExtensionContext, content: string): Promise<void> {
+  try {
+    const parsed = parseXliff(content);
+    const srcLang = parsed.sourceLanguage || getConfig().sourceLanguage;
+    const tgtLang = parsed.targetLanguage || getConfig().targetLanguage;
+    const confirmed = parsed.units.filter(
+      (u) => u.target && u.target.trim() && (u.state === 'translated' || u.state === 'final')
+    );
+    if (confirmed.length === 0) return;
+    await getTmManager(context).upsertBatch(
+      confirmed.map((u) => ({ source: u.source, target: u.target })),
+      srcLang,
+      tgtLang
+    );
+  } catch {
+    // best-effort
+  }
 }
 
 // ─── Translate All ────────────────────────────────────────────────────────────
@@ -196,7 +311,8 @@ async function handleTranslateAll(
   document: vscode.TextDocument,
   webviewPanel: vscode.WebviewPanel,
   pendingChanges: Map<string, { target: string; state: TranslationState }>,
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
+  filterIds?: string[]
 ): Promise<void> {
   let provider: AIProvider;
   try {
@@ -217,23 +333,33 @@ async function handleTranslateAll(
   const config = getConfig();
   const srcLang = parsed.sourceLanguage || config.sourceLanguage;
   const tgtLang = parsed.targetLanguage || config.targetLanguage;
-  const untranslated = filterUnits(parsed.units, { untranslatedOnly: true });
+  const glossary = await loadGlossary(context, srcLang, tgtLang);
 
-  if (untranslated.length === 0) {
-    webviewPanel.webview.postMessage({ type: 'error', message: 'No untranslated units found.' });
+  let targets: XliffUnit[];
+  if (filterIds && filterIds.length > 0) {
+    // Bulk translate: translate exactly the selected ids (regardless of current state)
+    const idSet = new Set(filterIds);
+    targets = parsed.units.filter((u) => idSet.has(u.id));
+  } else {
+    targets = filterUnits(parsed.units, { untranslatedOnly: true });
+  }
+
+  if (targets.length === 0) {
+    webviewPanel.webview.postMessage({ type: 'error', message: 'No units to translate.' });
     return;
   }
 
-  webviewPanel.webview.postMessage({ type: 'translating', ids: untranslated.map((u) => u.id) });
+  webviewPanel.webview.postMessage({ type: 'translating', ids: targets.map((u) => u.id) });
 
   try {
     const batchSize = config.batchSize;
-    for (let i = 0; i < untranslated.length; i += batchSize) {
-      const batch = untranslated.slice(i, i + batchSize);
+    for (let i = 0; i < targets.length; i += batchSize) {
+      const batch = targets.slice(i, i + batchSize);
       const response = await provider.translate({
         units: batch.map((u) => ({ id: u.id, source: u.source })),
         sourceLanguage: srcLang,
         targetLanguage: tgtLang,
+        ...(glossary.length > 0 ? { glossary } : {}),
       });
 
       // Stream partial results back to webview as each batch completes
@@ -246,6 +372,100 @@ async function handleTranslateAll(
   } catch (err: unknown) {
     webviewPanel.webview.postMessage({ type: 'error', message: `Translation failed: ${(err as Error).message}` });
   }
+}
+
+/** Bulk AI-translate only the given unit ids. */
+async function handleBulkTranslate(
+  document: vscode.TextDocument,
+  webviewPanel: vscode.WebviewPanel,
+  pendingChanges: Map<string, { target: string; state: TranslationState }>,
+  context: vscode.ExtensionContext,
+  ids: string[]
+): Promise<void> {
+  if (!ids || ids.length === 0) {
+    webviewPanel.webview.postMessage({ type: 'error', message: 'No units selected.' });
+    return;
+  }
+  await handleTranslateAll(document, webviewPanel, pendingChanges, context, ids);
+}
+
+/** Apply the best local TM match to each selected unit. */
+async function handleBulkTmApply(
+  document: vscode.TextDocument,
+  webviewPanel: vscode.WebviewPanel,
+  pendingChanges: Map<string, { target: string; state: TranslationState }>,
+  context: vscode.ExtensionContext,
+  items: Array<{ id: string; source: string }>
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  const tm = getTmManager(context);
+  let parsed;
+  try {
+    parsed = parseXliff(document.getText());
+  } catch (err: unknown) {
+    webviewPanel.webview.postMessage({ type: 'error', message: `Parse error: ${(err as Error).message}` });
+    return;
+  }
+  const config = getConfig();
+  const srcLang = parsed.sourceLanguage || config.sourceLanguage;
+  const tgtLang = parsed.targetLanguage || config.targetLanguage;
+  const sources = items.map((i) => i.source);
+  const sugg = await tm.lookup(sources, srcLang, tgtLang);
+
+  const results: Array<{ id: string; translatedText: string; confidenceScore: number }> = [];
+  for (const item of items) {
+    const match = sugg[item.source]?.[0];
+    if (match) {
+      pendingChanges.set(item.id, { target: match.target, state: 'translated' });
+      results.push({ id: item.id, translatedText: match.target, confidenceScore: match.score });
+    }
+  }
+
+  if (results.length === 0) {
+    webviewPanel.webview.postMessage({ type: 'error', message: 'No TM matches found for the selected units.' });
+    return;
+  }
+  webviewPanel.webview.postMessage({ type: 'translationResults', results });
+}
+
+/** Set the translation state for a batch of units, preserving their current target. */
+function handleBulkSetStatus(
+  pendingChanges: Map<string, { target: string; state: TranslationState }>,
+  webviewPanel: vscode.WebviewPanel,
+  items: Array<{ id: string; target: string; state: TranslationState }>
+): void {
+  if (!items || items.length === 0) return;
+  for (const item of items) {
+    pendingChanges.set(item.id, { target: item.target ?? '', state: item.state });
+  }
+  webviewPanel.webview.postMessage({
+    type: 'bulkStatusUpdated',
+    ids: items.map((i) => i.id),
+    items,
+  });
+}
+
+/** Mark units with duplicate <target> elements as pending so a save rewrites them cleanly. */
+function handleCleanupDuplicates(
+  document: vscode.TextDocument,
+  webviewPanel: vscode.WebviewPanel,
+  pendingChanges: Map<string, { target: string; state: TranslationState }>,
+  ids: string[]
+): void {
+  if (!ids || ids.length === 0) return;
+  let parsed;
+  try {
+    parsed = parseXliff(document.getText());
+  } catch (err: unknown) {
+    webviewPanel.webview.postMessage({ type: 'error', message: `Parse error: ${(err as Error).message}` });
+    return;
+  }
+  const unitMap = new Map(parsed.units.map((u) => [u.id, u]));
+  for (const id of ids) {
+    const unit = unitMap.get(id);
+    if (unit) pendingChanges.set(id, { target: unit.target, state: unit.state });
+  }
+  webviewPanel.webview.postMessage({ type: 'cleanupReady', ids });
 }
 
 // ─── Translate Single ─────────────────────────────────────────────────────────
@@ -277,12 +497,14 @@ async function handleTranslateUnit(
   const config = getConfig();
   const srcLang = parsed.sourceLanguage || config.sourceLanguage;
   const tgtLang = parsed.targetLanguage || config.targetLanguage;
+  const glossary = await loadGlossary(context, srcLang, tgtLang);
 
   try {
     const response = await provider.translate({
       units: [{ id: unitId, source }],
       sourceLanguage: srcLang,
       targetLanguage: tgtLang,
+      ...(glossary.length > 0 ? { glossary } : {}),
     });
 
     const result = response.results[0];

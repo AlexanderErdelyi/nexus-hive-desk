@@ -113,7 +113,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     /* ─── Column headers ─── */
     #col-headers {
       display: grid;
-      grid-template-columns: var(--col-widths, 180px 1fr 1.5fr 145px);
+      grid-template-columns: var(--col-widths, 30px 180px 1fr 1.5fr 145px);
       padding: 3px 0;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
       flex-shrink: 0;
@@ -140,7 +140,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     /* ─── Unit row ─── */
     .unit-row {
       display: grid;
-      grid-template-columns: var(--col-widths, 180px 1fr 1.5fr 145px);
+      grid-template-columns: var(--col-widths, 30px 180px 1fr 1.5fr 145px);
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.08));
       min-height: 56px;
       transition: background 0.1s;
@@ -296,6 +296,35 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     #notif.hidden { display: none; }
     .notif-success { background: rgba(78,201,176,0.15); border: 1px solid #4ec9b0; color: #4ec9b0; }
     .notif-error   { background: rgba(244,135,113,0.15); border: 1px solid #f48771; color: #f48771; }
+
+    /* ─── Checkbox column ─── */
+    .col-check { display: flex; align-items: center; justify-content: center; padding: 0 6px; }
+    input[type=checkbox] { width: 14px; height: 14px; cursor: pointer; accent-color: var(--vscode-button-background); }
+
+    /* ─── Bulk action bar ─── */
+    #bulk-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 16px;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+      background: rgba(0,120,215,0.10);
+      flex-shrink: 0;
+    }
+    #bulk-count { font-size: 12px; font-weight: 600; color: var(--vscode-foreground); }
+
+    /* ─── TM suggestion pill ─── */
+    .tm-pill {
+      display: flex; align-items: center; gap: 6px; font-size: 11px;
+      padding: 3px 0; flex-wrap: wrap;
+    }
+    .tm-badge { padding: 1px 6px; border-radius: 10px; font-weight: 700; font-size: 10px; }
+    .tm-preview { color: var(--vscode-descriptionForeground); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .btn-tm-apply {
+      background: transparent; border: 1px solid var(--vscode-button-background, #0078d4);
+      color: var(--vscode-button-background, #0078d4); font-size: 10px;
+      padding: 1px 8px; border-radius: 3px; cursor: pointer; height: auto;
+      font-family: inherit; white-space: nowrap;
+    }
+    .btn-tm-apply:hover { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   </style>
 </head>
 <body>
@@ -349,6 +378,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     <option value="PermissionSet">PermissionSet</option>
   </select>
   <div class="tb-spacer"></div>
+  <button id="btn-cleanup-dupes" class="btn-secondary" hidden title="Remove duplicate &lt;target&gt; elements">&#9888; Clean up duplicates</button>
   <button id="btn-translate-all" class="btn-primary" title="AI-translate all untranslated units">&#9889; Translate Untranslated</button>
   <button id="btn-review-all" class="btn-secondary" title="AI review all translated units">&#128269; Review</button>
   <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
@@ -357,8 +387,27 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 <!-- Object-filter chips (shown when filtering by AL objects) -->
 <div id="filter-chips-bar" hidden></div>
 
+<!-- Bulk action bar -->
+<div id="bulk-bar" hidden>
+  <span id="bulk-count"></span>
+  <button id="btn-bulk-ai" class="btn-primary">&#9889; AI Translate</button>
+  <button id="btn-bulk-tm" class="btn-secondary">&#10227; Apply TM</button>
+  <select id="bulk-status-sel" class="toolbar-select">
+    <option value="">Set Status&hellip;</option>
+    <option value="translated">Translated</option>
+    <option value="needs-translation">Needs Translation</option>
+    <option value="needs-review-translation">Needs Review</option>
+    <option value="final">Final</option>
+  </select>
+  <div class="tb-spacer"></div>
+  <button id="btn-bulk-deselect" class="btn-ghost">&#10005; Deselect all</button>
+</div>
+
 <!-- Column headers -->
 <div id="col-headers">
+  <div class="col-hdr" style="padding:0;display:flex;align-items:center;justify-content:center;">
+    <input type="checkbox" id="select-all-chk" title="Select all visible">
+  </div>
   <div class="col-hdr">Context<div class="col-resize-handle" data-col="ctx"></div></div>
   <div class="col-hdr">Source<div class="col-resize-handle" data-col="src"></div></div>
   <div class="col-hdr">Target<div class="col-resize-handle" data-col="tgt"></div></div>
@@ -391,6 +440,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var filterSearch = '', filterState = 'all', filterType = '', searchIn = 'all', objectFilters = [];
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null;
+  var selectedIds = new Set();
+  var tmSuggestions = {}; // unitId → TmMatch[]
+  var duplicateTargetIds = new Set();
+  var glossaryTerms = []; // array of {sourceTerm, targetTerm}
 
   // ─── Message handler ───────────────────────────────────────────────────────
   window.addEventListener('message', function (event) {
@@ -403,6 +456,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       tgtLang = msg.targetLanguage || '';
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
+      selectedIds = new Set(); tmSuggestions = {};
+      duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
       filterState = 'all';
       filterType = '';
       objectFilters = msg.objectFilters || [];
@@ -456,11 +511,45 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     } else if (msg.type === 'saved') {
       pendingChanges = {}; renderFooter();
       showNotif('Saved.', 'success');
+
+    } else if (msg.type === 'tmSuggestions') {
+      tmSuggestions = msg.suggestions || {};
+      renderList();
+
+    } else if (msg.type === 'duplicateTargetIds') {
+      duplicateTargetIds = new Set(msg.ids || []);
+      renderList();
+
+    } else if (msg.type === 'bulkStatusUpdated') {
+      (msg.items || []).forEach(function (it) {
+        var u = findUnit(it.id);
+        if (u) { u.state = it.state; if (it.target != null) u.target = it.target; }
+        pendingChanges[it.id] = { target: u ? u.target : (it.target || ''), state: it.state };
+      });
+      renderAll();
+      showNotif('Updated status for ' + (msg.items || []).length + ' unit(s).', 'success');
+
+    } else if (msg.type === 'cleanupReady') {
+      (msg.ids || []).forEach(function (id) {
+        duplicateTargetIds.delete(id);
+        var u = findUnit(id);
+        if (u) pendingChanges[id] = { target: u.target, state: u.state };
+      });
+      renderAll();
+      showNotif('Ready to save \u2014 click Save to remove duplicate targets.', 'success');
     }
   });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  function renderAll() { renderHeader(); renderFilterChips(); renderList(); renderFooter(); }
+  function renderAll() { renderHeader(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
+
+  function renderBulkBar() {
+    var bar = document.getElementById('bulk-bar');
+    var count = document.getElementById('bulk-count');
+    var n = selectedIds.size;
+    bar.hidden = n === 0;
+    if (n > 0) count.textContent = n + ' selected';
+  }
 
   function getStats() {
     var total = units.length, translated = 0, needsTrans = 0;
@@ -529,6 +618,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     else { needsEl.hidden = true; }
     document.getElementById('hdr-fill').style.width = s.pct + '%';
     document.getElementById('hdr-pct').textContent  = s.translated + '/' + s.total + ' (' + s.pct + '%)';
+    var cleanupBtn = document.getElementById('btn-cleanup-dupes');
+    if (cleanupBtn) cleanupBtn.hidden = duplicateTargetIds.size === 0;
   }
 
   function renderList() {
@@ -558,6 +649,20 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         vscode.postMessage({ type: 'goToSource', note: this.getAttribute('data-note') });
       });
     });
+    el.querySelectorAll('.row-check').forEach(function (chk) {
+      chk.addEventListener('change', function () {
+        var id = this.getAttribute('data-id');
+        if (this.checked) selectedIds.add(id); else selectedIds.delete(id);
+        renderBulkBar();
+        syncSelectAllChk();
+      });
+    });
+    el.querySelectorAll('.btn-tm-apply').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        applyTmSuggestion(this.getAttribute('data-id'), this.getAttribute('data-target'));
+      });
+    });
+    syncSelectAllChk();
     var btnMore = document.getElementById('btn-load-more');
     if (btnMore) btnMore.addEventListener('click', function () { visibleCount += 100; renderList(); });
   }
@@ -615,12 +720,16 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var review    = reviewMap[unit.id];
     var rowClass  = 'unit-row' + (hasPend ? ' has-pending' : '') + (isLoading ? ' is-loading' : '');
 
+    // ── Checkbox cell ─────────────────────────────────────────────────────────
+    var chkHtml = '<div class="col-check"><input type="checkbox" class="row-check" data-id="' + esc(unit.id) + '"' + (selectedIds.has(unit.id) ? ' checked' : '') + '></div>';
+
     // ── Context cell ──────────────────────────────────────────────────────────
     var ctxHtml =
       '<div class="col-ctx">' +
         '<span class="obj-badge ' + badgeClass(ctx.type) + '">' + esc(ctx.type) + '</span>' +
         '<div class="obj-name" title="' + esc(unit.note || unit.id) + '">' + esc(trunc(ctx.name, 36)) + '</div>' +
         (ctx.prop ? '<div class="obj-prop">' + esc(trunc(ctx.prop, 40)) + '</div>' : '') +
+        (duplicateTargetIds.has(unit.id) ? '<span title="Multiple &lt;target&gt; elements \u2014 click Clean up to fix" style="color:#dcdcaa;font-size:10px;cursor:help">\u26a0 multi-target</span>' : '') +
         '<button class="btn-go-src" data-note="' + esc(unit.note || '') + '" title="Go to AL source">&#10548; Go to Source</button>' +
       '</div>';
 
@@ -645,9 +754,22 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         (review.suggestion? '<div class="rv-suggest">\u2192 ' + esc(review.suggestion) + '</div>' : '') +
         '</div>';
     }
+    var sugg = tmSuggestions[unit.id];
+    var tmHtml = '';
+    if (sugg && sugg.length > 0) {
+      var best = sugg[0];
+      var pct = best.score;
+      var color = pct >= 95 ? '#4ec9b0' : pct >= 80 ? '#dcdcaa' : '#ce9178';
+      tmHtml = '<div class="tm-pill" data-id="' + esc(unit.id) + '" data-target="' + esc(best.target) + '">' +
+        '<span class="tm-badge" style="background:' + color + '20;color:' + color + ';border:1px solid ' + color + '">TM ' + pct + '%</span>' +
+        '<span class="tm-preview">' + esc(trunc(best.target, 50)) + '</span>' +
+        '<button class="btn-tm-apply" data-id="' + esc(unit.id) + '" data-target="' + esc(best.target) + '">Apply</button>' +
+        '</div>';
+    }
     var tgtHtml =
       '<div class="col-tgt">' +
         '<textarea class="target-input" data-id="' + esc(unit.id) + '" rows="2"' + (isLoading ? ' disabled' : '') + '>' + esc(unit.target) + '</textarea>' +
+        tmHtml +
         rvHtml +
       '</div>';
 
@@ -662,7 +784,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       '</div>';
 
     return '<div class="' + rowClass + '" data-id="' + esc(unit.id) + '">' +
-      ctxHtml + srcHtml + tgtHtml + stateHtml +
+      chkHtml + ctxHtml + srcHtml + tgtHtml + stateHtml +
       '</div>';
   }
 
@@ -703,6 +825,28 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     vscode.postMessage({ type: 'translateUnit', id: btn.getAttribute('data-id'), source: btn.getAttribute('data-source') });
   }
 
+  // ─── Selection / TM helpers ──────────────────────────────────────────────────
+  function syncSelectAllChk() {
+    var chk = document.getElementById('select-all-chk');
+    if (!chk) return;
+    var filtered = getFiltered();
+    var allSel = filtered.length > 0 && filtered.every(function (u) { return selectedIds.has(u.id); });
+    chk.checked = allSel;
+  }
+
+  function applyTmSuggestion(id, target) {
+    var unit = findUnit(id);
+    if (!unit) return;
+    unit.target = target;
+    var newState = 'translated';
+    unit.state = newState;
+    pendingChanges[id] = { target: target, state: newState };
+    vscode.postMessage({ type: 'updateUnit', id: id, target: target, state: newState });
+    vscode.postMessage({ type: 'upsertTm', source: unit.source, target: target, srcLang: srcLang, tgtLang: tgtLang });
+    renderAll();
+    showNotif('Applied TM suggestion.', 'success');
+  }
+
   // ─── Toolbar ───────────────────────────────────────────────────────────────
   document.getElementById('search-input').addEventListener('input', function () {
     filterSearch = this.value; visibleCount = 100; renderList(); renderFooter();
@@ -720,6 +864,43 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   document.getElementById('btn-review-all').addEventListener('click',    function () { vscode.postMessage({ type: 'reviewAll' }); });
   document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
   document.getElementById('btn-save').addEventListener('click',          function () { vscode.postMessage({ type: 'save' }); });
+
+  // ─── Bulk actions & selection ────────────────────────────────────────────────
+  document.getElementById('select-all-chk').addEventListener('change', function () {
+    var filtered = getFiltered();
+    if (this.checked) filtered.forEach(function (u) { selectedIds.add(u.id); });
+    else filtered.forEach(function (u) { selectedIds.delete(u.id); });
+    renderList(); renderBulkBar();
+  });
+  document.getElementById('btn-bulk-ai').addEventListener('click', function () {
+    if (selectedIds.size === 0) return;
+    vscode.postMessage({ type: 'bulkTranslate', ids: Array.from(selectedIds) });
+  });
+  document.getElementById('btn-bulk-tm').addEventListener('click', function () {
+    if (selectedIds.size === 0) return;
+    var items = Array.from(selectedIds).map(function (id) {
+      var u = findUnit(id);
+      return { id: id, source: u ? u.source : '' };
+    });
+    vscode.postMessage({ type: 'bulkTmApply', items: items });
+  });
+  document.getElementById('bulk-status-sel').addEventListener('change', function () {
+    var value = this.value;
+    if (!value || selectedIds.size === 0) { this.value = ''; return; }
+    var items = Array.from(selectedIds).map(function (id) {
+      var u = findUnit(id);
+      return { id: id, target: u ? u.target : '', state: value };
+    });
+    vscode.postMessage({ type: 'bulkSetStatus', items: items });
+    this.value = '';
+  });
+  document.getElementById('btn-bulk-deselect').addEventListener('click', function () {
+    selectedIds = new Set();
+    renderAll();
+  });
+  document.getElementById('btn-cleanup-dupes').addEventListener('click', function () {
+    vscode.postMessage({ type: 'cleanupDuplicates', ids: Array.from(duplicateTargetIds) });
+  });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
   function esc(s) {
@@ -752,7 +933,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var w = colPx;
     var src = w.src > 0 ? w.src + 'px' : '1fr';
     var tgt = w.tgt > 0 ? w.tgt + 'px' : '1.5fr';
-    document.documentElement.style.setProperty('--col-widths', w.ctx + 'px ' + src + ' ' + tgt + ' 145px');
+    document.documentElement.style.setProperty('--col-widths', '30px ' + w.ctx + 'px ' + src + ' ' + tgt + ' 145px');
   }
   document.querySelectorAll('.col-resize-handle').forEach(function (handle) {
     handle.addEventListener('mousedown', function (e) {
@@ -760,8 +941,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       var col = handle.getAttribute('data-col');
       // Measure actual px widths from the header cells before dragging
       var hdrs = document.querySelectorAll('#col-headers .col-hdr');
-      if (colPx.src === 0) { colPx.src = hdrs[1].getBoundingClientRect().width; }
-      if (colPx.tgt === 0) { colPx.tgt = hdrs[2].getBoundingClientRect().width; }
+      if (colPx.src === 0) { colPx.src = hdrs[2].getBoundingClientRect().width; }
+      if (colPx.tgt === 0) { colPx.tgt = hdrs[3].getBoundingClientRect().width; }
       var startX = e.clientX;
       var startW = colPx[col];
       handle.classList.add('dragging');

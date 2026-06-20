@@ -50,6 +50,10 @@
       {
         "command": "nexus.setTextAsDefaultXlfEditor",
         "title": "Nexus: Use Text (Raw XML) as Default .xlf Editor"
+      },
+      {
+        "command": "nexus.manageGlossary",
+        "title": "Nexus: Manage Glossary & TM"
       }
     ],
     "customEditors": [
@@ -86,6 +90,11 @@
           "command": "nexus.reviewXliffFile",
           "when": "resourceExtname == .xlf",
           "group": "nexus@3"
+        },
+        {
+          "command": "nexus.manageGlossary",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@4"
         }
       ],
       "editor/context": [
@@ -142,6 +151,9 @@
         },
         {
           "command": "nexus.setTextAsDefaultXlfEditor"
+        },
+        {
+          "command": "nexus.manageGlossary"
         }
       ]
     },

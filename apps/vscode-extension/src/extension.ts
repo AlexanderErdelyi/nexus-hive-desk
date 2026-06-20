@@ -7,6 +7,7 @@ import { registerSetApiToken } from './commands/setApiToken';
 import { registerOpenInNexus } from './commands/openInNexus';
 import { registerFindInNexusTranslator } from './commands/findInNexus';
 import { registerShowTranslationDiff } from './commands/showDiff';
+import { registerManageGlossary } from './commands/manageGlossary';
 
 export function activate(context: vscode.ExtensionContext): void {
   // Custom editor: opens .xlf files with the full translation UI panel
@@ -22,6 +23,9 @@ export function activate(context: vscode.ExtensionContext): void {
   registerOpenInNexus(context);
   registerFindInNexusTranslator(context);
   registerShowTranslationDiff(context);
+
+  // Glossary & Translation Memory management panel
+  registerManageGlossary(context);
 }
 
 export function deactivate(): void {}
