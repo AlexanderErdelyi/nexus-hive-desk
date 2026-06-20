@@ -403,6 +403,14 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-bulk-deselect" class="btn-ghost">&#10005; Deselect all</button>
 </div>
 
+<!-- Diff filter banner -->
+<div id="diff-banner" hidden style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:rgba(220,220,170,0.12);border-bottom:1px solid rgba(220,220,170,0.3);font-size:12px;">
+  <span style="color:#dcdcaa;">&#9650; Diff view</span>
+  <span id="diff-banner-count"></span>
+  <div class="tb-spacer"></div>
+  <button id="btn-diff-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Show all units</button>
+</div>
+
 <!-- Column headers -->
 <div id="col-headers">
   <div class="col-hdr" style="padding:0;display:flex;align-items:center;justify-content:center;">
@@ -443,6 +451,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var selectedIds = new Set();
   var tmSuggestions = {}; // unitId → TmMatch[]
   var duplicateTargetIds = new Set();
+  var diffUnitIds = null; // Set<string> | null — when set, only show these unit IDs (from diff view)
   var glossaryTerms = []; // array of {sourceTerm, targetTerm}
 
   // ─── Message handler ───────────────────────────────────────────────────────
@@ -458,6 +467,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
       selectedIds = new Set(); tmSuggestions = {};
       duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
+      diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : null;
       filterState = 'all';
       filterType = '';
       objectFilters = msg.objectFilters || [];
@@ -473,6 +483,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       filterSearch = msg.filter || '';
       filterState  = msg.state  || 'all';
       objectFilters = msg.objectFilters || [];
+      diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : (msg.diffUnitIds === null ? null : diffUnitIds);
       document.getElementById('search-input').value  = filterSearch;
       document.getElementById('state-filter').value  = filterState;
       visibleCount = 100;
@@ -541,7 +552,16 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  function renderAll() { renderHeader(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
+  function renderAll() { renderHeader(); renderDiffBanner(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
+
+  function renderDiffBanner() {
+    var banner = document.getElementById('diff-banner');
+    if (!banner) return;
+    if (!diffUnitIds) { banner.hidden = true; return; }
+    var n = diffUnitIds.size;
+    banner.hidden = false;
+    document.getElementById('diff-banner-count').textContent = 'Showing ' + n + ' changed unit' + (n !== 1 ? 's' : '') + ' from diff view';
+  }
 
   function renderBulkBar() {
     var bar = document.getElementById('bulk-bar');
@@ -563,6 +583,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   function getFiltered() {
     var q = filterSearch.toLowerCase();
     return units.filter(function (u) {
+      if (diffUnitIds && !diffUnitIds.has(u.id)) return false;
       if (filterState !== 'all' && u.state !== filterState) return false;
       // Object type filter: note must start with "{filterType} "
       if (filterType && !(u.note && u.note.startsWith(filterType + ' '))) return false;
@@ -900,6 +921,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
   document.getElementById('btn-cleanup-dupes').addEventListener('click', function () {
     vscode.postMessage({ type: 'cleanupDuplicates', ids: Array.from(duplicateTargetIds) });
+  });
+  document.getElementById('btn-diff-clear').addEventListener('click', function () {
+    diffUnitIds = null;
+    renderAll();
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

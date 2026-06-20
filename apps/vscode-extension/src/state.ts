@@ -10,3 +10,10 @@ export const pendingFilters = new Map<string, string>();
  * Key: document URI string → Value: search text (e.g. a Caption value).
  */
 export const pendingSearches = new Map<string, string>();
+
+/**
+ * Unit IDs to pre-filter to when opening from the Translation Diff view.
+ * Key: document URI string → Value: array of trans-unit IDs to show.
+ * Cleared after first sendInit consumes them.
+ */
+export const pendingUnitIds = new Map<string, string[]>();

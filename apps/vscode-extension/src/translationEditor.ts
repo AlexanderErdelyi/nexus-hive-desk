@@ -5,7 +5,7 @@ import type { TranslationState, XliffUnit } from '@nexus/xliff';
 import type { AIProvider } from '@nexus/ai';
 import { createAIProvider, getConfig } from './provider';
 import { getWebviewContent } from './webviewContent';
-import { pendingFilters, pendingSearches } from './state';
+import { pendingFilters, pendingSearches, pendingUnitIds } from './state';
 import { getTmManager } from './tmManager';
 import type { TmMatch } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
@@ -50,12 +50,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
   private static readonly activePanels = new Map<string, vscode.WebviewPanel>();
 
   /** If the document is already open in a panel, apply a search filter and focus it. */
-  public static applyFilter(uri: vscode.Uri, filter: string, searchText?: string): boolean {
+  public static applyFilter(uri: vscode.Uri, filter: string, searchText?: string, unitIds?: string[]): boolean {
     const panel = TranslationEditorProvider.activePanels.get(uri.toString());
     if (!panel) return false;
     panel.reveal(undefined, false);
     const objectFilters = filter.split(',').map((f) => f.trim()).filter(Boolean);
-    panel.webview.postMessage({ type: 'setFilter', filter: searchText || '', objectFilters, state: 'all' });
+    panel.webview.postMessage({ type: 'setFilter', filter: searchText || '', objectFilters, state: 'all', diffUnitIds: unitIds ?? null });
     return true;
   }
 
@@ -102,6 +102,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         const objectFilters = initialFilter
           ? initialFilter.split(',').map((f) => f.trim()).filter(Boolean)
           : [];
+        const initialUnitIds = pendingUnitIds.get(uriKey);
+        if (initialUnitIds) pendingUnitIds.delete(uriKey);
         webviewPanel.webview.postMessage({
           type: 'init',
           units: parsed.units,
@@ -111,6 +113,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           objectFilters,
           filterSearch: initialSearch || '',
           duplicateTargetIds: findDuplicateTargetIds(document.getText()),
+          diffUnitIds: initialUnitIds ?? null,
         });
         // Fire-and-forget: compute TM suggestions and push them once ready
         void sendTmSuggestions(

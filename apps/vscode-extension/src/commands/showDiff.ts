@@ -3,6 +3,8 @@ import * as cp from 'child_process';
 import * as path from 'path';
 import { parseXliff } from '@nexus/xliff';
 import type { XliffUnit } from '@nexus/types';
+import { pendingUnitIds } from '../state';
+import { TranslationEditorProvider } from '../translationEditor';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -85,7 +87,8 @@ function getDiffHtml(
   nonce: string,
   fileName: string,
   diffs: UnitDiff[],
-  baselineLabel: string
+  baselineLabel: string,
+  actionableIds: string[]
 ): string {
   const added = diffs.filter((d) => d.type === 'added').length;
   const removed = diffs.filter((d) => d.type === 'removed').length;
@@ -132,7 +135,7 @@ function getDiffHtml(
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Translation Diff</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -147,13 +150,23 @@ function getDiffHtml(
     .baseline-label { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 12px; }
     .baseline-label code { font-family: var(--vscode-editor-font-family, monospace); }
     .summary {
-      display: flex; gap: 16px; margin-bottom: 16px;
+      display: flex; gap: 16px; margin-bottom: 12px;
       padding: 10px 14px;
       background: var(--vscode-sideBar-background, rgba(128,128,128,0.05));
       border-radius: 4px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
     }
     .sum-item { display: flex; align-items: center; gap: 6px; font-size: 13px; }
     .sum-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .open-btn {
+      margin-bottom: 12px;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 4px; border: none; cursor: pointer;
+      font-size: 12px; font-family: inherit;
+      background: var(--vscode-button-background, #0078d4);
+      color: var(--vscode-button-foreground, #fff);
+    }
+    .open-btn:hover { background: var(--vscode-button-hoverBackground, #006cbf); }
+    .open-btn:disabled { opacity: 0.5; cursor: default; }
     .empty-state { padding: 40px; text-align: center; color: var(--vscode-descriptionForeground); }
     table {
       width: 100%; border-collapse: collapse; font-size: 12px;
@@ -193,12 +206,27 @@ function getDiffHtml(
         <div class="sum-item"><div class="sum-dot" style="background:#4ec9b0"></div>${added} added</div>
         <div class="sum-item"><div class="sum-dot" style="background:#f48771"></div>${removed} removed</div>
       </div>
+      ${actionableIds.length > 0
+        ? `<button class="open-btn" id="btn-open-nexus">&#9998; Edit ${actionableIds.length} changed unit${actionableIds.length !== 1 ? 's' : ''} in Nexus Translator</button>`
+        : ''}
       <table>
         <colgroup><col class="c-status"><col class="c-ctx"><col class="c-src"><col class="c-tgt"></colgroup>
         <thead><tr><th>Status</th><th>Context</th><th>Source</th><th>Target</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
   }
+  <script nonce="${nonce}">
+    var vscode = acquireVsCodeApi();
+    var actionableIds = ${JSON.stringify(actionableIds)};
+    var btn = document.getElementById('btn-open-nexus');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        btn.textContent = 'Opening…';
+        vscode.postMessage({ type: 'openInNexus', unitIds: actionableIds });
+      });
+    }
+  </script>
 </body>
 </html>`;
 }
@@ -267,16 +295,32 @@ export function registerShowTranslationDiff(context: vscode.ExtensionContext): v
       }
 
       const diffs = computeDiff(oldUnits, currentParsed.units);
+      // Only added/modified units can be edited (removed units no longer exist)
+      const actionableIds = diffs
+        .filter((d) => d.type === 'added' || d.type === 'modified')
+        .map((d) => d.unit.id);
+
       const fileName = path.basename(target.fsPath);
       const panel = vscode.window.createWebviewPanel(
         'nexus.translationDiff',
         `Diff: ${fileName}`,
         vscode.ViewColumn.Beside,
-        { enableScripts: false }
+        { enableScripts: true }
       );
 
       const nonce = getNonce();
-      panel.webview.html = getDiffHtml(panel.webview.cspSource, nonce, fileName, diffs, baselineLabel);
+      panel.webview.html = getDiffHtml(panel.webview.cspSource, nonce, fileName, diffs, baselineLabel, actionableIds);
+
+      panel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.type === 'openInNexus' && Array.isArray(msg.unitIds)) {
+          const uriKey = target.toString();
+          // If panel already open, apply filter directly; otherwise store for sendInit
+          if (!TranslationEditorProvider.applyFilter(target, '', undefined, msg.unitIds)) {
+            pendingUnitIds.set(uriKey, msg.unitIds);
+            await vscode.commands.executeCommand('vscode.openWith', target, 'nexus.translationEditor');
+          }
+        }
+      }, undefined, context.subscriptions);
     })
   );
 }
