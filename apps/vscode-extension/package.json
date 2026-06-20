@@ -181,6 +181,9 @@
         }
       ]
     },
+    "chatAgents": {
+      "path": "./assets/agents/nexus-translator.agent.md"
+    },
     "configuration": {
       "title": "Nexus Translator",
       "properties": {
