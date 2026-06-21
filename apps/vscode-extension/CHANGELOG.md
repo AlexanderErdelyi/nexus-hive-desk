@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Accepted issues are stored per-file in workspace state.
 
 ### Changed
+- **Exact-match search** — a new **Exact** checkbox next to the search box filters to
+  entries whose field *equals* the search text (case-insensitive) instead of merely
+  containing it. Searching `both` with Exact on now matches only "Both", not
+  "…E-Document file only, or both."
 - **Lazy activation** — the extension no longer activates on every VS Code startup.
   It now activates only when a workspace contains `.xlf` files, or when a Nexus
   command or the translation editor is used, so it adds zero startup cost to

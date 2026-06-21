@@ -71,6 +71,12 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       border-radius: 3px; font-size: 12px; font-family: inherit;
     }
     .tb-spacer { flex: 1; }
+    .toolbar-check {
+      display: inline-flex; align-items: center; gap: 4px;
+      height: 26px; padding: 0 6px; font-size: 12px; cursor: pointer;
+      color: var(--vscode-foreground); user-select: none; white-space: nowrap;
+    }
+    .toolbar-check input { margin: 0; cursor: pointer; }
 
     /* ─── Object filter chips bar ─── */
     #filter-chips-bar {
@@ -384,6 +390,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     <option value="target">Target</option>
     <option value="objectName">Object name</option>
   </select>
+  <label id="search-exact-label" class="toolbar-check" title="Match only entries that equal the search text exactly (case-insensitive), instead of containing it">
+    <input id="search-exact" type="checkbox"> Exact
+  </label>
   <select id="state-filter" class="toolbar-select">
     <option value="all">All States</option>
     <option value="new">New</option>
@@ -515,6 +524,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   // ─── State ─────────────────────────────────────────────────────────────────
   var units = [], srcLang = '', tgtLang = '', fileName = '';
   var filterSearch = '', filterState = 'all', filterType = '', searchIn = 'all', objectFilters = [];
+  var searchExact = false; // when true, search matches whole-field equality instead of substring
   var filterQuality = false;
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null;
@@ -564,10 +574,12 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       objectFilters = msg.objectFilters || [];
       filterSearch = msg.filterSearch || '';
       searchIn = filterSearch ? 'source' : 'all';
+      searchExact = false;
       document.getElementById('search-input').value = filterSearch;
       document.getElementById('state-filter').value = 'all';
       document.getElementById('type-filter').value = '';
       document.getElementById('search-in').value = searchIn;
+      var exactChk = document.getElementById('search-exact'); if (exactChk) exactChk.checked = false;
       renderAll();
 
     } else if (msg.type === 'setFilter') {
@@ -813,15 +825,17 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         if (!noteOk) return false;
       }
       if (!q) return true;
+      // Match helper: exact (whole-field, trimmed) vs. substring (default).
+      var qx = q.trim();
+      var hit = searchExact
+        ? function (val) { return (val || '').trim().toLowerCase() === qx; }
+        : function (val) { return (val || '').toLowerCase().indexOf(q) >= 0; };
       // searchIn scoping
-      if (searchIn === 'source') return u.source.toLowerCase().indexOf(q) >= 0;
-      if (searchIn === 'target') return u.target.toLowerCase().indexOf(q) >= 0;
-      if (searchIn === 'objectName') return !!(u.note && u.note.toLowerCase().indexOf(q) >= 0);
+      if (searchIn === 'source') return hit(u.source);
+      if (searchIn === 'target') return hit(u.target);
+      if (searchIn === 'objectName') return !!(u.note && hit(u.note));
       // 'all'
-      return u.source.toLowerCase().indexOf(q) >= 0 ||
-             u.target.toLowerCase().indexOf(q) >= 0 ||
-             u.id.toLowerCase().indexOf(q) >= 0 ||
-             (u.note  && u.note.toLowerCase().indexOf(q) >= 0);
+      return hit(u.source) || hit(u.target) || hit(u.id) || (u.note && hit(u.note));
     });
   }
 
@@ -1205,6 +1219,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
   document.getElementById('search-in').addEventListener('change', function () {
     searchIn = this.value; visibleCount = 100; renderList(); renderFooter();
+  });
+  document.getElementById('search-exact').addEventListener('change', function () {
+    searchExact = this.checked; visibleCount = 100; renderList(); renderFooter();
   });
   document.getElementById('state-filter').addEventListener('change', function () {
     filterState = this.value; visibleCount = 100; renderList(); renderFooter();
