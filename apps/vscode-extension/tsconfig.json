@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "paths": {
+      "@nexus/ai": ["../../packages/ai/src/index.ts"],
+      "@nexus/xliff": ["../../packages/xliff/src/index.ts"],
+      "@nexus/types": ["../../packages/types/src/index.ts"]
+    }
+  },
+  "include": ["src", "../../packages/ai/src", "../../packages/xliff/src", "../../packages/types/src"]
+}

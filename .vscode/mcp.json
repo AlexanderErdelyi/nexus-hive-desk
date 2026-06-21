@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "nexus-translator": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/apps/mcp-server/dist/index.js"],
+      "env": {
+        "NEXUS_WORKSPACE": "${workspaceFolder}"
+      }
+    }
+  }
+}

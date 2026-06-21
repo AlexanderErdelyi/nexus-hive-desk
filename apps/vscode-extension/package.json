@@ -1,0 +1,318 @@
+{
+  "name": "nexus-translator",
+  "displayName": "Nexus Translator",
+  "description": "AI-powered translation for Business Central XLIFF files",
+  "version": "0.1.0",
+  "publisher": "nexus",
+  "private": true,
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlexanderErdelyi/nexus-hive-desk"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "translation",
+    "xliff",
+    "localization",
+    "business central",
+    "al"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nexus.translateSelection",
+        "title": "Nexus: Translate Selected Text"
+      },
+      {
+        "command": "nexus.translateXliffFile",
+        "title": "Nexus: Translate XLIFF File (Untranslated Units)"
+      },
+      {
+        "command": "nexus.reviewXliffFile",
+        "title": "Nexus: Review XLIFF File Translations"
+      },
+      {
+        "command": "nexus.setApiToken",
+        "title": "Nexus: Set API Token (Secure)"
+      },
+      {
+        "command": "nexus.openInNexusEditor",
+        "title": "Open in Nexus Translator"
+      },
+      {
+        "command": "nexus.findInNexusTranslator",
+        "title": "Find in Nexus Translator"
+      },
+      {
+        "command": "nexus.showTranslationDiff",
+        "title": "Nexus: Show Translation Changes",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "nexus.setNexusAsDefaultXlfEditor",
+        "title": "Nexus: Use Nexus as Default .xlf Editor"
+      },
+      {
+        "command": "nexus.setTextAsDefaultXlfEditor",
+        "title": "Nexus: Use Text (Raw XML) as Default .xlf Editor"
+      },
+      {
+        "command": "nexus.manageGlossary",
+        "title": "Nexus: Manage Glossary & TM"
+      },
+      {
+        "command": "nexus.populateTmFromFile",
+        "title": "Nexus: Populate TM from File",
+        "icon": "$(database)"
+      },
+      {
+        "command": "nexus.exportForReview",
+        "title": "Nexus: Export for Review (Excel)",
+        "icon": "$(export)"
+      },
+      {
+        "command": "nexus.importReview",
+        "title": "Nexus: Import Reviewed Translations (Excel)",
+        "icon": "$(cloud-upload)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "nexus.translationEditor",
+        "displayName": "Nexus Translation Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.xlf"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "nexus.showTranslationDiff",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.openInNexusEditor",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al || explorerResourceIsFolder",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.translateXliffFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@2"
+        },
+        {
+          "command": "nexus.reviewXliffFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@3"
+        },
+        {
+          "command": "nexus.manageGlossary",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@4"
+        },
+        {
+          "command": "nexus.populateTmFromFile",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@5"
+        },
+        {
+          "command": "nexus.exportForReview",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@6"
+        },
+        {
+          "command": "nexus.importReview",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@6"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "nexus.translateSelection",
+          "when": "editorHasSelection",
+          "group": "nexus@1"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al",
+          "group": "nexus@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "nexus.showTranslationDiff",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation",
+          "icon": "$(diff)"
+        },
+        {
+          "command": "nexus.openInNexusEditor",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus.findInNexusTranslator",
+          "when": "resourceExtname == .al",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus.populateTmFromFile",
+          "when": "resourceExtname == .xlf",
+          "group": "navigation",
+          "icon": "$(database)"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nexus.translateSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "nexus.translateXliffFile",
+          "when": "resourceExtname == .xlf"
+        },
+        {
+          "command": "nexus.reviewXliffFile",
+          "when": "resourceExtname == .xlf"
+        },
+        {
+          "command": "nexus.exportForReview"
+        },
+        {
+          "command": "nexus.importReview"
+        },
+        {
+          "command": "nexus.openInNexusEditor"
+        },
+        {
+          "command": "nexus.findInNexusTranslator"
+        },
+        {
+          "command": "nexus.setNexusAsDefaultXlfEditor"
+        },
+        {
+          "command": "nexus.setTextAsDefaultXlfEditor"
+        },
+        {
+          "command": "nexus.manageGlossary"
+        },
+        {
+          "command": "nexus.populateTmFromFile"
+        }
+      ]
+    },
+    "chatAgents": [
+      {
+        "path": "./assets/agents/nexus-translator.agent.md"
+      }
+    ],
+    "configuration": {
+      "title": "Nexus Translator",
+      "properties": {
+        "nexus.translator.provider": {
+          "type": "string",
+          "enum": [
+            "github-copilot",
+            "github-models",
+            "openai",
+            "azure-openai"
+          ],
+          "enumDescriptions": [
+            "GitHub Copilot (no API key needed — uses your existing Copilot subscription)",
+            "GitHub Models (requires GitHub token)",
+            "OpenAI API",
+            "Azure OpenAI Service"
+          ],
+          "default": "github-copilot",
+          "description": "AI provider used for translations."
+        },
+        "nexus.translator.token": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API token/key for the AI provider. **Tip:** use `Nexus: Set API Token (Secure)` to store it in VS Code's secret storage instead of plain settings."
+        },
+        "nexus.translator.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "AI model name. Leave empty to use the provider default (`gpt-4o-mini` for GitHub Models, `gpt-4o` for OpenAI/Azure)."
+        },
+        "nexus.translator.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for the AI provider. Required for azure-openai; optional for openai."
+        },
+        "nexus.translator.sourceLanguage": {
+          "type": "string",
+          "default": "en-US",
+          "description": "Source language code used when the XLIFF file does not specify one (e.g. en-US)."
+        },
+        "nexus.translator.targetLanguage": {
+          "type": "string",
+          "default": "de-DE",
+          "description": "Target language code used when the XLIFF file does not specify one (e.g. de-DE)."
+        },
+        "nexus.translator.batchSize": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Number of translation units sent to the AI in a single request. Reduce if you hit token limits."
+        },
+        "nexus.translator.openNavigationIn": {
+          "type": "string",
+          "enum": [
+            "active",
+            "beside"
+          ],
+          "enumDescriptions": [
+            "Same window — open in the currently active editor group (replaces the current tab)",
+            "Split window — open in a split editor group next to the current one"
+          ],
+          "default": "active",
+          "description": "Where to open editors when navigating between Nexus Translator and AL source code (Go to Source, Open in Nexus, Edit in Nexus, Find in Nexus)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "build": "node esbuild.js",
+    "dev": "node esbuild.js --watch",
+    "type-check": "tsc --noEmit",
+    "package": "node esbuild.js && vsce package --no-dependencies",
+    "install-ext": "node esbuild.js && vsce package --no-dependencies && code --install-extension nexus-translator-0.1.0.vsix"
+  },
+  "dependencies": {
+    "@nexus/ai": "workspace:*",
+    "@nexus/types": "workspace:*",
+    "@nexus/xliff": "workspace:*",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.3"
+  }
+}

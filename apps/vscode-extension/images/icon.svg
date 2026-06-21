@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e1e2e"/>
+      <stop offset="100%" style="stop-color:#181825"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#89b4fa"/>
+      <stop offset="50%" style="stop-color:#cba6f7"/>
+      <stop offset="100%" style="stop-color:#f38ba8"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#a6e3a1"/>
+      <stop offset="100%" style="stop-color:#94e2d5"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="128" height="128" rx="22" ry="22" fill="url(#bg)"/>
+
+  <!-- Outer decorative ring arc (top-right) -->
+  <path d="M 64 14 A 50 50 0 0 1 114 64" stroke="url(#ring)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <!-- Outer decorative ring arc (bottom-left) -->
+  <path d="M 64 114 A 50 50 0 0 1 14 64" stroke="url(#ring)" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- Document shape (left — source) -->
+  <rect x="16" y="36" width="38" height="48" rx="5" ry="5" fill="none" stroke="#89b4fa" stroke-width="2" opacity="0.85"/>
+  <!-- Document lines -->
+  <line x1="22" y1="48" x2="48" y2="48" stroke="#89b4fa" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  <line x1="22" y1="55" x2="48" y2="55" stroke="#89b4fa" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  <line x1="22" y1="62" x2="40" y2="62" stroke="#89b4fa" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Document shape (right — translated) -->
+  <rect x="74" y="36" width="38" height="48" rx="5" ry="5" fill="none" stroke="#cba6f7" stroke-width="2" opacity="0.85"/>
+  <!-- Document lines -->
+  <line x1="80" y1="48" x2="106" y2="48" stroke="#cba6f7" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  <line x1="80" y1="55" x2="106" y2="55" stroke="#cba6f7" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  <line x1="80" y1="62" x2="98" y2="62" stroke="#cba6f7" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Translation arrows (bidirectional, center) with glow -->
+  <g filter="url(#glow)">
+    <!-- Right arrow -->
+    <path d="M 58 57 L 70 57" stroke="url(#arrow)" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M 66 52 L 71 57 L 66 62" stroke="url(#arrow)" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Left arrow -->
+    <path d="M 58 71 L 70 71" stroke="url(#arrow)" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+    <path d="M 62 66 L 57 71 L 62 76" stroke="url(#arrow)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+  </g>
+
+  <!-- AI sparkle dot (top center) -->
+  <circle cx="64" cy="22" r="3.5" fill="#f9e2af" opacity="0.9" filter="url(#glow)"/>
+  <!-- Sparkle lines -->
+  <line x1="64" y1="16" x2="64" y2="13" stroke="#f9e2af" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+  <line x1="69" y1="17" x2="71" y2="15" stroke="#f9e2af" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+  <line x1="59" y1="17" x2="57" y2="15" stroke="#f9e2af" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- Bottom label "N" for Nexus -->
+  <text x="64" y="108" font-family="'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="700" fill="#cdd6f4" text-anchor="middle" letter-spacing="3" opacity="0.8">NEXUS</text>
+</svg>

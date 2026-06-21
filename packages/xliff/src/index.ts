@@ -357,8 +357,22 @@ export function parseXliff(xmlContent: string): ParsedXliff {
     const id = String(unit['@_id'] ?? '');
 
     const sourceText = getText(unit.source);
-    const target = unit.target as Record<string, unknown> | string | undefined;
-    const rawTargetText = getText(unit.target);
+
+    // Handle multiple <target> elements (NAB AL Tool may insert several suggestions).
+    // Prefer the first target WITHOUT a NAB prefix (= confirmed translation);
+    // fall back to the first element if all carry a NAB prefix.
+    let targetNode: unknown = unit.target;
+    if (Array.isArray(unit.target) && unit.target.length > 0) {
+      const targets = unit.target as unknown[];
+      const confirmed = targets.find((t) => {
+        const txt = getText(t);
+        return !NAB_PREFIX_STATES.some(({ prefix }) => prefix.test(txt));
+      });
+      targetNode = confirmed ?? targets[0];
+    }
+
+    const target = targetNode as Record<string, unknown> | string | undefined;
+    const rawTargetText = getText(targetNode);
     const { cleaned: targetText } = stripNabPrefix(rawTargetText ?? '');
     const targetState = typeof target === 'object' && target !== null
       ? String(target['@_state'] ?? '')
@@ -439,7 +453,7 @@ export function serializeXliff(
       continue;
     }
     const update = updates.get(idMatch[1]);
-    out.push(update ? applyTargetPatch(seg, update.target) : seg);
+    out.push(update ? applyTargetPatch(seg, update.target, update.state) : seg);
   }
 
   return out.join('');
@@ -448,9 +462,14 @@ export function serializeXliff(
 /**
  * Replace (or insert) the `<target>` element inside a single `<trans-unit>` block.
  * Only the `<target>` portion is touched; everything else is preserved exactly.
+ *
+ * State encoding rules (matching BC/NAB conventions):
+ *  - "translated" → `<target>text</target>` (no state attr — having text implies translated)
+ *  - any other state → `<target state="...">text</target>`
  */
-function applyTargetPatch(block: string, targetText: string): string {
-  const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
+function applyTargetPatch(block: string, targetText: string, state?: TranslationState): string {
+  const stateAttr = !state || state === 'translated' ? '' : ` state="${state}"`;
+  const newTargetXml = `<target${stateAttr}>${xmlEscape(targetText)}</target>`;
 
   // Case 1: existing <target ...>...</target> (possibly multi-line)
   if (/<target[\s\S]*?<\/target>/.test(block)) {
