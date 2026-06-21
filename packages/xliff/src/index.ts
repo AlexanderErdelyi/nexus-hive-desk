@@ -453,7 +453,7 @@ export function serializeXliff(
       continue;
     }
     const update = updates.get(idMatch[1]);
-    out.push(update ? applyTargetPatch(seg, update.target) : seg);
+    out.push(update ? applyTargetPatch(seg, update.target, update.state) : seg);
   }
 
   return out.join('');
@@ -462,9 +462,14 @@ export function serializeXliff(
 /**
  * Replace (or insert) the `<target>` element inside a single `<trans-unit>` block.
  * Only the `<target>` portion is touched; everything else is preserved exactly.
+ *
+ * State encoding rules (matching BC/NAB conventions):
+ *  - "translated" → `<target>text</target>` (no state attr — having text implies translated)
+ *  - any other state → `<target state="...">text</target>`
  */
-function applyTargetPatch(block: string, targetText: string): string {
-  const newTargetXml = `<target>${xmlEscape(targetText)}</target>`;
+function applyTargetPatch(block: string, targetText: string, state?: TranslationState): string {
+  const stateAttr = !state || state === 'translated' ? '' : ` state="${state}"`;
+  const newTargetXml = `<target${stateAttr}>${xmlEscape(targetText)}</target>`;
 
   // Case 1: existing <target ...>...</target> (possibly multi-line)
   if (/<target[\s\S]*?<\/target>/.test(block)) {
