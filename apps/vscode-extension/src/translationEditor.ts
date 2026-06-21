@@ -232,7 +232,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'qualityCheck': {
           // Validate placeholders and find inconsistencies inline
           const parsed2 = parseXliff(document.getText());
-          const issues: Array<{ id: string; type: 'placeholder' | 'inconsistency'; message: string }> = [];
+          const issues: Array<{
+            id: string;
+            type: 'placeholder' | 'inconsistency';
+            message: string;
+            variants?: Array<{ target: string; count: number }>;
+          }> = [];
 
           // 1. Placeholder check: find %1, %2, {0}, {1} in source but not in target
           const placeholderRe = /%\d+|\{[\d]+\}/g;
@@ -260,18 +265,41 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           for (const [, entries] of srcToTargets) {
             const uniqueTargets = [...new Set(entries.map((e) => e.target))];
             if (uniqueTargets.length > 1) {
+              // Count how many rows use each variant
+              const variantCounts = uniqueTargets.map((t) => ({
+                target: t,
+                count: entries.filter((e) => e.target === t).length,
+              }));
               for (const entry of entries) {
-                const others = uniqueTargets.filter((t) => t !== entry.target);
                 issues.push({
                   id: entry.id,
                   type: 'inconsistency',
-                  message: `Inconsistent: also translated as "${others[0]}"`,
+                  message: `Inconsistent: ${uniqueTargets.length} different translations used for this source`,
+                  variants: variantCounts,
                 });
               }
             }
           }
 
           webviewPanel.webview.postMessage({ type: 'qualityResults', issues });
+          break;
+        }
+
+        case 'applyToSource': {
+          // Apply one target to ALL units that share the same source text
+          const { source, target } = msg as { source: string; target: string };
+          const parsed3 = parseXliff(document.getText());
+          const toUpdate = parsed3.units.filter(
+            (u) => u.source.trim().toLowerCase() === source.trim().toLowerCase()
+          );
+          for (const u of toUpdate) {
+            pendingChanges.set(u.id, { target, state: 'translated' as TranslationState });
+          }
+          webviewPanel.webview.postMessage({
+            type: 'applyToSourceDone',
+            ids: toUpdate.map((u) => u.id),
+            target,
+          });
           break;
         }
 

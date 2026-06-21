@@ -550,7 +550,25 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             showNotif('Quality: ' + critical + ' critical placeholder issue(s), ' + warnings + ' inconsistency warning(s).', 'error');
           }
 
-        } else if (msg.type === 'bulkStatusUpdated') {
+                    } else if (msg.type === 'applyToSourceDone') {
+                      var ids = msg.ids || [];
+                      var tgt = msg.target || '';
+                      ids.forEach(function (id) {
+                        var u = findUnit(id);
+                        if (u) { u.target = tgt; u.state = 'translated'; }
+                        pendingChanges[id] = { target: tgt, state: 'translated' };
+                      });
+                      // Clear inconsistency issues for all affected ids
+                      ids.forEach(function (id) {
+                        if (qualityIssues[id]) {
+                          qualityIssues[id] = qualityIssues[id].filter(function (qi) { return qi.type !== 'inconsistency'; });
+                          if (qualityIssues[id].length === 0) delete qualityIssues[id];
+                        }
+                      });
+                      renderAll();
+                      showNotif('Applied "' + tgt.substring(0, 40) + (tgt.length > 40 ? '...' : '') + '" to ' + ids.length + ' row(s).', 'success');
+
+                    } else if (msg.type === 'bulkStatusUpdated') {
       (msg.items || []).forEach(function (it) {
         var u = findUnit(it.id);
         if (u) { u.state = it.state; if (it.target != null) u.target = it.target; }
@@ -705,6 +723,25 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         applyTmSuggestion(this.getAttribute('data-id'), this.getAttribute('data-target'));
       });
     });
+        el.querySelectorAll('.btn-q-use').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = this.getAttribute('data-id');
+            var target = this.getAttribute('data-target');
+            var u = findUnit(id);
+            if (u) {
+              u.target = target;
+              u.state = 'translated';
+              pendingChanges[id] = { target: target, state: 'translated' };
+              vscode.postMessage({ type: 'updateUnit', id: id, target: target, state: 'translated' });
+              renderAll();
+            }
+          });
+        });
+        el.querySelectorAll('.btn-q-use-all').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            vscode.postMessage({ type: 'applyToSource', source: this.getAttribute('data-source'), target: this.getAttribute('data-target') });
+          });
+        });
     syncSelectAllChk();
     var btnMore = document.getElementById('btn-load-more');
     if (btnMore) btnMore.addEventListener('click', function () { visibleCount += 100; renderList(); });
@@ -813,9 +850,26 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         var qHtml = '';
         if (qIssues.length > 0) {
           qHtml = qIssues.map(function (qi) {
-            var color = qi.type === 'placeholder' ? '#f48771' : '#dcdcaa';
-            var icon = qi.type === 'placeholder' ? '🔴' : '🟡';
-            return '<div class="q-issue" style="color:' + color + ';font-size:10px;margin-top:3px;">' + icon + ' ' + esc(qi.message) + '</div>';
+            if (qi.type === 'placeholder') {
+              return '<div class="q-issue" style="color:#f48771;font-size:10px;margin-top:3px;">&#128308; ' + esc(qi.message) + '</div>';
+            }
+            // Inconsistency — render all variants with Use / Use for all buttons
+            var variantsHtml = '';
+            if (qi.variants && qi.variants.length > 0) {
+              variantsHtml = '<div style="font-size:10px;color:#dcdcaa;margin-top:4px;margin-bottom:2px;">Variants used for this source:</div>' +
+                qi.variants.map(function (v) {
+                  return '<div class="q-variant" style="display:flex;align-items:center;gap:6px;margin-top:2px;padding:3px 6px;background:rgba(220,180,40,0.08);border:1px solid rgba(220,180,40,0.2);border-radius:4px;">' +
+                    '<span style="font-size:9px;font-weight:700;color:#dcdcaa;padding:1px 5px;background:rgba(220,180,40,0.15);border-radius:8px;">&#8644; x' + v.count + '</span>' +
+                    '<span class="q-variant-text" style="flex:1;font-size:10px;color:#d4d4d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(v.target) + '">' + esc(v.target) + '</span>' +
+                    '<button class="btn-q-use" data-id="' + esc(unit.id) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(220,180,40,0.2);color:#dcdcaa;border:1px solid rgba(220,180,40,0.4);cursor:pointer;flex-shrink:0;">Use</button>' +
+                    '<button class="btn-q-use-all" data-source="' + esc(unit.source) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(100,100,220,0.2);color:#9999ff;border:1px solid rgba(100,100,220,0.4);cursor:pointer;flex-shrink:0;" title="Apply to all rows with same source">Use for all</button>' +
+                    '</div>';
+                }).join('');
+            }
+            return '<div class="q-issue" style="margin-top:4px;">' +
+              '<div style="color:#dcdcaa;font-size:10px;">&#128261; ' + esc(qi.message) + '</div>' +
+              variantsHtml +
+              '</div>';
           }).join('');
         }
         var tgtHtml =
