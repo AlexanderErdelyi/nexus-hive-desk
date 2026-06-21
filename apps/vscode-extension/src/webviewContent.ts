@@ -417,6 +417,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-populate-tm" class="btn-secondary" title="Import all translated units into Translation Memory">&#8597; Populate TM</button>
     <button id="btn-quality-check" class="btn-secondary" title="Check placeholder consistency and translation inconsistencies">&#128270; Quality Check</button>
     <button id="btn-quality-filter" class="btn-secondary" hidden title="Show only units with quality issues">&#9888; Quality Issues</button>
+    <button id="btn-accepted" class="btn-secondary" hidden title="Review quality issues you've accepted (and un-accept them)">&#10003; Accepted (0)</button>
     <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
     <button id="btn-export-review" class="btn-ghost" title="Export translations to Excel for customer review (offers current filter or all)">&#128228; Export for Review</button>
     <button id="btn-import-review" class="btn-ghost" title="Import a reviewed Excel file to update translations">&#128229; Import Review</button>
@@ -477,6 +478,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-inspect-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Back to all issues</button>
 </div>
 
+<div id="accepted-panel" hidden style="border-bottom:1px solid rgba(255,255,255,0.08);max-height:240px;overflow:auto;"></div>
+
 <!-- Column headers -->
 <div id="col-headers">
   <div class="col-hdr" style="padding:0;display:flex;align-items:center;justify-content:center;">
@@ -527,6 +530,18 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var inspectLabel = ''; // describes what is being inspected (shown in banner)
   var glossaryTerms = []; // array of {sourceTerm, targetTerm}
   var qualityIssues = {}; // unitId → {type, message}[]
+  var acceptedQuality = []; // [{key, kind, source, targets, acceptedAt}] — user-accepted issues
+  var showAccepted = false; // when true, the accepted-issues review panel is open
+
+  // Build a lookup of accepted inconsistency source-keys → accepted target set.
+  function acceptedIncMap() {
+    var m = {};
+    acceptedQuality.forEach(function (a) {
+      if (a.kind === 'inconsistency') m[a.key] = a.targets || [];
+    });
+    return m;
+  }
+  function incKey(source) { return 'inc:' + String(source || '').trim().toLowerCase(); }
 
   // ─── Message handler ───────────────────────────────────────────────────────
   window.addEventListener('message', function (event) {
@@ -540,6 +555,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
       selectedIds = new Set(); tmSuggestions = {}; qualityIssues = {}; filterQuality = false;
+      acceptedQuality = msg.acceptedQuality || []; showAccepted = false;
       inspectIds = null; inspectLabel = '';
       duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
       diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : null;
@@ -632,7 +648,15 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
         } else if (msg.type === 'qualityResults') {
           qualityIssues = {};
-          var issues = msg.issues || [];
+          var accMapQ = acceptedIncMap();
+          var issues = (msg.issues || []).filter(function (iss) {
+            if (iss.type !== 'inconsistency' || !iss.source) return true;
+            var acc = accMapQ[incKey(iss.source)];
+            if (!acc) return true;
+            // Keep only if a new variant appeared since acceptance.
+            var cur = (iss.variants || []).map(function (v) { return v.target; });
+            return cur.some(function (t) { return acc.indexOf(t) < 0; });
+          });
           issues.forEach(function (iss) {
             if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
             qualityIssues[iss.id].push(iss);
@@ -685,13 +709,21 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       renderAll();
       showNotif('Ready to save \u2014 click Save to remove duplicate targets.', 'success');
 
+    } else if (msg.type === 'acceptedQualityUpdated') {
+      acceptedQuality = msg.acceptedQuality || [];
+      // Re-run the local quality computation so accepted issues drop out of the
+      // filtered view, and refresh the accepted-issues panel if it's open.
+      recomputeQuality();
+      renderAcceptedPanel();
+      updateAcceptedBtn();
+
     } else if (msg.type === 'notification') {
       showNotif(msg.message, msg.level || 'success', 3000);
     }
   });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  function renderAll() { renderHeader(); renderDiffBanner(); renderAiBanner(); renderImportBanner(); renderInspectBanner(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
+  function renderAll() { renderHeader(); renderDiffBanner(); renderAiBanner(); renderImportBanner(); renderInspectBanner(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); updateAcceptedBtn(); }
 
   function renderDiffBanner() {
     var banner = document.getElementById('diff-banner');
@@ -906,6 +938,14 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             vscode.postMessage({ type: 'applyToSource', source: this.getAttribute('data-source'), target: this.getAttribute('data-target') });
           });
         });
+        el.querySelectorAll('.btn-q-accept').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var source = this.getAttribute('data-source') || '';
+            var targets = [];
+            try { targets = JSON.parse(this.getAttribute('data-targets') || '[]'); } catch (e) {}
+            acceptIssue(source, targets);
+          });
+        });
     syncSelectAllChk();
     var btnMore = document.getElementById('btn-load-more');
     if (btnMore) btnMore.addEventListener('click', function () { visibleCount += 100; renderList(); });
@@ -1034,8 +1074,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             var showAllBtn = (qi.allIds && qi.allIds.length > 0)
               ? '<button class="btn-q-show" data-ids="' + esc(qi.allIds.join(',')) + '" data-label="all ' + qi.allIds.length + ' uses of \u201C' + esc(trunc(qi.source || unit.source, 30)) + '\u201D" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;margin-left:6px;" title="Filter the list to every row with this source so you can compare contexts">&#128269; Show all ' + qi.allIds.length + ' uses</button>'
               : '';
+            var accVariants = (qi.variants || []).map(function (v) { return v.target; });
+            var acceptBtn = '<button class="btn-q-accept" data-source="' + esc(qi.source || unit.source) + '" data-targets="' + esc(JSON.stringify(accVariants)) + '" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(80,200,120,0.18);color:#89d99c;border:1px solid rgba(80,200,120,0.4);cursor:pointer;margin-left:6px;" title="Accept this as intentional so it stops being flagged. New translation variants will still re-flag it.">&#10003; Accept</button>';
             return '<div class="q-issue" style="margin-top:4px;">' +
-              '<div style="color:#dcdcaa;font-size:10px;display:flex;align-items:center;flex-wrap:wrap;">&#128261; ' + esc(qi.message) + showAllBtn + '</div>' +
+              '<div style="color:#dcdcaa;font-size:10px;display:flex;align-items:center;flex-wrap:wrap;">&#128261; ' + esc(qi.message) + showAllBtn + acceptBtn + '</div>' +
               variantsHtml +
               '</div>';
           }).join('');
@@ -1188,6 +1230,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         updateQualityFilterBtn();
         renderAll();
       });
+      document.getElementById('btn-accepted').addEventListener('click', function () {
+        showAccepted = !showAccepted;
+        updateAcceptedBtn();
+        renderAcceptedPanel();
+      });
       document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
       document.getElementById('btn-export-review').addEventListener('click', function () {
         var f = getFiltered();
@@ -1312,14 +1359,13 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   }
 
   // ─── Quality check (runs locally in webview — no extension round-trip) ────────
-  function runQualityCheck() {
-    var btn = document.getElementById('btn-quality-check');
-    if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Checking\u2026'; }
-    // Use setTimeout to let the browser repaint the disabled state before the sync loop
-    setTimeout(function () {
-    qualityIssues = {};
+
+  // Pure computation: returns the issue list, skipping inconsistencies the user
+  // has accepted (unless a genuinely new target variant has appeared since).
+  function computeIssues() {
     var issues = [];
     var phRe = /%\d+|\{[\d]+\}/g;
+    var accMap = acceptedIncMap();
 
     // 1. Placeholder check
     for (var i = 0; i < units.length; i++) {
@@ -1346,6 +1392,12 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       var entries = srcMap[key];
       var unique = dedupe(entries.map(function (e) { return e.target; }));
       if (unique.length < 2) return;
+      // Skip if accepted and no new target variant has appeared since acceptance.
+      var accTargets = accMap['inc:' + key];
+      if (accTargets) {
+        var hasNew = unique.some(function (t) { return accTargets.indexOf(t) < 0; });
+        if (!hasNew) return;
+      }
       var variantCounts = unique.map(function (t) {
         var vids = entries.filter(function (e) { return e.target === t; }).map(function (e) { return e.id; });
         return { target: t, count: vids.length, ids: vids };
@@ -1363,6 +1415,92 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         });
       });
     });
+    return issues;
+  }
+
+  // Silently re-run the quality computation and re-render the current view.
+  function recomputeQuality() {
+    qualityIssues = {};
+    computeIssues().forEach(function (iss) {
+      if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
+      qualityIssues[iss.id].push(iss);
+    });
+    renderAll();
+    updateQualityFilterBtn();
+  }
+
+  // ─── Accept / un-accept quality issues ───────────────────────────────────────
+  function acceptIssue(source, targets) {
+    var key = incKey(source);
+    // Optimistically record locally so the UI updates immediately.
+    var exists = acceptedQuality.some(function (a) { return a.key === key; });
+    if (!exists) {
+      acceptedQuality.push({ key: key, kind: 'inconsistency', source: source, targets: targets || [], acceptedAt: new Date().toISOString() });
+    }
+    vscode.postMessage({ type: 'acceptQuality', key: key, source: source, targets: targets || [] });
+    recomputeQuality();
+    updateAcceptedBtn();
+    renderAcceptedPanel();
+    showNotif('Accepted \u201C' + trunc(source, 40) + '\u201D \u2014 it won\u2019t be flagged unless a new translation variant appears.', 'success', 5000);
+  }
+
+  function unacceptIssue(key) {
+    acceptedQuality = acceptedQuality.filter(function (a) { return a.key !== key; });
+    vscode.postMessage({ type: 'unacceptQuality', key: key });
+    recomputeQuality();
+    updateAcceptedBtn();
+    renderAcceptedPanel();
+    showNotif('Removed from accepted list \u2014 it will be flagged again if inconsistent.', 'info', 4000);
+  }
+
+  function updateAcceptedBtn() {
+    var btn = document.getElementById('btn-accepted');
+    if (!btn) return;
+    var n = acceptedQuality.length;
+    btn.textContent = '\u2713 Accepted (' + n + ')';
+    btn.hidden = n === 0;
+    btn.classList.toggle('active', showAccepted);
+  }
+
+  function renderAcceptedPanel() {
+    var panel = document.getElementById('accepted-panel');
+    if (!panel) return;
+    if (!showAccepted || acceptedQuality.length === 0) { panel.hidden = true; panel.innerHTML = ''; return; }
+    panel.hidden = false;
+    var rows = acceptedQuality.map(function (a) {
+      var chips = (a.targets || []).map(function (t) {
+        return '<span style="font-size:10px;color:#d4d4d4;padding:1px 6px;background:rgba(220,180,40,0.12);border:1px solid rgba(220,180,40,0.25);border-radius:8px;" title="' + esc(t) + '">' + esc(trunc(t, 28)) + '</span>';
+      }).join(' ');
+      var when = '';
+      try { when = new Date(a.acceptedAt).toLocaleString(); } catch (e) {}
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.06);">' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:11px;color:#dcdcaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(a.source) + '">&#128261; ' + esc(a.source) + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;">' + chips + '</div>' +
+          (when ? '<div style="font-size:9px;color:#888;margin-top:3px;">Accepted ' + esc(when) + '</div>' : '') +
+        '</div>' +
+        '<button class="btn-unaccept" data-key="' + esc(a.key) + '" style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(230,90,90,0.18);color:#f48771;border:1px solid rgba(230,90,90,0.4);cursor:pointer;flex-shrink:0;" title="Un-accept: this source will be flagged again on the next quality check">&#10005; Un-accept</button>' +
+        '</div>';
+    }).join('');
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(80,200,120,0.08);border-bottom:1px solid rgba(80,200,120,0.25);">' +
+        '<span style="font-size:11px;font-weight:600;color:#89d99c;">&#10003; Accepted quality issues (' + acceptedQuality.length + ')</span>' +
+        '<button id="btn-accepted-close" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Close</button>' +
+      '</div>' + rows;
+    var closeBtn = document.getElementById('btn-accepted-close');
+    if (closeBtn) closeBtn.addEventListener('click', function () { showAccepted = false; renderAcceptedPanel(); updateAcceptedBtn(); });
+    panel.querySelectorAll('.btn-unaccept').forEach(function (b) {
+      b.addEventListener('click', function () { unacceptIssue(this.getAttribute('data-key')); });
+    });
+  }
+
+  function runQualityCheck() {
+    var btn = document.getElementById('btn-quality-check');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Checking\u2026'; }
+    // Use setTimeout to let the browser repaint the disabled state before the sync loop
+    setTimeout(function () {
+    qualityIssues = {};
+    var issues = computeIssues();
 
     // Populate qualityIssues map
     issues.forEach(function (iss) {

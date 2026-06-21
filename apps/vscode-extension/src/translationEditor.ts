@@ -70,6 +70,15 @@ function findDuplicateTargetIds(xmlText: string): string[] {
 
 // ─── Provider registration ────────────────────────────────────────────────────
 
+/** A quality issue the user has explicitly accepted, persisted in workspace state. */
+interface AcceptedQualityIssue {
+  key: string;          // stable key, e.g. 'inc:<normalised source>'
+  kind: 'inconsistency';
+  source: string;       // display source text at accept time
+  targets: string[];    // variant targets present when accepted (for the audit view)
+  acceptedAt: string;   // ISO timestamp
+}
+
 export class TranslationEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = 'nexus.translationEditor';
 
@@ -118,6 +127,26 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  // ─── Accepted quality issues (persisted per-file in workspace state) ──────────
+  // Lets users dismiss an inconsistency they've deliberately accepted (e.g. a field
+  // name left untranslated) so it stops resurfacing on every quality check, while
+  // keeping an auditable record they can revert later.
+
+  private static acceptedKey(uri: vscode.Uri): string {
+    return `nexus.acceptedQuality:${uri.toString()}`;
+  }
+
+  private getAcceptedQuality(uri: vscode.Uri): AcceptedQualityIssue[] {
+    return this.context.workspaceState.get<AcceptedQualityIssue[]>(
+      TranslationEditorProvider.acceptedKey(uri),
+      []
+    );
+  }
+
+  private async setAcceptedQuality(uri: vscode.Uri, list: AcceptedQualityIssue[]): Promise<void> {
+    await this.context.workspaceState.update(TranslationEditorProvider.acceptedKey(uri), list);
+  }
 
   // ─── Core lifecycle ───────────────────────────────────────────────────────
 
@@ -180,6 +209,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           filterSearch: initialSearch || '',
           duplicateTargetIds: findDuplicateTargetIds(document.getText()),
           diffUnitIds: initialUnitIds ?? null,
+          acceptedQuality: this.getAcceptedQuality(document.uri),
         });
 
         pushStatusBar(document.uri, parsed.units, parsed.targetLanguage || getConfig().targetLanguage);
@@ -456,6 +486,30 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'goToSource':
           await goToSource(msg.note as string);
           break;
+
+        case 'acceptQuality': {
+          const accepted = this.getAcceptedQuality(document.uri);
+          const key = msg.key as string;
+          const next = accepted.filter((a) => a.key !== key);
+          next.push({
+            key,
+            kind: 'inconsistency',
+            source: (msg.source as string) ?? '',
+            targets: Array.isArray(msg.targets) ? (msg.targets as string[]) : [],
+            acceptedAt: new Date().toISOString(),
+          });
+          await this.setAcceptedQuality(document.uri, next);
+          webviewPanel.webview.postMessage({ type: 'acceptedQualityUpdated', acceptedQuality: next });
+          break;
+        }
+
+        case 'unacceptQuality': {
+          const accepted = this.getAcceptedQuality(document.uri);
+          const next = accepted.filter((a) => a.key !== (msg.key as string));
+          await this.setAcceptedQuality(document.uri, next);
+          webviewPanel.webview.postMessage({ type: 'acceptedQualityUpdated', acceptedQuality: next });
+          break;
+        }
       }
     });
 
