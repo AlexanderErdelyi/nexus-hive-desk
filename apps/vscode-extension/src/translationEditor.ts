@@ -9,6 +9,8 @@ import { pendingFilters, pendingSearches, pendingUnitIds } from './state';
 import { getTmManager } from './tmManager';
 import type { TmMatch } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
+import { SourceContextProvider } from './sourceContext';
+import { getNavigationViewColumn } from './navigation';
 
 // ─── Glossary helper ───────────────────────────────────────────────────────────
 
@@ -24,6 +26,20 @@ async function loadGlossary(
   } catch {
     return [];
   }
+}
+
+// ─── Context helper ────────────────────────────────────────────────────────────
+
+/**
+ * Build a context string for a unit from its BC metadata note (object + property
+ * path, e.g. "Page SO Processor Activities - Property Caption") and developer note.
+ * This is fed to the AI so it understands what kind of UI element it is translating.
+ */
+function buildUnitContext(u: XliffUnit): string | undefined {
+  const parts: string[] = [];
+  if (u.note && u.note.trim()) parts.push(u.note.trim());
+  if (u.developerNote && u.developerNote.trim()) parts.push('Developer note: ' + u.developerNote.trim());
+  return parts.length > 0 ? parts.join(' | ') : undefined;
 }
 
 // ─── Duplicate <target> detection ──────────────────────────────────────────────
@@ -48,6 +64,26 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
 
   /** Registry of all currently open translation editor panels, keyed by document URI. */
   private static readonly activePanels = new Map<string, vscode.WebviewPanel>();
+
+  /** Per-document refresh callbacks (re-read the document and re-render the webview). */
+  private static readonly refreshers = new Map<string, () => void>();
+
+  /** Re-render an open editor panel for the given document (e.g. after an external import). */
+  public static refresh(uri: vscode.Uri): boolean {
+    const fn = TranslationEditorProvider.refreshers.get(uri.toString());
+    if (!fn) return false;
+    fn();
+    return true;
+  }
+
+  /** If the document is open in a panel, highlight the imported units without resetting the active filter. */
+  public static applyImport(uri: vscode.Uri, changes: { id: string; target: string; state: string }[]): boolean {
+    const panel = TranslationEditorProvider.activePanels.get(uri.toString());
+    if (!panel) return false;
+    panel.reveal(undefined, false);
+    panel.webview.postMessage({ type: 'importApplied', changes });
+    return true;
+  }
 
   /** If the document is already open in a panel, apply a search filter and focus it. */
   public static applyFilter(uri: vscode.Uri, filter: string, searchText?: string, unitIds?: string[]): boolean {
@@ -79,6 +115,23 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken
   ): Promise<void> {
+    // When VS Code opens this file as part of a Source Control diff, the
+    // baseline side comes through with a non-file scheme (e.g. "git"). Rather
+    // than rendering the full editor twice side-by-side, redirect to the
+    // Translation Changes view for the working-tree file, in the same column.
+    if (document.uri.scheme !== 'file') {
+      const workingUri = vscode.Uri.file(document.uri.fsPath);
+      webviewPanel.webview.options = { enableScripts: false };
+      webviewPanel.webview.html =
+        '<!DOCTYPE html><html><body style="font-family:var(--vscode-font-family);padding:24px;color:var(--vscode-foreground);">' +
+        'Opening <strong>Translation Changes</strong>…</body></html>';
+      setTimeout(() => {
+        void vscode.commands.executeCommand('nexus.showTranslationDiff', workingUri);
+        webviewPanel.dispose();
+      }, 0);
+      return;
+    }
+
     webviewPanel.webview.options = { enableScripts: true };
     webviewPanel.webview.html = getWebviewContent(
       webviewPanel.webview.cspSource,
@@ -88,9 +141,11 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     // Register this panel so commands can find it even when already open
     const uriKey = document.uri.toString();
     TranslationEditorProvider.activePanels.set(uriKey, webviewPanel);
-
     // Track pending in-memory changes for this editor instance.
     const pendingChanges = new Map<string, { target: string; state: TranslationState }>();
+    // Cache language pair so requestTm doesn't re-parse the document on every focus
+    let cachedSrcLang = getConfig().sourceLanguage;
+    let cachedTgtLang = getConfig().targetLanguage;
 
     const sendInit = () => {
       try {
@@ -119,6 +174,9 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         // All TM work is fire-and-forget — never block sendInit
         const srcLang2 = parsed.sourceLanguage || getConfig().sourceLanguage;
         const tgtLang2 = parsed.targetLanguage || getConfig().targetLanguage;
+        // Cache so requestTm doesn't need to re-parse the document
+        cachedSrcLang = srcLang2;
+        cachedTgtLang = tgtLang2;
         void (async () => {
           try {
             const tm = getTmManager(this.context);
@@ -147,6 +205,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         });
       }
     };
+
+    // Expose a refresh hook so external commands (e.g. review import) can
+    // re-render this panel after writing the document.
+    TranslationEditorProvider.refreshers.set(uriKey, sendInit);
 
     // ─── TM suggestions ──────────────────────────────────────────────────────
     // Look up local Translation Memory matches for untranslated (and exact-match)
@@ -180,6 +242,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
 
     // ─── Message handler ─────────────────────────────────────────────────────
 
+    // Set to true when the panel closes so any in-flight AI review loop stops
+    // instead of continuing to burn tokens against a dead webview.
+    let reviewCancelled = false;
+
     const msgHandler = webviewPanel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type as string) {
         case 'ready':
@@ -200,11 +266,17 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           break;
 
         case 'translateAll':
-          await handleTranslateAll(document, webviewPanel, pendingChanges, this.context);
+          await handleTranslateAll(
+            document, webviewPanel, pendingChanges, this.context,
+            undefined, Boolean(msg.withContext)
+          );
           break;
 
         case 'bulkTranslate':
-          await handleBulkTranslate(document, webviewPanel, pendingChanges, this.context, msg.ids as string[]);
+          await handleBulkTranslate(
+            document, webviewPanel, pendingChanges, this.context,
+            msg.ids as string[], Boolean(msg.withContext)
+          );
           break;
 
         case 'bulkTmApply':
@@ -231,6 +303,23 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
             msg.id as string, msg.source as string
           );
           break;
+
+        case 'requestTm': {
+          void (async () => {
+            try {
+              const tm = getTmManager(this.context);
+              const suggestions = await tm.lookup([msg.source as string], cachedSrcLang, cachedTgtLang);
+              const matches = suggestions[msg.source as string];
+              if (matches && matches.length > 0) {
+                webviewPanel.webview.postMessage({
+                  type: 'tmSuggestions',
+                  suggestions: { [msg.id as string]: matches },
+                });
+              }
+            } catch { /* TM is best-effort */ }
+          })();
+          break;
+        }
 
         case 'qualityCheck': {
           // Validate placeholders and find inconsistencies inline
@@ -307,7 +396,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         }
 
         case 'reviewAll':
-          await handleReviewAll(document, webviewPanel, this.context);
+          await handleReviewAll(
+            document, webviewPanel, this.context,
+            msg.ids as string[] | undefined,
+            () => reviewCancelled,
+            Boolean(msg.withContext)
+          );
           break;
 
         case 'populateTm': {
@@ -332,6 +426,18 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'openAsText':
           // Open the same file in the default text editor (bypasses our custom editor)
           await vscode.commands.executeCommand('vscode.openWith', document.uri, 'default');
+          break;
+
+        case 'exportReview':
+          await vscode.commands.executeCommand('nexus.exportForReview', document.uri, {
+            filteredIds: Array.isArray(msg.filteredIds) ? msg.filteredIds : undefined,
+            isFiltered: Boolean(msg.isFiltered),
+            filterDesc: typeof msg.filterDesc === 'string' ? msg.filterDesc : '',
+          });
+          break;
+
+        case 'importReview':
+          await vscode.commands.executeCommand('nexus.importReview', document.uri);
           break;
 
         case 'goToSource':
@@ -372,7 +478,9 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     });
 
     webviewPanel.onDidDispose(() => {
+      reviewCancelled = true;
       TranslationEditorProvider.activePanels.delete(uriKey);
+      TranslationEditorProvider.refreshers.delete(uriKey);
       msgHandler.dispose();
       willSaveHandler.dispose();
       changeHandler.dispose();
@@ -428,7 +536,8 @@ async function handleTranslateAll(
   webviewPanel: vscode.WebviewPanel,
   pendingChanges: Map<string, { target: string; state: TranslationState }>,
   context: vscode.ExtensionContext,
-  filterIds?: string[]
+  filterIds?: string[],
+  withContext = false
 ): Promise<void> {
   let provider: AIProvider;
   try {
@@ -467,12 +576,59 @@ async function handleTranslateAll(
 
   webviewPanel.webview.postMessage({ type: 'translating', ids: targets.map((u) => u.id) });
 
+  // When context mode is on, gather extra signals to guide the AI:
+  //  - approved TM references for each source (terminology)
+  //  - the relevant AL source snippet per unit (data type, ToolTip, structure)
+  let refsBySource: Record<string, TmMatch[]> = {};
+  const snippetByUnitId: Record<string, string> = {};
+  if (withContext) {
+    try {
+      const tm = getTmManager(context);
+      const uniqueSources = Array.from(new Set(targets.map((u) => u.source).filter(Boolean)));
+      refsBySource = await tm.lookup(uniqueSources, srcLang, tgtLang);
+    } catch {
+      refsBySource = {};
+    }
+    const srcProvider = new SourceContextProvider();
+    await Promise.all(
+      targets.map(async (u) => {
+        try {
+          const snip = await srcProvider.getSnippet(u.note);
+          if (snip) snippetByUnitId[u.id] = snip;
+        } catch {
+          /* source context is best-effort */
+        }
+      })
+    );
+  }
+
   try {
     const batchSize = config.batchSize;
     for (let i = 0; i < targets.length; i += batchSize) {
       const batch = targets.slice(i, i + batchSize);
       const response = await provider.translate({
-        units: batch.map((u) => ({ id: u.id, source: u.source })),
+        units: batch.map((u) => {
+          // Lightweight default: source only (fewer tokens). Context mode adds
+          // BC object/property metadata, the AL source snippet, and approved TM
+          // references for better quality.
+          if (!withContext) return { id: u.id, source: u.source };
+          const refs = (refsBySource[u.source] || [])
+            .filter((m) => m.target && m.target.trim())
+            .slice(0, 3)
+            .map((m) => ({ source: u.source, target: m.target }));
+          const metaCtx = buildUnitContext(u);
+          const snippet = snippetByUnitId[u.id];
+          const ctx = [
+            metaCtx,
+            snippet ? 'AL source:\n' + snippet : '',
+          ].filter(Boolean).join('\n');
+          return {
+            id: u.id,
+            source: u.source,
+            ...(ctx ? { context: ctx } : {}),
+            ...(refs.length > 0 ? { references: refs } : {}),
+          };
+        }),
         sourceLanguage: srcLang,
         targetLanguage: tgtLang,
         ...(glossary.length > 0 ? { glossary } : {}),
@@ -496,13 +652,14 @@ async function handleBulkTranslate(
   webviewPanel: vscode.WebviewPanel,
   pendingChanges: Map<string, { target: string; state: TranslationState }>,
   context: vscode.ExtensionContext,
-  ids: string[]
+  ids: string[],
+  withContext = false
 ): Promise<void> {
   if (!ids || ids.length === 0) {
     webviewPanel.webview.postMessage({ type: 'error', message: 'No units selected.' });
     return;
   }
-  await handleTranslateAll(document, webviewPanel, pendingChanges, context, ids);
+  await handleTranslateAll(document, webviewPanel, pendingChanges, context, ids, withContext);
 }
 
 /** Apply the best local TM match to each selected unit. */
@@ -639,7 +796,10 @@ async function handleTranslateUnit(
 async function handleReviewAll(
   document: vscode.TextDocument,
   webviewPanel: vscode.WebviewPanel,
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
+  ids?: string[],
+  isCancelled: () => boolean = () => false,
+  withContext = false
 ): Promise<void> {
   let provider: AIProvider;
   try {
@@ -666,7 +826,9 @@ async function handleReviewAll(
       u.target.trim() &&
       (u.state === 'translated' ||
        u.state === 'needs-review-translation' ||
-       u.state === 'final')
+       u.state === 'final') &&
+      // When specific ids are provided (selection/filter), review only those.
+      (!ids || ids.length === 0 || ids.includes(u.id))
   );
 
   if (reviewable.length === 0) {
@@ -676,25 +838,63 @@ async function handleReviewAll(
 
   webviewPanel.webview.postMessage({ type: 'reviewing', ids: reviewable.map((u) => u.id) });
 
+  // Context mode: pre-fetch the AL source snippet per unit so the reviewer can
+  // judge against data type / ToolTip / structure (best-effort, opt-in for tokens).
+  const snippetByUnitId: Record<string, string> = {};
+  if (withContext) {
+    const srcProvider = new SourceContextProvider();
+    await Promise.all(
+      reviewable.map(async (u) => {
+        try {
+          const snip = await srcProvider.getSnippet(u.note);
+          if (snip) snippetByUnitId[u.id] = snip;
+        } catch {
+          /* source context is best-effort */
+        }
+      })
+    );
+  }
+
   try {
     const batchSize = config.batchSize;
     const allResults: Array<{ id: string; quality: string; reason?: string; suggestion?: string }> = [];
 
     for (let i = 0; i < reviewable.length; i += batchSize) {
+      // Stop early if the tab was closed — don't keep burning AI tokens.
+      if (isCancelled()) break;
       const batch = reviewable.slice(i, i + batchSize);
       const response = await provider.review({
-        units: batch.map((u) => ({
-          id: u.id,
-          source: u.source,
-          target: u.target,
-          ...(u.developerNote ? { context: u.developerNote } : {}),
-        })),
+        units: batch.map((u) => {
+          // Lightweight default: source/target/devNote only. Context mode adds the
+          // BC object/property metadata plus the AL source snippet for a deeper check.
+          if (!withContext) {
+            return {
+              id: u.id,
+              source: u.source,
+              target: u.target,
+              ...(u.developerNote ? { context: u.developerNote } : {}),
+            };
+          }
+          const metaCtx = buildUnitContext(u);
+          const snippet = snippetByUnitId[u.id];
+          const ctx = [
+            metaCtx,
+            snippet ? 'AL source:\n' + snippet : '',
+          ].filter(Boolean).join('\n');
+          return {
+            id: u.id,
+            source: u.source,
+            target: u.target,
+            ...(ctx ? { context: ctx } : {}),
+          };
+        }),
         sourceLanguage: srcLang,
         targetLanguage: tgtLang,
       });
       allResults.push(...response.results);
     }
 
+    if (isCancelled()) return;
     webviewPanel.webview.postMessage({ type: 'reviewResults', results: allResults });
   } catch (err: unknown) {
     webviewPanel.webview.postMessage({ type: 'error', message: `Review failed: ${(err as Error).message}` });
@@ -798,6 +998,7 @@ async function goToSource(note: string): Promise<void> {
     await vscode.window.showTextDocument(doc, {
       selection: new vscode.Range(pos, pos),
       preserveFocus: false,
+      viewColumn: getNavigationViewColumn(),
     });
     return;
   }

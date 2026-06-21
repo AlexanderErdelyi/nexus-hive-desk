@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getNavigationViewColumn } from '../navigation';
 
 export function registerOpenInNexus(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -13,7 +14,8 @@ export function registerOpenInNexus(context: vscode.ExtensionContext): void {
         await vscode.commands.executeCommand(
           'vscode.openWith',
           target,
-          'nexus.translationEditor'
+          'nexus.translationEditor',
+          getNavigationViewColumn()
         );
       }
     )

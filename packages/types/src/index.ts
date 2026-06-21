@@ -201,7 +201,14 @@ export interface CreateGlossaryEntryInput {
 export type AIProviderType = 'github-models' | 'openai' | 'azure-openai' | 'ollama';
 
 export interface AITranslateRequest {
-  units: Array<{ id: string; source: string }>;
+  units: Array<{
+    id: string;
+    source: string;
+    /** BC metadata path, e.g. "Page SO Processor Activities - Property Caption" plus any developer note. */
+    context?: string;
+    /** Approved translations of similar sources (from TM) to guide terminology. */
+    references?: Array<{ source: string; target: string }>;
+  }>;
   sourceLanguage: string;
   targetLanguage: string;
   glossary?: Array<{ sourceTerm: string; targetTerm: string }>;

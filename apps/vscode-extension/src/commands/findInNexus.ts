@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { pendingFilters, pendingSearches } from '../state';
 import { TranslationEditorProvider } from '../translationEditor';
+import { getNavigationViewColumn } from '../navigation';
 
 /** Maps lowercase AL keyword → BC XLIFF object type string (matches Xliff Generator note prefix) */
 const AL_TYPE_MAP: Record<string, string> = {
@@ -110,7 +111,8 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
         await vscode.commands.executeCommand(
           'vscode.openWith',
           xliffUri,
-          'nexus.translationEditor'
+          'nexus.translationEditor',
+          getNavigationViewColumn()
         );
       }
     )

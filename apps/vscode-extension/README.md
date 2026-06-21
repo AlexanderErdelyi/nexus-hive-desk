@@ -13,6 +13,7 @@
   <a href="#getting-started">Getting Started</a> •
   <a href="#translation-editor">Translation Editor</a> •
   <a href="#ai-translation">AI Translation</a> •
+  <a href="#export--import-for-review-excel">Excel Review</a> •
   <a href="#translation-memory">Translation Memory</a> •
   <a href="#glossary">Glossary</a> •
   <a href="#mcp-server">MCP Server</a> •
@@ -27,13 +28,16 @@
 |---|---|
 | 🗂 **Visual XLIFF Editor** | Rich table view for `.xlf` files — filter, search, edit inline |
 | ⚡ **AI Translation** | Translate with GitHub Copilot, OpenAI, or any API-compatible provider |
-| 🧠 **Translation Memory** | Local TM with fuzzy matching — reuse past translations automatically |
+| 🧠 **AI + Context** | Context-aware translate & review using each unit's BC object/property + AL source |
+| 💾 **Translation Memory** | Local TM with fuzzy matching — reuse past translations automatically |
 | 📖 **Glossary** | Manage term pairs to keep terminology consistent across all translations |
 | 🔍 **Find in Nexus** | Right-click any AL label in source code to jump to its translation |
 | 📂 **Folder Filter** | Right-click a folder to open the editor pre-filtered to its AL objects |
-| 🔀 **Translation Diff** | Compare current XLIFF against git HEAD — see what changed, added, or removed |
+| 🔀 **Translation Diff** | Compare current XLIFF against git HEAD — or toggle the raw XML working-tree diff |
+| 📤 **Excel Review Round-trip** | Export (filtered or all) to `.xlsx` for customers, then import their updates |
 | 🤖 **MCP Server** | Ask Copilot Chat to suggest glossary terms, populate TM, or analyze translations |
 | ✅ **Bulk Actions** | Select multiple rows → AI translate, apply TM, or set status in one click |
+| ✨ **Change Highlighting** | Units touched by the last AI run or import are highlighted and focusable |
 
 ---
 
@@ -64,7 +68,7 @@ Nexus Translator supports multiple AI providers:
 |---|---|
 | **GitHub Copilot** | No token needed — uses your existing Copilot session |
 | **OpenAI / Azure OpenAI** | Run **Nexus: Set API Token (Secure)**, paste your key |
-| **Ollama (local)** | Set `nexusTranslator.apiBaseUrl` to `http://localhost:11434/v1` |
+| **Ollama (local)** | Set `nexus.translator.baseUrl` to `http://localhost:11434/v1` |
 
 ---
 
@@ -84,6 +88,9 @@ The editor provides a table view of all translation units with inline editing.
 | **✔ Review All** | Run quality review on all translated units |
 | **⇅ Populate TM** | Import all translated/final units into Translation Memory |
 | **⚠ Clean up duplicates** | Fix units with multiple `<target>` elements (NAB AL Tool artifact) |
+| **📤 Export for Review** | Export translations (filtered or all) to Excel for customer review |
+| **📥 Import Review** | Import a reviewed Excel file and apply the updates |
+| **📄 Raw XML** | Open the underlying `.xlf` in the plain text editor |
 | **💾 Save** | Save all pending changes back to the XLIFF file |
 
 ### Row actions
@@ -100,6 +107,8 @@ Each row has inline controls:
 
 Check the header checkbox to select all visible rows, or check individual rows. A bulk action bar appears:
 - **⚡ AI Translate** — translate all selected
+- **🧠 AI + Context** — context-aware translate (BC object/property + AL source + TM/glossary)
+- **✔ Review** / **🧠 Review + Context** — AI quality-review the selected units
 - **⟳ Apply TM** — apply best TM match to all selected
 - **Set Status** — set state for all selected
 - **✕ Deselect all**
@@ -121,13 +130,24 @@ Click **⚡ AI Translate All** to translate all units that pass the current filt
 ### Bulk translate
 Select rows with checkboxes → **⚡ AI Translate** in the bulk bar.
 
+### AI + Context (better quality)
+Standard AI translation only sees the source string. **🧠 AI + Context** (in the bulk bar) additionally sends each unit's Business Central object/property context (from the XLIFF note, e.g. *Codeunit "Job Queue" - Field "Error Count"*), any approved Translation Memory and glossary terms, and — when available — the surrounding AL source. This helps the AI translate ambiguous strings correctly (e.g. an integer field labelled *Error Count* in a Job Queue context). It uses more tokens, so it's a separate button — use plain **AI Translate** for the bulk of your file and **AI + Context** for the tricky remainder.
+
+### Change highlighting
+After an AI run, the affected rows are highlighted (purple) and a banner appears at the top:
+- **Show only these** — filter the list to just the last run
+- **↓ Jump to first** — scroll to the first highlighted row
+- **✕ Clear highlight** — remove the highlight
+
+The same pattern applies (in green) after importing a reviewed Excel file — see [Export & Import for Review](#export--import-for-review-excel).
+
 ### AI provider selection
 Configure in VS Code settings (`File → Preferences → Settings → search "nexus"`):
 
 ```json
-"nexusTranslator.aiProvider": "copilot",       // copilot | openai | azure
-"nexusTranslator.apiBaseUrl": "",               // custom base URL
-"nexusTranslator.model": "gpt-4o"              // model override
+"nexus.translator.provider": "github-copilot",  // github-copilot | github-models | openai | azure-openai
+"nexus.translator.baseUrl": "",                   // custom base URL (required for azure-openai)
+"nexus.translator.model": ""                      // model override (e.g. gpt-4o)
 ```
 
 ---
@@ -195,6 +215,26 @@ Shows a color-coded table:
 
 ### Editing from diff
 Click **✎ Edit N changed units in Nexus Translator** to open the editor pre-filtered to only the changed (added + modified) units. A banner at the top shows "Diff view — Showing N changed units". Click **Show all units** to remove the filter.
+
+### Standard XML diff (working tree)
+When Nexus is your default `.xlf` editor, the source-control gutter and "Open Changes" route through the Nexus diff. If you prefer the classic line-by-line XML diff, click **⇄ Open standard XML diff** on the Translation Changes view — it opens the raw working-tree-vs-HEAD text diff for the file in the same window.
+
+---
+
+## Export & Import for Review (Excel)
+
+Reports and apps often need a customer or external reviewer to check translations and make corrections. Nexus round-trips this through an Excel file.
+
+### Export
+- In the editor toolbar click **📤 Export for Review**, or right-click an `.xlf` file → **Nexus: Export for Review (Excel)**
+- If a filter is active (e.g. you filtered to a single report), Nexus asks whether to export **only the filtered units** or **all units** — so you can hand off just one report
+- The `.xlsx` has a **Read me** sheet and a **Translations** sheet with ID / Context / Developer Note / Source / Translation / State / Comment columns
+- Reference columns are locked; only **Translation**, **State** (dropdown), and **Comment** are editable, so reviewers can't accidentally break IDs
+
+### Import
+- Click **📥 Import Review** in the toolbar, or right-click the `.xlf` → **Nexus: Import Reviewed Translations (Excel)**
+- Nexus matches rows back by **ID**, applies only the changed targets/states, saves the file, and reports how many units were updated / unchanged / not found
+- If the file is open in the editor, the changed units are **highlighted in green** and your **current filter is preserved** — use **Show only these** / **↓ Jump to first** in the green banner to review exactly what the customer changed
 
 ---
 
@@ -303,6 +343,8 @@ Copilot: ✓ Deleted
 | `Nexus: Translate XLIFF File` | AI-translate all untranslated units in a file |
 | `Nexus: Review XLIFF File Translations` | AI quality-review all translations in a file |
 | `Nexus: Populate TM from File` | Import all translated units into Translation Memory |
+| `Nexus: Export for Review (Excel)` | Export translations (filtered or all) to an `.xlsx` for customer review |
+| `Nexus: Import Reviewed Translations (Excel)` | Import a reviewed `.xlsx` and apply the updates back to the file |
 | `Nexus: Manage Glossary & TM` | Open the Glossary management panel |
 | `Nexus: Set API Token (Secure)` | Store your OpenAI/Azure API key in the system keychain |
 | `Nexus: Use Nexus as Default .xlf Editor` | Make Nexus the default editor for `.xlf` files |
@@ -320,9 +362,14 @@ There are no default shortcuts — bind any command to a key via **File → Pref
 
 | Setting | Default | Description |
 |---|---|---|
-| `nexusTranslator.aiProvider` | `copilot` | AI provider: `copilot`, `openai`, `azure` |
-| `nexusTranslator.apiBaseUrl` | `""` | Custom API base URL (e.g. for Ollama) |
-| `nexusTranslator.model` | `""` | Model override (e.g. `gpt-4o`, `llama3`) |
+| `nexus.translator.provider` | `github-copilot` | AI provider: `github-copilot`, `github-models`, `openai`, `azure-openai` |
+| `nexus.translator.token` | `""` | API token/key (prefer **Nexus: Set API Token (Secure)**) |
+| `nexus.translator.model` | `""` | Model override (e.g. `gpt-4o`, `gpt-4o-mini`) |
+| `nexus.translator.baseUrl` | `""` | Custom API base URL (required for `azure-openai`, optional for `openai`/Ollama) |
+| `nexus.translator.sourceLanguage` | `en-US` | Fallback source language when the XLIFF omits one |
+| `nexus.translator.targetLanguage` | `de-DE` | Fallback target language when the XLIFF omits one |
+| `nexus.translator.batchSize` | `50` | Units per AI request — lower it if you hit token limits |
+| `nexus.translator.openNavigationIn` | `active` | Where navigation opens editors: `active` (same window) or `beside` (split) |
 
 ---
 
@@ -342,7 +389,7 @@ All Nexus data is stored in `.nexus/` at your workspace root:
 
 ## Requirements
 
-- VS Code 1.90+
+- VS Code 1.102+
 - Business Central AL projects with `.xlf` translation files
 - For AI translation: GitHub Copilot subscription, or an OpenAI-compatible API key
 

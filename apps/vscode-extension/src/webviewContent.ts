@@ -148,6 +148,26 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     .unit-row:hover  { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.06)); }
     .unit-row.has-pending { border-left: 3px solid var(--vscode-button-background, #0078d4); }
     .unit-row.is-loading  { opacity: 0.65; }
+    /* Rows produced by the most recent AI run — highlighted so they're easy to spot. */
+    .unit-row.ai-last {
+      background: rgba(120, 90, 220, 0.13);
+      border-left: 3px solid #a98bff;
+      box-shadow: inset 0 0 0 1px rgba(169, 139, 255, 0.18);
+      animation: ai-last-fadein 0.45s ease;
+    }
+    .unit-row.ai-last:hover { background: rgba(120, 90, 220, 0.20); }
+    .unit-row.ai-last.has-pending { border-left-color: #a98bff; }
+    @keyframes ai-last-fadein { from { background: rgba(120, 90, 220, 0.45); } to { background: rgba(120, 90, 220, 0.13); } }
+
+    .unit-row.imported {
+      background: rgba(78, 201, 160, 0.13);
+      border-left: 3px solid #4ec9a0;
+      box-shadow: inset 0 0 0 1px rgba(78, 201, 160, 0.18);
+      animation: import-fadein 0.45s ease;
+    }
+    .unit-row.imported:hover { background: rgba(78, 201, 160, 0.20); }
+    .unit-row.imported.has-pending { border-left-color: #4ec9a0; }
+    @keyframes import-fadein { from { background: rgba(78, 201, 160, 0.45); } to { background: rgba(78, 201, 160, 0.13); } }
 
     /* ─── Context column ─── */
     .col-ctx {
@@ -311,6 +331,18 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     }
     #bulk-count { font-size: 12px; font-weight: 600; color: var(--vscode-foreground); }
 
+    /* ─── Diff banner ─── */
+    #diff-banner { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: rgba(220,220,170,0.12); border-bottom: 1px solid rgba(220,220,170,0.3); font-size: 12px; }
+    #diff-banner[hidden] { display: none; }
+    #ai-banner { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: rgba(120,90,220,0.14); border-bottom: 1px solid rgba(169,139,255,0.35); font-size: 12px; }
+    #ai-banner[hidden] { display: none; }
+    #ai-banner.active #btn-ai-only { background: rgba(169,139,255,0.25); color: #fff; border-radius: 4px; }
+    #import-banner { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: rgba(78,201,160,0.14); border-bottom: 1px solid rgba(78,201,160,0.35); font-size: 12px; }
+    #import-banner[hidden] { display: none; }
+    #import-banner.active #btn-import-only { background: rgba(78,201,160,0.25); color: #fff; border-radius: 4px; }
+    #inspect-banner { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: rgba(56,139,253,0.14); border-bottom: 1px solid rgba(120,180,255,0.35); font-size: 12px; }
+    #inspect-banner[hidden] { display: none; }
+
     /* ─── TM suggestion pill ─── */
     .tm-pill {
       display: flex; align-items: center; gap: 6px; font-size: 11px;
@@ -383,7 +415,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   <button id="btn-review-all" class="btn-secondary" title="AI review all translated units">&#128269; Review</button>
   <button id="btn-populate-tm" class="btn-secondary" title="Import all translated units into Translation Memory">&#8597; Populate TM</button>
     <button id="btn-quality-check" class="btn-secondary" title="Check placeholder consistency and translation inconsistencies">&#128270; Quality Check</button>
+    <button id="btn-quality-filter" class="btn-secondary" hidden title="Show only units with quality issues">&#9888; Quality Issues</button>
     <button id="btn-open-text" class="btn-ghost" title="Open raw XML in the text editor">&#128196; Raw XML</button>
+    <button id="btn-export-review" class="btn-ghost" title="Export translations to Excel for customer review (offers current filter or all)">&#128228; Export for Review</button>
+    <button id="btn-import-review" class="btn-ghost" title="Import a reviewed Excel file to update translations">&#128229; Import Review</button>
 </div>
 
 <!-- Object-filter chips (shown when filtering by AL objects) -->
@@ -392,7 +427,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 <!-- Bulk action bar -->
 <div id="bulk-bar" hidden>
   <span id="bulk-count"></span>
-  <button id="btn-bulk-ai" class="btn-primary">&#9889; AI Translate</button>
+  <button id="btn-bulk-ai" class="btn-primary" title="Fast AI translate (source text only — fewer tokens)">&#9889; AI Translate</button>
+  <button id="btn-bulk-ai-context" class="btn-secondary" title="AI translate using each unit's BC object/property context + approved Translation Memory terms (better quality, more tokens)">&#129504; AI + Context</button>
+  <button id="btn-bulk-review" class="btn-secondary" title="AI review selected translations (source/target only — fewer tokens)">&#128270; Review</button>
+  <button id="btn-bulk-review-context" class="btn-secondary" title="Deeper AI review using each unit's BC object/property context + AL source (better, more tokens)">&#129504; Review + Context</button>
   <button id="btn-bulk-tm" class="btn-secondary">&#10227; Apply TM</button>
   <select id="bulk-status-sel" class="toolbar-select">
     <option value="">Set Status&hellip;</option>
@@ -406,11 +444,36 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 </div>
 
 <!-- Diff filter banner -->
-<div id="diff-banner" hidden style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:rgba(220,220,170,0.12);border-bottom:1px solid rgba(220,220,170,0.3);font-size:12px;">
+<div id="diff-banner" hidden>
   <span style="color:#dcdcaa;">&#9650; Diff view</span>
   <span id="diff-banner-count"></span>
   <div class="tb-spacer"></div>
   <button id="btn-diff-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Show all units</button>
+</div>
+
+<div id="ai-banner" hidden>
+  <span style="color:#c7b3ff;">&#10024; Last AI translation</span>
+  <span id="ai-banner-count"></span>
+  <button id="btn-ai-only" class="btn-ghost" style="font-size:11px;padding:2px 8px;">Show only these</button>
+  <button id="btn-ai-scroll" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#8595; Jump to first</button>
+  <div class="tb-spacer"></div>
+  <button id="btn-ai-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Clear highlight</button>
+</div>
+
+<div id="import-banner" hidden>
+  <span style="color:#7fe3c0;">&#128229; Imported review</span>
+  <span id="import-banner-count"></span>
+  <button id="btn-import-only" class="btn-ghost" style="font-size:11px;padding:2px 8px;">Show only these</button>
+  <button id="btn-import-scroll" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#8595; Jump to first</button>
+  <div class="tb-spacer"></div>
+  <button id="btn-import-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Clear highlight</button>
+</div>
+
+<div id="inspect-banner" hidden>
+  <span style="color:#9cdcfe;">&#128269; Inspecting</span>
+  <span id="inspect-banner-label"></span>
+  <div class="tb-spacer"></div>
+  <button id="btn-inspect-clear" class="btn-ghost" style="font-size:11px;padding:2px 8px;">&#10005; Back to all issues</button>
 </div>
 
 <!-- Column headers -->
@@ -448,12 +511,19 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   // ─── State ─────────────────────────────────────────────────────────────────
   var units = [], srcLang = '', tgtLang = '', fileName = '';
   var filterSearch = '', filterState = 'all', filterType = '', searchIn = 'all', objectFilters = [];
+  var filterQuality = false;
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null;
   var selectedIds = new Set();
   var tmSuggestions = {}; // unitId → TmMatch[]
   var duplicateTargetIds = new Set();
   var diffUnitIds = null; // Set<string> | null — when set, only show these unit IDs (from diff view)
+  var lastAiIds = new Set(); // unit IDs translated in the most recent AI run (for highlighting)
+  var showOnlyAiLast = false; // when true, list is filtered to the last AI run
+  var importedIds = new Set(); // unit IDs updated by the most recent review import (for highlighting)
+  var showOnlyImported = false; // when true, list is filtered to the last import
+  var inspectIds = null; // Set<string> | null — when set, list shows only these units (quality inspect)
+  var inspectLabel = ''; // describes what is being inspected (shown in banner)
   var glossaryTerms = []; // array of {sourceTerm, targetTerm}
   var qualityIssues = {}; // unitId → {type, message}[]
 
@@ -468,7 +538,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       tgtLang = msg.targetLanguage || '';
       fileName = msg.fileName || '';
       pendingChanges = {}; reviewMap = {}; loadingSet = new Set(); visibleCount = 100;
-      selectedIds = new Set(); tmSuggestions = {}; qualityIssues = {};
+      selectedIds = new Set(); tmSuggestions = {}; qualityIssues = {}; filterQuality = false;
+      inspectIds = null; inspectLabel = '';
       duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
       diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : null;
       filterState = 'all';
@@ -493,18 +564,36 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       renderAll();
 
     } else if (msg.type === 'translating') {
+      // Start of a new AI run — this set becomes the "last translated" highlight.
+      lastAiIds = new Set(msg.ids || []);
       (msg.ids || []).forEach(function (id) { loadingSet.add(id); });
       renderList();
 
     } else if (msg.type === 'translationResults') {
       (msg.results || []).forEach(function (r) {
         loadingSet.delete(r.id);
+        lastAiIds.add(r.id);
         var u = findUnit(r.id);
         if (u) { u.target = r.translatedText; u.state = 'translated'; if (r.confidenceScore != null) u.confidenceScore = r.confidenceScore; }
         pendingChanges[r.id] = { target: r.translatedText, state: 'translated' };
       });
       renderAll();
-      showNotif('Translated ' + msg.results.length + ' unit(s).', 'success');
+      showNotif('Translated ' + msg.results.length + ' unit(s) \u2014 highlighted below.', 'success');
+
+    } else if (msg.type === 'importApplied') {
+      var ch = msg.changes || [];
+      importedIds = new Set();
+      ch.forEach(function (c) {
+        var u = findUnit(c.id);
+        if (u) { u.target = c.target; u.state = c.state; }
+        importedIds.add(c.id);
+        delete pendingChanges[c.id];
+      });
+      // Imported values are already saved to disk — clear any stale review marks.
+      showOnlyImported = false;
+      renderAll();
+      var nn = ch.length;
+      showNotif('Imported ' + nn + ' reviewed translation' + (nn !== 1 ? 's' : '') + ' \u2014 highlighted below.', 'success');
 
     } else if (msg.type === 'reviewing') {
       (msg.ids || []).forEach(function (id) { loadingSet.add(id); });
@@ -527,7 +616,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       showNotif('Saved.', 'success');
 
     } else if (msg.type === 'tmSuggestions') {
-      tmSuggestions = msg.suggestions || {};
+      // Merge so on-demand single-unit lookups don't wipe bulk suggestions
+      var incoming = msg.suggestions || {};
+      Object.keys(incoming).forEach(function (id) { tmSuggestions[id] = incoming[id]; });
       renderList();
 
     } else if (msg.type === 'duplicateTargetIds') {
@@ -541,7 +632,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
             qualityIssues[iss.id].push(iss);
           });
-          renderList();
+          // Auto-activate quality filter when issues are found
+          filterQuality = issues.length > 0;
+          renderAll();
+          updateQualityFilterBtn();
           var critical = issues.filter(function (i) { return i.type === 'placeholder'; }).length;
           var warnings = issues.filter(function (i) { return i.type === 'inconsistency'; }).length;
           if (issues.length === 0) {
@@ -592,7 +686,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   });
 
   // ─── Render ────────────────────────────────────────────────────────────────
-  function renderAll() { renderHeader(); renderDiffBanner(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
+  function renderAll() { renderHeader(); renderDiffBanner(); renderAiBanner(); renderImportBanner(); renderInspectBanner(); renderFilterChips(); renderList(); renderFooter(); renderBulkBar(); }
 
   function renderDiffBanner() {
     var banner = document.getElementById('diff-banner');
@@ -601,6 +695,47 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var n = diffUnitIds.size;
     banner.hidden = false;
     document.getElementById('diff-banner-count').textContent = 'Showing ' + n + ' changed unit' + (n !== 1 ? 's' : '') + ' from diff view';
+  }
+
+  function renderAiBanner() {
+    var banner = document.getElementById('ai-banner');
+    if (!banner) return;
+    if (lastAiIds.size === 0) { banner.hidden = true; showOnlyAiLast = false; return; }
+    banner.hidden = false;
+    banner.classList.toggle('active', showOnlyAiLast);
+    var n = lastAiIds.size;
+    document.getElementById('ai-banner-count').textContent = n + ' unit' + (n !== 1 ? 's' : '') + ' highlighted';
+    var onlyBtn = document.getElementById('btn-ai-only');
+    if (onlyBtn) onlyBtn.textContent = showOnlyAiLast ? 'Show all units' : 'Show only these';
+  }
+
+  function renderImportBanner() {
+    var banner = document.getElementById('import-banner');
+    if (!banner) return;
+    if (importedIds.size === 0) { banner.hidden = true; showOnlyImported = false; return; }
+    banner.hidden = false;
+    banner.classList.toggle('active', showOnlyImported);
+    var n = importedIds.size;
+    document.getElementById('import-banner-count').textContent = n + ' unit' + (n !== 1 ? 's' : '') + ' updated';
+    var onlyBtn = document.getElementById('btn-import-only');
+    if (onlyBtn) onlyBtn.textContent = showOnlyImported ? 'Show all units' : 'Show only these';
+  }
+
+  function renderInspectBanner() {
+    var banner = document.getElementById('inspect-banner');
+    if (!banner) return;
+    if (!inspectIds) { banner.hidden = true; return; }
+    banner.hidden = false;
+    document.getElementById('inspect-banner-label').textContent = inspectLabel;
+  }
+
+  // Filter the list down to a specific set of unit IDs so the user can review
+  // where a source/variant is used and decide which translation to keep.
+  function inspectUnitIds(ids, label) {
+    inspectIds = new Set(ids);
+    inspectLabel = label;
+    visibleCount = 100;
+    renderAll();
   }
 
   function renderBulkBar() {
@@ -624,7 +759,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var q = filterSearch.toLowerCase();
     return units.filter(function (u) {
       if (diffUnitIds && !diffUnitIds.has(u.id)) return false;
+      if (inspectIds && !inspectIds.has(u.id)) return false;
+      if (showOnlyAiLast && !lastAiIds.has(u.id)) return false;
+      if (showOnlyImported && !importedIds.has(u.id)) return false;
       if (filterState !== 'all' && u.state !== filterState) return false;
+      if (filterQuality && !qualityIssues[u.id]) return false;
       // Object type filter: note must start with "{filterType} "
       if (filterType && !(u.note && u.note.startsWith(filterType + ' '))) return false;
       // Object-filter chips: note must start with one of the selected "ObjectType ObjectName - " prefixes
@@ -645,6 +784,18 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
              u.id.toLowerCase().indexOf(q) >= 0 ||
              (u.note  && u.note.toLowerCase().indexOf(q) >= 0);
     });
+  }
+
+  function describeActiveFilter() {
+    var parts = [];
+    if (objectFilters.length > 0) parts.push(objectFilters.join(', '));
+    if (filterType) parts.push(filterType);
+    if (filterState !== 'all') parts.push('state: ' + filterState);
+    if (filterQuality) parts.push('quality issues');
+    if (filterSearch) parts.push('search: "' + filterSearch + '"');
+    if (diffUnitIds) parts.push('changed units');
+    if (inspectIds) parts.push('inspected units');
+    return parts.join(' + ');
   }
 
   function renderFilterChips() {
@@ -701,6 +852,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     el.querySelectorAll('textarea.target-input').forEach(function (ta) {
       ta.addEventListener('input', autoResize);
       ta.addEventListener('blur',  onTargetBlur);
+      ta.addEventListener('focus', onTargetFocus);
       autoResize.call(ta);
     });
     el.querySelectorAll('.state-select').forEach(function (sel) { sel.addEventListener('change', onStateChange); });
@@ -723,6 +875,13 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         applyTmSuggestion(this.getAttribute('data-id'), this.getAttribute('data-target'));
       });
     });
+        el.querySelectorAll('.btn-q-show').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var ids = (this.getAttribute('data-ids') || '').split(',').filter(Boolean);
+            if (ids.length === 0) return;
+            inspectUnitIds(ids, this.getAttribute('data-label') || (ids.length + ' units'));
+          });
+        });
         el.querySelectorAll('.btn-q-use').forEach(function (btn) {
           btn.addEventListener('click', function () {
             var id = this.getAttribute('data-id');
@@ -798,7 +957,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     var hasPend   = !!pendingChanges[unit.id];
     var isLoading = loadingSet.has(unit.id);
     var review    = reviewMap[unit.id];
-    var rowClass  = 'unit-row' + (hasPend ? ' has-pending' : '') + (isLoading ? ' is-loading' : '');
+    var rowClass  = 'unit-row' + (hasPend ? ' has-pending' : '') + (isLoading ? ' is-loading' : '') + (lastAiIds.has(unit.id) && !isLoading ? ' ai-last' : '') + (importedIds.has(unit.id) && !isLoading ? ' imported' : '');
 
     // ── Checkbox cell ─────────────────────────────────────────────────────────
     var chkHtml = '<div class="col-check"><input type="checkbox" class="row-check" data-id="' + esc(unit.id) + '"' + (selectedIds.has(unit.id) ? ' checked' : '') + '></div>';
@@ -853,7 +1012,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             if (qi.type === 'placeholder') {
               return '<div class="q-issue" style="color:#f48771;font-size:10px;margin-top:3px;">&#128308; ' + esc(qi.message) + '</div>';
             }
-            // Inconsistency — render all variants with Use / Use for all buttons
+            // Inconsistency — render all variants with Show / Use / Use for all buttons
             var variantsHtml = '';
             if (qi.variants && qi.variants.length > 0) {
               variantsHtml = '<div style="font-size:10px;color:#dcdcaa;margin-top:4px;margin-bottom:2px;">Variants used for this source:</div>' +
@@ -861,13 +1020,17 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
                   return '<div class="q-variant" style="display:flex;align-items:center;gap:6px;margin-top:2px;padding:3px 6px;background:rgba(220,180,40,0.08);border:1px solid rgba(220,180,40,0.2);border-radius:4px;">' +
                     '<span style="font-size:9px;font-weight:700;color:#dcdcaa;padding:1px 5px;background:rgba(220,180,40,0.15);border-radius:8px;">&#8644; x' + v.count + '</span>' +
                     '<span class="q-variant-text" style="flex:1;font-size:10px;color:#d4d4d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(v.target) + '">' + esc(v.target) + '</span>' +
+                    '<button class="btn-q-show" data-ids="' + esc((v.ids || []).join(',')) + '" data-label="' + esc(v.count + '\u00d7 \u201C' + trunc(v.target, 30) + '\u201D') + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;flex-shrink:0;" title="Show the rows that use this translation">Show</button>' +
                     '<button class="btn-q-use" data-id="' + esc(unit.id) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(220,180,40,0.2);color:#dcdcaa;border:1px solid rgba(220,180,40,0.4);cursor:pointer;flex-shrink:0;">Use</button>' +
                     '<button class="btn-q-use-all" data-source="' + esc(unit.source) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(100,100,220,0.2);color:#9999ff;border:1px solid rgba(100,100,220,0.4);cursor:pointer;flex-shrink:0;" title="Apply to all rows with same source">Use for all</button>' +
                     '</div>';
                 }).join('');
             }
+            var showAllBtn = (qi.allIds && qi.allIds.length > 0)
+              ? '<button class="btn-q-show" data-ids="' + esc(qi.allIds.join(',')) + '" data-label="all ' + qi.allIds.length + ' uses of \u201C' + esc(trunc(qi.source || unit.source, 30)) + '\u201D" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;margin-left:6px;" title="Filter the list to every row with this source so you can compare contexts">&#128269; Show all ' + qi.allIds.length + ' uses</button>'
+              : '';
             return '<div class="q-issue" style="margin-top:4px;">' +
-              '<div style="color:#dcdcaa;font-size:10px;">&#128261; ' + esc(qi.message) + '</div>' +
+              '<div style="color:#dcdcaa;font-size:10px;display:flex;align-items:center;flex-wrap:wrap;">&#128261; ' + esc(qi.message) + showAllBtn + '</div>' +
               variantsHtml +
               '</div>';
           }).join('');
@@ -914,6 +1077,33 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     el.closest('.unit-row').classList.add('has-pending');
     vscode.postMessage({ type: 'updateUnit', id: id, target: el.value, state: newState });
     renderFooter();
+  }
+
+  function onTargetFocus(evt) {
+    var el = evt.target, id = el.getAttribute('data-id');
+    var unit = findUnit(id);
+    if (!unit || !unit.source) return;
+    if (tmSuggestions[id]) return; // already loaded
+
+    // In-memory lookup: find other units with the same source → instant, no roundtrip
+    var srcKey = unit.source.trim().toLowerCase();
+    var inFileSuggs = [];
+    var seen = {};
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (u.id === id || !u.target || !u.target.trim()) continue;
+      if (u.source.trim().toLowerCase() === srcKey && !seen[u.target.trim()]) {
+        seen[u.target.trim()] = true;
+        inFileSuggs.push({ target: u.target.trim(), score: 100, sourceText: u.source });
+      }
+    }
+    if (inFileSuggs.length > 0) {
+      tmSuggestions[id] = inFileSuggs.slice(0, 3);
+      renderList();
+    }
+
+    // Also request from TM store for fuzzy matches
+    vscode.postMessage({ type: 'requestTm', id: id, source: unit.source });
   }
 
   function onStateChange(evt) {
@@ -968,10 +1158,40 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     filterType = this.value; visibleCount = 100; renderList(); renderFooter();
   });
   document.getElementById('btn-translate-all').addEventListener('click', function () { vscode.postMessage({ type: 'translateAll' }); });
-  document.getElementById('btn-review-all').addEventListener('click',    function () { vscode.postMessage({ type: 'reviewAll' }); });
+  document.getElementById('btn-review-all').addEventListener('click',    function () {
+    var ids;
+    if (selectedIds.size > 0) {
+      ids = Array.from(selectedIds);
+    } else {
+      var filtered = getFiltered();
+      if (filtered.length > 50) {
+        showNotif('Select rows first \u2014 Review runs AI on each unit and burns tokens. ' +
+          'You have ' + filtered.length + ' units visible. Tick some rows (or filter to \u226450) and try again.', 'error');
+        return;
+      }
+      ids = filtered.map(function (u) { return u.id; });
+    }
+    if (ids.length === 0) { showNotif('Nothing to review.', 'error'); return; }
+    vscode.postMessage({ type: 'reviewAll', ids: ids });
+  });
   document.getElementById('btn-populate-tm').addEventListener('click',   function () { vscode.postMessage({ type: 'populateTm' }); });
-    document.getElementById('btn-quality-check').addEventListener('click', function () { vscode.postMessage({ type: 'qualityCheck' }); });
-    document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
+    document.getElementById('btn-quality-check').addEventListener('click', function () { runQualityCheck(); });
+      document.getElementById('btn-quality-filter').addEventListener('click', function () {
+        filterQuality = !filterQuality;
+        if (!filterQuality) { inspectIds = null; inspectLabel = ''; }
+        visibleCount = 100;
+        updateQualityFilterBtn();
+        renderAll();
+      });
+      document.getElementById('btn-open-text').addEventListener('click',     function () { vscode.postMessage({ type: 'openAsText' }); });
+      document.getElementById('btn-export-review').addEventListener('click', function () {
+        var f = getFiltered();
+        var ids = f.map(function (u) { return u.id; });
+        var isFiltered = ids.length !== units.length;
+        var desc = describeActiveFilter();
+        vscode.postMessage({ type: 'exportReview', filteredIds: ids, isFiltered: isFiltered, filterDesc: desc, totalCount: units.length });
+      });
+      document.getElementById('btn-import-review').addEventListener('click', function () { vscode.postMessage({ type: 'importReview' }); });
   document.getElementById('btn-save').addEventListener('click',          function () { vscode.postMessage({ type: 'save' }); });
 
   // ─── Bulk actions & selection ────────────────────────────────────────────────
@@ -984,6 +1204,18 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   document.getElementById('btn-bulk-ai').addEventListener('click', function () {
     if (selectedIds.size === 0) return;
     vscode.postMessage({ type: 'bulkTranslate', ids: Array.from(selectedIds) });
+  });
+  document.getElementById('btn-bulk-ai-context').addEventListener('click', function () {
+    if (selectedIds.size === 0) return;
+    vscode.postMessage({ type: 'bulkTranslate', ids: Array.from(selectedIds), withContext: true });
+  });
+  document.getElementById('btn-bulk-review').addEventListener('click', function () {
+    if (selectedIds.size === 0) return;
+    vscode.postMessage({ type: 'reviewAll', ids: Array.from(selectedIds) });
+  });
+  document.getElementById('btn-bulk-review-context').addEventListener('click', function () {
+    if (selectedIds.size === 0) return;
+    vscode.postMessage({ type: 'reviewAll', ids: Array.from(selectedIds), withContext: true });
   });
   document.getElementById('btn-bulk-tm').addEventListener('click', function () {
     if (selectedIds.size === 0) return;
@@ -1015,6 +1247,47 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     renderAll();
   });
 
+  document.getElementById('btn-ai-only').addEventListener('click', function () {
+    showOnlyAiLast = !showOnlyAiLast;
+    visibleCount = 100;
+    renderAll();
+  });
+  document.getElementById('btn-ai-clear').addEventListener('click', function () {
+    lastAiIds = new Set();
+    showOnlyAiLast = false;
+    renderAll();
+  });
+  document.getElementById('btn-ai-scroll').addEventListener('click', function () {
+    var first = null;
+    for (var i = 0; i < units.length; i++) { if (lastAiIds.has(units[i].id)) { first = units[i].id; break; } }
+    if (!first) return;
+    var row = document.querySelector('.unit-row[data-id="' + (window.CSS && CSS.escape ? CSS.escape(first) : first) + '"]');
+    if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  document.getElementById('btn-inspect-clear').addEventListener('click', function () {
+    inspectIds = null;
+    inspectLabel = '';
+    visibleCount = 100;
+    renderAll();
+  });
+  document.getElementById('btn-import-only').addEventListener('click', function () {
+    showOnlyImported = !showOnlyImported;
+    visibleCount = 100;
+    renderAll();
+  });
+  document.getElementById('btn-import-clear').addEventListener('click', function () {
+    importedIds = new Set();
+    showOnlyImported = false;
+    renderAll();
+  });
+  document.getElementById('btn-import-scroll').addEventListener('click', function () {
+    var first = null;
+    for (var i = 0; i < units.length; i++) { if (importedIds.has(units[i].id)) { first = units[i].id; break; } }
+    if (!first) return;
+    var row = document.querySelector('.unit-row[data-id="' + (window.CSS && CSS.escape ? CSS.escape(first) : first) + '"]');
+    if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
   function esc(s) {
     return String(s == null ? '' : s)
@@ -1031,6 +1304,108 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     return opts.map(function (o) {
       return '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>';
     }).join('');
+  }
+
+  // ─── Quality check (runs locally in webview — no extension round-trip) ────────
+  function runQualityCheck() {
+    var btn = document.getElementById('btn-quality-check');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Checking\u2026'; }
+    // Use setTimeout to let the browser repaint the disabled state before the sync loop
+    setTimeout(function () {
+    qualityIssues = {};
+    var issues = [];
+    var phRe = /%\d+|\{[\d]+\}/g;
+
+    // 1. Placeholder check
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i];
+      if (!u.target || !u.target.trim()) continue;
+      var srcPh = dedupe((u.source.match(phRe) || []).map(function (p) { return p.toLowerCase(); }));
+      var tgtPh = dedupe((u.target.match(phRe) || []).map(function (p) { return p.toLowerCase(); }));
+      var missing = srcPh.filter(function (p) { return tgtPh.indexOf(p) < 0; });
+      var extra   = tgtPh.filter(function (p) { return srcPh.indexOf(p) < 0; });
+      if (missing.length > 0) issues.push({ id: u.id, type: 'placeholder', message: 'Missing placeholder(s): ' + missing.join(', ') });
+      else if (extra.length > 0) issues.push({ id: u.id, type: 'placeholder', message: 'Extra placeholder(s) in target: ' + extra.join(', ') });
+    }
+
+    // 2. Inconsistency check: same source → different targets
+    var srcMap = {};
+    for (var j = 0; j < units.length; j++) {
+      var v = units[j];
+      if (!v.target || !v.target.trim()) continue;
+      var key = v.source.trim().toLowerCase();
+      if (!srcMap[key]) srcMap[key] = [];
+      srcMap[key].push({ id: v.id, target: v.target.trim(), source: v.source });
+    }
+    Object.keys(srcMap).forEach(function (key) {
+      var entries = srcMap[key];
+      var unique = dedupe(entries.map(function (e) { return e.target; }));
+      if (unique.length < 2) return;
+      var variantCounts = unique.map(function (t) {
+        var vids = entries.filter(function (e) { return e.target === t; }).map(function (e) { return e.id; });
+        return { target: t, count: vids.length, ids: vids };
+      });
+      var allIds = entries.map(function (e) { return e.id; });
+      var srcText = entries[0].source;
+      entries.forEach(function (entry) {
+        issues.push({
+          id: entry.id,
+          type: 'inconsistency',
+          message: 'Inconsistent: ' + unique.length + ' different translations used for this source',
+          variants: variantCounts,
+          allIds: allIds,
+          source: srcText,
+        });
+      });
+    });
+
+    // Populate qualityIssues map
+    issues.forEach(function (iss) {
+      if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
+      qualityIssues[iss.id].push(iss);
+    });
+
+    filterQuality = issues.length > 0;
+    // Quality filter replaces diff view — don't combine the two (would show empty)
+    if (filterQuality && diffUnitIds) diffUnitIds = null;
+    visibleCount = 100;
+
+    if (btn) { btn.disabled = false; btn.textContent = '\uD83D\uDD0E Quality Check'; }
+    renderAll();
+    updateQualityFilterBtn();
+
+    var critical = issues.filter(function (i) { return i.type === 'placeholder'; }).length;
+    var warnings = issues.filter(function (i) { return i.type === 'inconsistency'; }).length;
+    if (issues.length === 0) {
+      showNotif('\u2713 Quality check passed \u2014 no issues found!', 'success');
+    } else {
+      showNotif('Quality: ' + critical + ' critical, ' + warnings + ' inconsistency warning(s). Showing filtered view.', 'error', 6000);
+    }
+    }, 30);
+  }
+
+  function dedupe(arr) {
+    var seen = {}, out = [];
+    arr.forEach(function (x) { if (!seen[x]) { seen[x] = true; out.push(x); } });
+    return out;
+  }
+
+  function updateQualityFilterBtn() {
+    var btn = document.getElementById('btn-quality-filter');
+    if (!btn) return;
+    var count = Object.keys(qualityIssues).length;
+    if (count === 0) { btn.hidden = true; filterQuality = false; return; }
+    btn.hidden = false;
+    btn.textContent = '\u26a0 Quality Issues (' + count + ')';
+    if (filterQuality) {
+      btn.style.background = 'rgba(220,100,30,0.3)';
+      btn.style.borderColor = 'rgba(220,100,30,0.8)';
+      btn.style.color = '#f48771';
+    } else {
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }
   }
 
   function showNotif(msg, type, durationMs) {

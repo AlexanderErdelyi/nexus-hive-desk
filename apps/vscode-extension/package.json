@@ -13,9 +13,19 @@
     "type": "git",
     "url": "https://github.com/AlexanderErdelyi/nexus-hive-desk"
   },
-  "categories": ["Other"],
-  "keywords": ["translation", "xliff", "localization", "business central", "al"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "translation",
+    "xliff",
+    "localization",
+    "business central",
+    "al"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -64,13 +74,27 @@
         "command": "nexus.populateTmFromFile",
         "title": "Nexus: Populate TM from File",
         "icon": "$(database)"
+      },
+      {
+        "command": "nexus.exportForReview",
+        "title": "Nexus: Export for Review (Excel)",
+        "icon": "$(export)"
+      },
+      {
+        "command": "nexus.importReview",
+        "title": "Nexus: Import Reviewed Translations (Excel)",
+        "icon": "$(cloud-upload)"
       }
     ],
     "customEditors": [
       {
         "viewType": "nexus.translationEditor",
         "displayName": "Nexus Translation Editor",
-        "selector": [{ "filenamePattern": "*.xlf" }],
+        "selector": [
+          {
+            "filenamePattern": "*.xlf"
+          }
+        ],
         "priority": "option"
       }
     ],
@@ -110,6 +134,16 @@
           "command": "nexus.populateTmFromFile",
           "when": "resourceExtname == .xlf",
           "group": "nexus@5"
+        },
+        {
+          "command": "nexus.exportForReview",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@6"
+        },
+        {
+          "command": "nexus.importReview",
+          "when": "resourceExtname == .xlf",
+          "group": "nexus@6"
         }
       ],
       "editor/context": [
@@ -162,6 +196,12 @@
           "when": "resourceExtname == .xlf"
         },
         {
+          "command": "nexus.exportForReview"
+        },
+        {
+          "command": "nexus.importReview"
+        },
+        {
           "command": "nexus.openInNexusEditor"
         },
         {
@@ -191,7 +231,12 @@
       "properties": {
         "nexus.translator.provider": {
           "type": "string",
-          "enum": ["github-copilot", "github-models", "openai", "azure-openai"],
+          "enum": [
+            "github-copilot",
+            "github-models",
+            "openai",
+            "azure-openai"
+          ],
           "enumDescriptions": [
             "GitHub Copilot (no API key needed — uses your existing Copilot subscription)",
             "GitHub Models (requires GitHub token)",
@@ -232,27 +277,42 @@
           "minimum": 1,
           "maximum": 200,
           "description": "Number of translation units sent to the AI in a single request. Reduce if you hit token limits."
+        },
+        "nexus.translator.openNavigationIn": {
+          "type": "string",
+          "enum": [
+            "active",
+            "beside"
+          ],
+          "enumDescriptions": [
+            "Same window — open in the currently active editor group (replaces the current tab)",
+            "Split window — open in a split editor group next to the current one"
+          ],
+          "default": "active",
+          "description": "Where to open editors when navigating between Nexus Translator and AL source code (Go to Source, Open in Nexus, Edit in Nexus, Find in Nexus)."
         }
       }
     }
   },
   "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
     "build": "node esbuild.js",
     "dev": "node esbuild.js --watch",
     "type-check": "tsc --noEmit",
-    "package": "vsce package --no-dependencies",
-    "install-ext": "vsce package --no-dependencies && code --install-extension nexus-translator-0.1.0.vsix"
+    "package": "node esbuild.js && vsce package --no-dependencies",
+    "install-ext": "node esbuild.js && vsce package --no-dependencies && code --install-extension nexus-translator-0.1.0.vsix"
   },
   "dependencies": {
     "@nexus/ai": "workspace:*",
+    "@nexus/types": "workspace:*",
     "@nexus/xliff": "workspace:*",
-    "@nexus/types": "workspace:*"
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.2.1",
-    "@types/vscode": "^1.85.0",
     "@types/node": "^22.10.5",
-    "typescript": "^5.7.3",
-    "esbuild": "^0.24.0"
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.3"
   }
 }

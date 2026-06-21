@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 import { parseXliff } from '@nexus/xliff';
 import type { XliffUnit } from '@nexus/types';
 import { pendingUnitIds } from '../state';
 import { TranslationEditorProvider } from '../translationEditor';
+import { getNavigationViewColumn } from '../navigation';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -167,6 +169,12 @@ function getDiffHtml(
     }
     .open-btn:hover { background: var(--vscode-button-hoverBackground, #006cbf); }
     .open-btn:disabled { opacity: 0.5; cursor: default; }
+    .open-btn-secondary {
+      margin-left: 8px;
+      background: var(--vscode-button-secondaryBackground, #3a3d41);
+      color: var(--vscode-button-secondaryForeground, #fff);
+    }
+    .open-btn-secondary:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
     .empty-state { padding: 40px; text-align: center; color: var(--vscode-descriptionForeground); }
     table {
       width: 100%; border-collapse: collapse; font-size: 12px;
@@ -209,6 +217,7 @@ function getDiffHtml(
       ${actionableIds.length > 0
         ? `<button class="open-btn" id="btn-open-nexus">&#9998; Edit ${actionableIds.length} changed unit${actionableIds.length !== 1 ? 's' : ''} in Nexus Translator</button>`
         : ''}
+      <button class="open-btn open-btn-secondary" id="btn-open-xmldiff" title="Open the standard VS Code text diff (HEAD vs working tree)">&#8644; Open standard XML diff</button>
       <table>
         <colgroup><col class="c-status"><col class="c-ctx"><col class="c-src"><col class="c-tgt"></colgroup>
         <thead><tr><th>Status</th><th>Context</th><th>Source</th><th>Target</th></tr></thead>
@@ -224,6 +233,12 @@ function getDiffHtml(
         btn.disabled = true;
         btn.textContent = 'Opening…';
         vscode.postMessage({ type: 'openInNexus', unitIds: actionableIds });
+      });
+    }
+    var btnXml = document.getElementById('btn-open-xmldiff');
+    if (btnXml) {
+      btnXml.addEventListener('click', function () {
+        vscode.postMessage({ type: 'openXmlDiff' });
       });
     }
   </script>
@@ -262,11 +277,49 @@ export function registerShowTranslationDiff(
   context: vscode.ExtensionContext,
   extensionUri: vscode.Uri
 ): void {
+  // Reuse one diff panel per file so re-opening focuses the existing view
+  // instead of stacking duplicate tabs.
+  const openDiffPanels = new Map<string, vscode.WebviewPanel>();
+
+  // Virtual scheme used to render BOTH sides of the standard text diff (HEAD
+  // and working tree). Routing both sides through this provider — with a path
+  // that does NOT end in .xlf — guarantees a plain text/XML diff and prevents
+  // the *.xlf custom-editor association from hijacking either side.
+  const XMLDIFF_SCHEME = 'nexus-xmlbaseline';
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(XMLDIFF_SCHEME, {
+      provideTextDocumentContent(u: vscode.Uri): string {
+        const params = new URLSearchParams(u.query);
+        const fsPath = params.get('path') || '';
+        if (!fsPath) return '';
+        if (params.get('role') === 'working') {
+          try {
+            return fs.readFileSync(fsPath, 'utf-8');
+          } catch {
+            return '';
+          }
+        }
+        const b = resolveBaseline(fsPath);
+        return b ? b.content : '';
+      },
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand('nexus.showTranslationDiff', async (uri?: vscode.Uri) => {
-      const target = uri ?? vscode.window.activeTextEditor?.document.uri;
-      if (!target || !target.fsPath.toLowerCase().endsWith('.xlf')) {
+      const raw = uri ?? vscode.window.activeTextEditor?.document.uri;
+      if (!raw || !raw.fsPath.toLowerCase().endsWith('.xlf')) {
         vscode.window.showErrorMessage('Please open an .xlf file first.');
+        return;
+      }
+      // Always work against the working-tree file, even if invoked with a
+      // non-file scheme (e.g. a git: URI from a Source Control diff).
+      const target = raw.scheme === 'file' ? raw : vscode.Uri.file(raw.fsPath);
+
+      // If a diff is already open for this file, just focus it.
+      const existing = openDiffPanels.get(target.toString());
+      if (existing) {
+        existing.reveal(vscode.ViewColumn.Active);
         return;
       }
 
@@ -307,9 +360,15 @@ export function registerShowTranslationDiff(
       const panel = vscode.window.createWebviewPanel(
         'nexus.translationDiff',
         `Diff: ${fileName}`,
-        vscode.ViewColumn.Beside,
+        vscode.ViewColumn.Active,
         { enableScripts: true, localResourceRoots: [extensionUri] }
       );
+      openDiffPanels.set(target.toString(), panel);
+      panel.onDidDispose(() => {
+        if (openDiffPanels.get(target.toString()) === panel) {
+          openDiffPanels.delete(target.toString());
+        }
+      });
 
       const nonce = getNonce();
       panel.webview.html = getDiffHtml(panel.webview.cspSource, nonce, fileName, diffs, baselineLabel, actionableIds);
@@ -320,8 +379,29 @@ export function registerShowTranslationDiff(
           // If panel already open, apply filter directly; otherwise store for sendInit
           if (!TranslationEditorProvider.applyFilter(target, '', undefined, msg.unitIds)) {
             pendingUnitIds.set(uriKey, msg.unitIds);
-            await vscode.commands.executeCommand('vscode.openWith', target, 'nexus.translationEditor');
+            await vscode.commands.executeCommand('vscode.openWith', target, 'nexus.translationEditor', getNavigationViewColumn());
           }
+        } else if (msg.type === 'openXmlDiff') {
+          // Standard VS Code text diff: HEAD (left) ↔ working tree (right).
+          // Both sides use the virtual scheme with a non-.xlf path so the
+          // Nexus custom editor never claims them.
+          const leftUri = vscode.Uri.from({
+            scheme: XMLDIFF_SCHEME,
+            path: '/' + fileName + ' (HEAD).xml',
+            query: new URLSearchParams({ role: 'head', path: target.fsPath }).toString(),
+          });
+          const rightUri = vscode.Uri.from({
+            scheme: XMLDIFF_SCHEME,
+            path: '/' + fileName + ' (Working Tree).xml',
+            query: new URLSearchParams({ role: 'working', path: target.fsPath }).toString(),
+          });
+          await vscode.commands.executeCommand(
+            'vscode.diff',
+            leftUri,
+            rightUri,
+            `${fileName} (HEAD \u2194 Working Tree)`,
+            { viewColumn: vscode.ViewColumn.Active }
+          );
         }
       }, undefined, context.subscriptions);
     })

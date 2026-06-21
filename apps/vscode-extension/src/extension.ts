@@ -11,6 +11,7 @@ import { registerFindInNexusTranslator } from './commands/findInNexus';
 import { registerShowTranslationDiff } from './commands/showDiff';
 import { registerManageGlossary } from './commands/manageGlossary';
 import { registerPopulateTmFromFile } from './commands/populateTmFromFile';
+import { registerExportImport } from './commands/exportImport';
 import { getTmManager } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
 
@@ -72,6 +73,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Populate TM from an XLIFF file
   registerPopulateTmFromFile(context);
+
+  // Export to Excel for customer review / import the reviewed file back
+  registerExportImport(context);
 }
 
 export function deactivate(): void {}

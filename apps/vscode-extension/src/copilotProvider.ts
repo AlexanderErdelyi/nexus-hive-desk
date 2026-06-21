@@ -39,19 +39,34 @@ export class CopilotProvider implements AIProvider {
             .join('\n')}`
         : '';
 
-    const systemPrompt = `You are a professional software localization translator.
+    const systemPrompt = `You are a professional Microsoft Dynamics 365 Business Central (BC) software localization translator.
 Translate UI strings from ${request.sourceLanguage} to ${request.targetLanguage}.
 Rules:
 - Preserve placeholders like %1, %2, {0}, {1}, &Text, etc. exactly as-is
 - Preserve ampersand shortcuts (e.g. &Save)
-- Keep technical terms, field names, and acronyms unchanged unless in glossary
+- Keep placeholders and genuine acronyms unchanged; do NOT leave ordinary English words untranslated just because they also appear as field/object names in the context
 - Be concise — UI strings are short
+- Use OFFICIAL Business Central terminology for the target language (e.g. en-US "Job Queue" → de-DE "Aufgabenwarteschlange", not "Job-Warteschlange")
+- Each string may carry a "context" describing the BC object and property it belongs to, and an "AL source" snippet. USE THEM:
+  - A Caption / Cue / field or column caption ⇒ translate as a short NOUN LABEL (a heading/field name), NOT a sentence. e.g. "Job Queue Errors" as a count-field caption ⇒ "Aufgabenwarteschlangenposten-Fehler", not "Fehler in der Warteschlange".
+  - If the AL source shows the field type is Integer/Decimal/BigInteger (a count or number), the caption usually denotes a QUANTITY — phrase it accordingly (e.g. prefer "Anzahl ..." when it counts things).
+  - A ToolTip / InstructionalText ⇒ a full descriptive sentence is appropriate.
+  - The object type (Table/Page/Codeunit/Report) and object name indicate the functional domain — translate in that domain's wording.
+  - IMPORTANT: the "context" and "AL source" contain English AL identifiers (object, field, control names like "E-Document"). They are CODE references to clarify MEANING and DATA TYPE ONLY. Do NOT copy English identifiers into the translation and do NOT preserve their English spelling. Always translate the user-facing source text using standard target-language BC terminology (e.g. "Document" ⇒ "Dokument", "E-Document" ⇒ "E-Dokument").
+- When "references" (approved translations of similar strings) are given, MATCH their terminology and style closely.
 - Return ONLY a JSON object with a "translations" array of objects containing "id", "translation", and "confidence" fields
 - "confidence" is a number 0–100 indicating your certainty${glossarySection}`;
 
-    const userPrompt = `Translate these strings:\n${JSON.stringify(
-      request.units.map((u) => ({ id: u.id, text: u.source }))
-    )}`;
+    const payload = request.units.map((u) => {
+      const item: Record<string, unknown> = { id: u.id, text: u.source };
+      if (u.context) item.context = u.context;
+      if (u.references && u.references.length > 0) {
+        item.references = u.references.map((r) => ({ source: r.source, approved: r.target }));
+      }
+      return item;
+    });
+
+    const userPrompt = `Translate these strings. Each item may include "context" (BC object/property metadata) and "references" (approved translations of similar strings) — use them to choose correct terminology and the right grammatical form:\n${JSON.stringify(payload)}`;
 
     const content = await this.chat(lm, systemPrompt, userPrompt);
     const parsed = parseJson<{ translations?: Array<{ id: string; translation: string; confidence?: number }> }>(content);
@@ -74,7 +89,12 @@ Rules:
 
     const systemPrompt = `You are an expert Business Central localization quality reviewer.
 Review ${request.sourceLanguage} → ${request.targetLanguage} UI string translations.
-Check: semantic correctness, BC/ERP terminology, placeholder preservation, UI appropriateness, grammar.${glossarySection}
+Check: semantic correctness, BC/ERP terminology, placeholder preservation, UI appropriateness, grammar.
+Each item may carry a "context" describing the BC object/property and an "AL source" snippet. USE THEM:
+- A Caption / Cue / field or column caption must read as a short NOUN LABEL, not a sentence.
+- If the AL source shows the field type is Integer/Decimal/BigInteger (a count/number), the caption denotes a QUANTITY — flag generic phrasings and suggest a count-style label (e.g. "Anzahl …").
+- A ToolTip / InstructionalText should be a full descriptive sentence.
+- Use the object type/name to judge domain-correct terminology.${glossarySection}
 
 Return ONLY a JSON object:
 { "reviews": [{ "id": "...", "quality": "good"|"warning"|"error", "reason": "...", "suggestion": "..." }] }`;
