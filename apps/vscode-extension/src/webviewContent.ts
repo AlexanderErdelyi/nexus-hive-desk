@@ -316,6 +316,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     #notif.hidden { display: none; }
     .notif-success { background: rgba(78,201,176,0.15); border: 1px solid #4ec9b0; color: #4ec9b0; }
     .notif-error   { background: rgba(244,135,113,0.15); border: 1px solid #f48771; color: #f48771; }
+    .notif-info    { background: rgba(120,180,255,0.13); border: 1px solid #5a9bff; color: #9cc4ff; }
 
     /* ─── Checkbox column ─── */
     .col-check { display: flex; align-items: center; justify-content: center; padding: 0 6px; }
@@ -610,6 +611,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     } else if (msg.type === 'error') {
       loadingSet.clear(); renderList();
       showNotif(msg.message, 'error');
+
+    } else if (msg.type === 'aiCancelled') {
+      loadingSet.clear(); renderList();
+      showNotif(msg.message || 'Cancelled.', 'info');
 
     } else if (msg.type === 'saved') {
       pendingChanges = {}; renderFooter();

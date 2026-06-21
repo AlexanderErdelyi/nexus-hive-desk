@@ -98,6 +98,32 @@
         "priority": "option"
       }
     ],
+    "keybindings": [
+      {
+        "command": "nexus.openInNexusEditor",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t",
+        "when": "resourceExtname == .xlf"
+      },
+      {
+        "command": "nexus.showTranslationDiff",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
+        "when": "resourceExtname == .xlf"
+      },
+      {
+        "command": "nexus.findInNexusTranslator",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f",
+        "when": "resourceExtname == .al"
+      },
+      {
+        "command": "nexus.exportForReview",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "resourceExtname == .xlf"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {

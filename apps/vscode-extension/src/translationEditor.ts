@@ -11,6 +11,17 @@ import type { TmMatch } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
 import { SourceContextProvider } from './sourceContext';
 import { getNavigationViewColumn } from './navigation';
+import { updateStatus, hideStatus } from './statusBar';
+import { reportError } from './log';
+
+/** Count translated units and push the result to the status bar. */
+function pushStatusBar(uri: vscode.Uri, units: XliffUnit[], targetLanguage: string): void {
+  const translated = units.filter(
+    (u) => u.target && u.target.trim() &&
+      (u.state === 'translated' || u.state === 'final' || u.state === 'signed-off')
+  ).length;
+  updateStatus(uri, { total: units.length, translated, targetLanguage });
+}
 
 // ─── Glossary helper ───────────────────────────────────────────────────────────
 
@@ -170,6 +181,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           duplicateTargetIds: findDuplicateTargetIds(document.getText()),
           diffUnitIds: initialUnitIds ?? null,
         });
+
+        pushStatusBar(document.uri, parsed.units, parsed.targetLanguage || getConfig().targetLanguage);
 
         // All TM work is fire-and-forget — never block sendInit
         const srcLang2 = parsed.sourceLanguage || getConfig().sourceLanguage;
@@ -462,6 +475,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         pendingChanges.clear();
         void populateTmFromContent(this.context, newContent);
         webviewPanel.webview.postMessage({ type: 'saved' });
+        try {
+          const reparsed = parseXliff(newContent);
+          pushStatusBar(document.uri, reparsed.units, reparsed.targetLanguage || getConfig().targetLanguage);
+        } catch { /* status bar is best-effort */ }
       }, 150);
     });
 
@@ -477,6 +494,16 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       }
     });
 
+    // Keep the status bar in sync with the focused Nexus panel.
+    const viewStateHandler = webviewPanel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        try {
+          const parsed = parseXliff(document.getText());
+          pushStatusBar(document.uri, parsed.units, parsed.targetLanguage || getConfig().targetLanguage);
+        } catch { /* status bar is best-effort */ }
+      }
+    });
+
     webviewPanel.onDidDispose(() => {
       reviewCancelled = true;
       TranslationEditorProvider.activePanels.delete(uriKey);
@@ -484,6 +511,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       msgHandler.dispose();
       willSaveHandler.dispose();
       changeHandler.dispose();
+      viewStateHandler.dispose();
+      if (webviewPanel.active) hideStatus();
     });
   }
 }
@@ -604,44 +633,68 @@ async function handleTranslateAll(
 
   try {
     const batchSize = config.batchSize;
-    for (let i = 0; i < targets.length; i += batchSize) {
-      const batch = targets.slice(i, i + batchSize);
-      const response = await provider.translate({
-        units: batch.map((u) => {
-          // Lightweight default: source only (fewer tokens). Context mode adds
-          // BC object/property metadata, the AL source snippet, and approved TM
-          // references for better quality.
-          if (!withContext) return { id: u.id, source: u.source };
-          const refs = (refsBySource[u.source] || [])
-            .filter((m) => m.target && m.target.trim())
-            .slice(0, 3)
-            .map((m) => ({ source: u.source, target: m.target }));
-          const metaCtx = buildUnitContext(u);
-          const snippet = snippetByUnitId[u.id];
-          const ctx = [
-            metaCtx,
-            snippet ? 'AL source:\n' + snippet : '',
-          ].filter(Boolean).join('\n');
-          return {
-            id: u.id,
-            source: u.source,
-            ...(ctx ? { context: ctx } : {}),
-            ...(refs.length > 0 ? { references: refs } : {}),
-          };
-        }),
-        sourceLanguage: srcLang,
-        targetLanguage: tgtLang,
-        ...(glossary.length > 0 ? { glossary } : {}),
-      });
+    const total = targets.length;
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Nexus: translating ${total} unit${total !== 1 ? 's' : ''}\u2026`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        let done = 0;
+        for (let i = 0; i < targets.length; i += batchSize) {
+          if (token.isCancellationRequested) break;
+          const batch = targets.slice(i, i + batchSize);
+          const response = await provider.translate({
+            units: batch.map((u) => {
+              // Lightweight default: source only (fewer tokens). Context mode adds
+              // BC object/property metadata, the AL source snippet, and approved TM
+              // references for better quality.
+              if (!withContext) return { id: u.id, source: u.source };
+              const refs = (refsBySource[u.source] || [])
+                .filter((m) => m.target && m.target.trim())
+                .slice(0, 3)
+                .map((m) => ({ source: u.source, target: m.target }));
+              const metaCtx = buildUnitContext(u);
+              const snippet = snippetByUnitId[u.id];
+              const ctx = [
+                metaCtx,
+                snippet ? 'AL source:\n' + snippet : '',
+              ].filter(Boolean).join('\n');
+              return {
+                id: u.id,
+                source: u.source,
+                ...(ctx ? { context: ctx } : {}),
+                ...(refs.length > 0 ? { references: refs } : {}),
+              };
+            }),
+            sourceLanguage: srcLang,
+            targetLanguage: tgtLang,
+            ...(glossary.length > 0 ? { glossary } : {}),
+          });
 
-      // Stream partial results back to webview as each batch completes
-      webviewPanel.webview.postMessage({ type: 'translationResults', results: response.results });
+          // Stream partial results back to webview as each batch completes
+          webviewPanel.webview.postMessage({ type: 'translationResults', results: response.results });
 
-      for (const r of response.results) {
-        pendingChanges.set(r.id, { target: r.translatedText, state: 'translated' });
+          for (const r of response.results) {
+            pendingChanges.set(r.id, { target: r.translatedText, state: 'translated' });
+          }
+          done += batch.length;
+          progress.report({
+            increment: (batch.length / total) * 100,
+            message: `${Math.min(done, total)} / ${total}`,
+          });
+        }
+        if (token.isCancellationRequested) {
+          webviewPanel.webview.postMessage({
+            type: 'aiCancelled',
+            message: `Translation cancelled \u2014 ${done} of ${total} done.`,
+          });
+        }
       }
-    }
+    );
   } catch (err: unknown) {
+    reportError('Translation failed', err);
     webviewPanel.webview.postMessage({ type: 'error', message: `Translation failed: ${(err as Error).message}` });
   }
 }
@@ -857,46 +910,63 @@ async function handleReviewAll(
 
   try {
     const batchSize = config.batchSize;
+    const total = reviewable.length;
     const allResults: Array<{ id: string; quality: string; reason?: string; suggestion?: string }> = [];
 
-    for (let i = 0; i < reviewable.length; i += batchSize) {
-      // Stop early if the tab was closed — don't keep burning AI tokens.
-      if (isCancelled()) break;
-      const batch = reviewable.slice(i, i + batchSize);
-      const response = await provider.review({
-        units: batch.map((u) => {
-          // Lightweight default: source/target/devNote only. Context mode adds the
-          // BC object/property metadata plus the AL source snippet for a deeper check.
-          if (!withContext) {
-            return {
-              id: u.id,
-              source: u.source,
-              target: u.target,
-              ...(u.developerNote ? { context: u.developerNote } : {}),
-            };
-          }
-          const metaCtx = buildUnitContext(u);
-          const snippet = snippetByUnitId[u.id];
-          const ctx = [
-            metaCtx,
-            snippet ? 'AL source:\n' + snippet : '',
-          ].filter(Boolean).join('\n');
-          return {
-            id: u.id,
-            source: u.source,
-            target: u.target,
-            ...(ctx ? { context: ctx } : {}),
-          };
-        }),
-        sourceLanguage: srcLang,
-        targetLanguage: tgtLang,
-      });
-      allResults.push(...response.results);
-    }
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Nexus: reviewing ${total} unit${total !== 1 ? 's' : ''}\u2026`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        let done = 0;
+        for (let i = 0; i < reviewable.length; i += batchSize) {
+          // Stop early if the tab was closed or the user cancelled — don't burn tokens.
+          if (isCancelled() || token.isCancellationRequested) break;
+          const batch = reviewable.slice(i, i + batchSize);
+          const response = await provider.review({
+            units: batch.map((u) => {
+              // Lightweight default: source/target/devNote only. Context mode adds the
+              // BC object/property metadata plus the AL source snippet for a deeper check.
+              if (!withContext) {
+                return {
+                  id: u.id,
+                  source: u.source,
+                  target: u.target,
+                  ...(u.developerNote ? { context: u.developerNote } : {}),
+                };
+              }
+              const metaCtx = buildUnitContext(u);
+              const snippet = snippetByUnitId[u.id];
+              const ctx = [
+                metaCtx,
+                snippet ? 'AL source:\n' + snippet : '',
+              ].filter(Boolean).join('\n');
+              return {
+                id: u.id,
+                source: u.source,
+                target: u.target,
+                ...(ctx ? { context: ctx } : {}),
+              };
+            }),
+            sourceLanguage: srcLang,
+            targetLanguage: tgtLang,
+          });
+          allResults.push(...response.results);
+          done += batch.length;
+          progress.report({
+            increment: (batch.length / total) * 100,
+            message: `${Math.min(done, total)} / ${total}`,
+          });
+        }
+      }
+    );
 
     if (isCancelled()) return;
     webviewPanel.webview.postMessage({ type: 'reviewResults', results: allResults });
   } catch (err: unknown) {
+    reportError('Review failed', err);
     webviewPanel.webview.postMessage({ type: 'error', message: `Review failed: ${(err as Error).message}` });
   }
 }
