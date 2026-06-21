@@ -24,7 +24,7 @@
     "al"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "workspaceContains:**/*.xlf"
   ],
   "main": "./dist/extension.js",
   "contributes": {

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Lazy activation** — the extension no longer activates on every VS Code startup.
+  It now activates only when a workspace contains `.xlf` files, or when a Nexus
+  command or the translation editor is used, so it adds zero startup cost to
+  unrelated projects.
+
 ## [0.2.0] - 2026-06-22
 
 ### Added
