@@ -10,6 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@nexus/ai": ["../../packages/ai/src/index.ts"],
       "@nexus/xliff": ["../../packages/xliff/src/index.ts"],

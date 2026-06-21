@@ -395,6 +395,25 @@ All Nexus data is stored in `.nexus/` at your workspace root:
 
 ---
 
+## Development
+
+Build, type-check and test from this folder (or run `pnpm test` at the repo root to test all packages):
+
+```bash
+pnpm type-check          # tsc --noEmit
+pnpm test                # node:test unit tests
+pnpm run build           # bundle to dist/extension.js (esbuild)
+pnpm run package         # produce nexus-translator.vsix
+pnpm run install-ext     # build + package + install into VS Code
+```
+
+Tests use Node's built-in test runner (`node:test`) and run TypeScript directly, so
+they require **Node 22.18+** (Node 24 recommended). Pure logic is kept free of the
+VS Code API (`src/similarity.ts`, `packages/xliff`) so it can be unit-tested without a
+running editor.
+
+---
+
 ## License
 
 MIT — see [LICENSE](../../LICENSE)
