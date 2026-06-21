@@ -14,6 +14,8 @@ import { registerPopulateTmFromFile } from './commands/populateTmFromFile';
 import { registerExportImport } from './commands/exportImport';
 import { getTmManager } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
+import { registerStatusBar } from './statusBar';
+import { logInfo, logError } from './log';
 
 /**
  * Copy the bundled chatmode file to the VS Code user chatmodes directory so
@@ -45,14 +47,18 @@ async function installChatMode(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  logInfo('Nexus Translator activated.');
   // Install the bundled chatmode file so "Nexus Translator" appears in the
   // Copilot Chat mode dropdown in every workspace on this machine.
-  installChatMode(context);
+  void installChatMode(context).catch((err) => logError('Chatmode install failed', err));
   // Initialise the TM & Glossary managers with the workspace root so they read/write
   // the shared workspace-relative `.nexus/` folder (also used by the MCP server).
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   getTmManager(context, workspaceRoot);
   getGlossaryManager(context, workspaceRoot);
+
+  // Live translation-progress indicator in the status bar.
+  registerStatusBar(context);
 
   // Custom editor: opens .xlf files with the full translation UI panel
   context.subscriptions.push(TranslationEditorProvider.register(context));

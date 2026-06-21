@@ -80,7 +80,19 @@ export class GlossaryManager {
     this.loaded = true;
   }
 
+  private writeQueue: Promise<void> = Promise.resolve();
+
   private async persist(): Promise<void> {
+    // Serialize writes so concurrent adds can't interleave read-modify-write,
+    // and snapshot the entries at enqueue time to keep each write self-consistent.
+    const snapshot = JSON.stringify(this.entries, null, 2);
+    const run = this.writeQueue.then(() => this.writeAtomic(snapshot));
+    this.writeQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Write to a temp file then rename over the target so readers never see a partial file. */
+  private async writeAtomic(text: string): Promise<void> {
     const target = await this.getStoragePath();
     if (!this.workspaceUri()) {
       try {
@@ -89,8 +101,16 @@ export class GlossaryManager {
         // Directory may already exist — ignore
       }
     }
-    const text = JSON.stringify(this.entries, null, 2);
-    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(text));
+    const bytes = new TextEncoder().encode(text);
+    const tmp = target.with({ path: `${target.path}.tmp` });
+    await vscode.workspace.fs.writeFile(tmp, bytes);
+    try {
+      await vscode.workspace.fs.rename(tmp, target, { overwrite: true });
+    } catch {
+      // Some filesystems can't rename over an open file — fall back to a direct write.
+      await vscode.workspace.fs.writeFile(target, bytes);
+      try { await vscode.workspace.fs.delete(tmp); } catch { /* ignore */ }
+    }
   }
 
   /** Return all glossary terms, optionally filtered by language pair. */
