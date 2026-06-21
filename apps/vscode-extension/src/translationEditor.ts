@@ -490,22 +490,44 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         case 'acceptQuality': {
           const accepted = this.getAcceptedQuality(document.uri);
           const key = msg.key as string;
-          const next = accepted.filter((a) => a.key !== key);
-          next.push({
-            key,
-            kind: 'inconsistency',
-            source: (msg.source as string) ?? '',
-            targets: Array.isArray(msg.targets) ? (msg.targets as string[]) : [],
-            acceptedAt: new Date().toISOString(),
-          });
-          await this.setAcceptedQuality(document.uri, next);
-          webviewPanel.webview.postMessage({ type: 'acceptedQualityUpdated', acceptedQuality: next });
+          const incoming = Array.isArray(msg.targets) ? (msg.targets as string[]).filter(Boolean) : [];
+          const existing = accepted.find((a) => a.key === key);
+          if (existing) {
+            // Merge new variants additively so the user can accept one at a time.
+            for (const t of incoming) {
+              if (!existing.targets.includes(t)) existing.targets.push(t);
+            }
+            existing.acceptedAt = new Date().toISOString();
+          } else {
+            accepted.push({
+              key,
+              kind: 'inconsistency',
+              source: (msg.source as string) ?? '',
+              targets: incoming.slice(),
+              acceptedAt: new Date().toISOString(),
+            });
+          }
+          await this.setAcceptedQuality(document.uri, accepted);
+          webviewPanel.webview.postMessage({ type: 'acceptedQualityUpdated', acceptedQuality: accepted });
           break;
         }
 
         case 'unacceptQuality': {
           const accepted = this.getAcceptedQuality(document.uri);
-          const next = accepted.filter((a) => a.key !== (msg.key as string));
+          const key = msg.key as string;
+          const target = typeof msg.target === 'string' ? (msg.target as string) : undefined;
+          let next: AcceptedQualityIssue[];
+          if (target !== undefined) {
+            // Remove just one accepted variant; drop the entry if it becomes empty.
+            next = [];
+            for (const a of accepted) {
+              if (a.key !== key) { next.push(a); continue; }
+              const remaining = a.targets.filter((t) => t !== target);
+              if (remaining.length > 0) next.push({ ...a, targets: remaining });
+            }
+          } else {
+            next = accepted.filter((a) => a.key !== key);
+          }
           await this.setAcceptedQuality(document.uri, next);
           webviewPanel.webview.postMessage({ type: 'acceptedQualityUpdated', acceptedQuality: next });
           break;

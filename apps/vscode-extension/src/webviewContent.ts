@@ -652,10 +652,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
           var issues = (msg.issues || []).filter(function (iss) {
             if (iss.type !== 'inconsistency' || !iss.source) return true;
             var acc = accMapQ[incKey(iss.source)];
-            if (!acc) return true;
-            // Keep only if a new variant appeared since acceptance.
+            if (!acc || acc.length === 0) return true;
+            // Keep only if at least 2 variants remain unresolved (not accepted).
             var cur = (iss.variants || []).map(function (v) { return v.target; });
-            return cur.some(function (t) { return acc.indexOf(t) < 0; });
+            var unresolved = cur.filter(function (t) { return acc.indexOf(t) < 0; });
+            return unresolved.length >= 2;
           });
           issues.forEach(function (iss) {
             if (!qualityIssues[iss.id]) qualityIssues[iss.id] = [];
@@ -768,9 +769,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
   // Filter the list down to a specific set of unit IDs so the user can review
   // where a source/variant is used and decide which translation to keep.
-  function inspectUnitIds(ids, label) {
+  function inspectUnitIds(ids, label, clearQuality) {
     inspectIds = new Set(ids);
     inspectLabel = label;
+    if (clearQuality) filterQuality = false;
     visibleCount = 100;
     renderAll();
   }
@@ -946,6 +948,11 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
             acceptIssue(source, targets);
           });
         });
+        el.querySelectorAll('.btn-q-accept-one').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            acceptIssue(this.getAttribute('data-source') || '', [this.getAttribute('data-target') || '']);
+          });
+        });
     syncSelectAllChk();
     var btnMore = document.getElementById('btn-load-more');
     if (btnMore) btnMore.addEventListener('click', function () { visibleCount += 100; renderList(); });
@@ -1068,6 +1075,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
                     '<button class="btn-q-show" data-ids="' + esc((v.ids || []).join(',')) + '" data-label="' + esc(v.count + '\u00d7 \u201C' + trunc(v.target, 30) + '\u201D') + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;flex-shrink:0;" title="Show the rows that use this translation">Show</button>' +
                     '<button class="btn-q-use" data-id="' + esc(unit.id) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(220,180,40,0.2);color:#dcdcaa;border:1px solid rgba(220,180,40,0.4);cursor:pointer;flex-shrink:0;">Use</button>' +
                     '<button class="btn-q-use-all" data-source="' + esc(unit.source) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(100,100,220,0.2);color:#9999ff;border:1px solid rgba(100,100,220,0.4);cursor:pointer;flex-shrink:0;" title="Apply to all rows with same source">Use for all</button>' +
+                    '<button class="btn-q-accept-one" data-source="' + esc(qi.source || unit.source) + '" data-target="' + esc(v.target) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(80,200,120,0.18);color:#89d99c;border:1px solid rgba(80,200,120,0.4);cursor:pointer;flex-shrink:0;" title="Accept only this translation as intentional. The other variants stay flagged for review.">&#10003; Accept</button>' +
                     '</div>';
                 }).join('');
             }
@@ -1075,7 +1083,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
               ? '<button class="btn-q-show" data-ids="' + esc(qi.allIds.join(',')) + '" data-label="all ' + qi.allIds.length + ' uses of \u201C' + esc(trunc(qi.source || unit.source, 30)) + '\u201D" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;margin-left:6px;" title="Filter the list to every row with this source so you can compare contexts">&#128269; Show all ' + qi.allIds.length + ' uses</button>'
               : '';
             var accVariants = (qi.variants || []).map(function (v) { return v.target; });
-            var acceptBtn = '<button class="btn-q-accept" data-source="' + esc(qi.source || unit.source) + '" data-targets="' + esc(JSON.stringify(accVariants)) + '" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(80,200,120,0.18);color:#89d99c;border:1px solid rgba(80,200,120,0.4);cursor:pointer;margin-left:6px;" title="Accept this as intentional so it stops being flagged. New translation variants will still re-flag it.">&#10003; Accept</button>';
+            var acceptBtn = '<button class="btn-q-accept" data-source="' + esc(qi.source || unit.source) + '" data-targets="' + esc(JSON.stringify(accVariants)) + '" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(80,200,120,0.18);color:#89d99c;border:1px solid rgba(80,200,120,0.4);cursor:pointer;margin-left:6px;" title="Accept all these variants as intentional so this source stops being flagged. New translation variants will still re-flag it.">&#10003; Accept all</button>';
             return '<div class="q-issue" style="margin-top:4px;">' +
               '<div style="color:#dcdcaa;font-size:10px;display:flex;align-items:center;flex-wrap:wrap;">&#128261; ' + esc(qi.message) + showAllBtn + acceptBtn + '</div>' +
               variantsHtml +
@@ -1392,23 +1400,26 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       var entries = srcMap[key];
       var unique = dedupe(entries.map(function (e) { return e.target; }));
       if (unique.length < 2) return;
-      // Skip if accepted and no new target variant has appeared since acceptance.
-      var accTargets = accMap['inc:' + key];
-      if (accTargets) {
-        var hasNew = unique.some(function (t) { return accTargets.indexOf(t) < 0; });
-        if (!hasNew) return;
-      }
-      var variantCounts = unique.map(function (t) {
+      // Per-variant acceptance: drop accepted target variants from consideration.
+      // Only the remaining (unresolved) variants count toward the inconsistency.
+      var accTargets = accMap['inc:' + key] || [];
+      var unresolved = accTargets.length
+        ? unique.filter(function (t) { return accTargets.indexOf(t) < 0; })
+        : unique;
+      // Need at least 2 unresolved variants for a genuine inconsistency.
+      if (unresolved.length < 2) return;
+      var variantCounts = unresolved.map(function (t) {
         var vids = entries.filter(function (e) { return e.target === t; }).map(function (e) { return e.id; });
         return { target: t, count: vids.length, ids: vids };
       });
-      var allIds = entries.map(function (e) { return e.id; });
+      var allIds = entries.map(function (e) { return e.id; }); // all uses, for context comparison
       var srcText = entries[0].source;
-      entries.forEach(function (entry) {
+      // Flag only the rows whose target is still unresolved.
+      entries.filter(function (e) { return unresolved.indexOf(e.target) >= 0; }).forEach(function (entry) {
         issues.push({
           id: entry.id,
           type: 'inconsistency',
-          message: 'Inconsistent: ' + unique.length + ' different translations used for this source',
+          message: 'Inconsistent: ' + unresolved.length + ' different translations used for this source',
           variants: variantCounts,
           allIds: allIds,
           source: srcText,
@@ -1430,27 +1441,65 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   }
 
   // ─── Accept / un-accept quality issues ───────────────────────────────────────
-  function acceptIssue(source, targets) {
-    var key = incKey(source);
-    // Optimistically record locally so the UI updates immediately.
-    var exists = acceptedQuality.some(function (a) { return a.key === key; });
-    if (!exists) {
-      acceptedQuality.push({ key: key, kind: 'inconsistency', source: source, targets: targets || [], acceptedAt: new Date().toISOString() });
-    }
-    vscode.postMessage({ type: 'acceptQuality', key: key, source: source, targets: targets || [] });
-    recomputeQuality();
-    updateAcceptedBtn();
-    renderAcceptedPanel();
-    showNotif('Accepted \u201C' + trunc(source, 40) + '\u201D \u2014 it won\u2019t be flagged unless a new translation variant appears.', 'success', 5000);
+
+  // Unit IDs (and count) for a given source / source+target — used by the
+  // accepted panel so you can inspect exactly which rows a decision covers.
+  function unitIdsForSource(source) {
+    var keyN = String(source || '').trim().toLowerCase();
+    return units.filter(function (u) { return (u.source || '').trim().toLowerCase() === keyN; }).map(function (u) { return u.id; });
+  }
+  function unitIdsForSourceTarget(source, target) {
+    var keyN = String(source || '').trim().toLowerCase();
+    return units.filter(function (u) {
+      return (u.source || '').trim().toLowerCase() === keyN && (u.target || '').trim() === target;
+    }).map(function (u) { return u.id; });
   }
 
-  function unacceptIssue(key) {
-    acceptedQuality = acceptedQuality.filter(function (a) { return a.key !== key; });
-    vscode.postMessage({ type: 'unacceptQuality', key: key });
+  // Accept one or more target variants for a source (additive — merges into any
+  // existing accepted entry so you can accept variants one at a time).
+  function acceptIssue(source, targets) {
+    var key = incKey(source);
+    targets = (targets || []).filter(Boolean);
+    var entry = null;
+    for (var i = 0; i < acceptedQuality.length; i++) { if (acceptedQuality[i].key === key) { entry = acceptedQuality[i]; break; } }
+    if (entry) {
+      targets.forEach(function (t) { if (entry.targets.indexOf(t) < 0) entry.targets.push(t); });
+      entry.acceptedAt = new Date().toISOString();
+    } else {
+      acceptedQuality.push({ key: key, kind: 'inconsistency', source: source, targets: targets.slice(), acceptedAt: new Date().toISOString() });
+    }
+    vscode.postMessage({ type: 'acceptQuality', key: key, source: source, targets: targets });
     recomputeQuality();
     updateAcceptedBtn();
     renderAcceptedPanel();
-    showNotif('Removed from accepted list \u2014 it will be flagged again if inconsistent.', 'info', 4000);
+    var label = targets.length === 1
+      ? '\u201C' + trunc(targets[0], 30) + '\u201D for \u201C' + trunc(source, 24) + '\u201D'
+      : trunc(source, 40);
+    showNotif('Accepted ' + label + '. Any remaining variants stay flagged for review.', 'success', 5000);
+  }
+
+  // Remove a single accepted variant (target given) or the whole accepted entry.
+  function unacceptIssue(key, target) {
+    if (target != null) {
+      for (var i = 0; i < acceptedQuality.length; i++) {
+        if (acceptedQuality[i].key === key) {
+          acceptedQuality[i].targets = acceptedQuality[i].targets.filter(function (t) { return t !== target; });
+          if (acceptedQuality[i].targets.length === 0) acceptedQuality.splice(i, 1);
+          break;
+        }
+      }
+    } else {
+      acceptedQuality = acceptedQuality.filter(function (a) { return a.key !== key; });
+    }
+    var payload = { type: 'unacceptQuality', key: key };
+    if (target != null) payload.target = target;
+    vscode.postMessage(payload);
+    recomputeQuality();
+    updateAcceptedBtn();
+    renderAcceptedPanel();
+    showNotif(target != null
+      ? 'Un-accepted that variant \u2014 it will be flagged again if still inconsistent.'
+      : 'Removed from accepted list \u2014 it will be flagged again if inconsistent.', 'info', 4000);
   }
 
   function updateAcceptedBtn() {
@@ -1468,18 +1517,26 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     if (!showAccepted || acceptedQuality.length === 0) { panel.hidden = true; panel.innerHTML = ''; return; }
     panel.hidden = false;
     var rows = acceptedQuality.map(function (a) {
-      var chips = (a.targets || []).map(function (t) {
-        return '<span style="font-size:10px;color:#d4d4d4;padding:1px 6px;background:rgba(220,180,40,0.12);border:1px solid rgba(220,180,40,0.25);border-radius:8px;" title="' + esc(t) + '">' + esc(trunc(t, 28)) + '</span>';
-      }).join(' ');
+      var allIds = unitIdsForSource(a.source);
       var when = '';
       try { when = new Date(a.acceptedAt).toLocaleString(); } catch (e) {}
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.06);">' +
-        '<div style="flex:1;min-width:0;">' +
-          '<div style="font-size:11px;color:#dcdcaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(a.source) + '">&#128261; ' + esc(a.source) + '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:3px;">' + chips + '</div>' +
-          (when ? '<div style="font-size:9px;color:#888;margin-top:3px;">Accepted ' + esc(when) + '</div>' : '') +
+      var variantRows = (a.targets || []).map(function (t) {
+        var ids = unitIdsForSourceTarget(a.source, t);
+        return '<div style="display:flex;align-items:center;gap:6px;margin-top:3px;padding:3px 6px;background:rgba(80,200,120,0.07);border:1px solid rgba(80,200,120,0.18);border-radius:4px;">' +
+          '<span style="font-size:9px;font-weight:700;color:#89d99c;padding:1px 5px;background:rgba(80,200,120,0.15);border-radius:8px;">x' + ids.length + '</span>' +
+          '<span style="flex:1;min-width:0;font-size:10px;color:#d4d4d4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(t) + '">' + esc(t) + '</span>' +
+          '<button class="btn-acc-show" data-source="' + esc(a.source) + '" data-target="' + esc(t) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;flex-shrink:0;" title="Show the rows that use this translation">&#128269; Show</button>' +
+          '<button class="btn-acc-unaccept-one" data-key="' + esc(a.key) + '" data-target="' + esc(t) + '" style="font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(230,90,90,0.18);color:#f48771;border:1px solid rgba(230,90,90,0.4);cursor:pointer;flex-shrink:0;" title="Un-accept just this variant">&#10005;</button>' +
+          '</div>';
+      }).join('');
+      return '<div style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.06);">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+          '<div style="flex:1;min-width:0;font-size:11px;color:#dcdcaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(a.source) + '">&#128261; ' + esc(a.source) + '</div>' +
+          '<button class="btn-acc-show-all" data-source="' + esc(a.source) + '" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(60,140,230,0.2);color:#9cdcfe;border:1px solid rgba(60,140,230,0.4);cursor:pointer;flex-shrink:0;" title="Show every row with this source so you can compare contexts">&#128269; Show all ' + allIds.length + ' uses</button>' +
+          '<button class="btn-unaccept" data-key="' + esc(a.key) + '" style="font-size:9px;padding:1px 7px;border-radius:4px;background:rgba(230,90,90,0.18);color:#f48771;border:1px solid rgba(230,90,90,0.4);cursor:pointer;flex-shrink:0;" title="Un-accept all variants for this source">&#10005; Un-accept all</button>' +
         '</div>' +
-        '<button class="btn-unaccept" data-key="' + esc(a.key) + '" style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(230,90,90,0.18);color:#f48771;border:1px solid rgba(230,90,90,0.4);cursor:pointer;flex-shrink:0;" title="Un-accept: this source will be flagged again on the next quality check">&#10005; Un-accept</button>' +
+        variantRows +
+        (when ? '<div style="font-size:9px;color:#888;margin-top:4px;">Accepted ' + esc(when) + '</div>' : '') +
         '</div>';
     }).join('');
     panel.innerHTML =
@@ -1491,6 +1548,24 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     if (closeBtn) closeBtn.addEventListener('click', function () { showAccepted = false; renderAcceptedPanel(); updateAcceptedBtn(); });
     panel.querySelectorAll('.btn-unaccept').forEach(function (b) {
       b.addEventListener('click', function () { unacceptIssue(this.getAttribute('data-key')); });
+    });
+    panel.querySelectorAll('.btn-acc-unaccept-one').forEach(function (b) {
+      b.addEventListener('click', function () { unacceptIssue(this.getAttribute('data-key'), this.getAttribute('data-target')); });
+    });
+    panel.querySelectorAll('.btn-acc-show-all').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var src = this.getAttribute('data-source') || '';
+        var ids = unitIdsForSource(src);
+        inspectUnitIds(ids, 'all ' + ids.length + ' uses of \u201C' + trunc(src, 30) + '\u201D', true);
+      });
+    });
+    panel.querySelectorAll('.btn-acc-show').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var src = this.getAttribute('data-source') || '';
+        var tgt = this.getAttribute('data-target') || '';
+        var ids = unitIdsForSourceTarget(src, tgt);
+        inspectUnitIds(ids, ids.length + '\u00d7 \u201C' + trunc(tgt, 30) + '\u201D', true);
+      });
     });
   }
 

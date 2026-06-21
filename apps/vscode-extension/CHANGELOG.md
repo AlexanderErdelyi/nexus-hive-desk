@@ -9,14 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Accept quality issues** — each inconsistency in the Quality Check view now has an
-  **✓ Accept** button. Accepting marks the inconsistency as intentional (e.g. a field
-  name deliberately left untranslated) so it stops being flagged on every check. If a
-  genuinely **new** translation variant appears later, the issue is re-flagged so real
-  divergence still surfaces.
+  **✓ Accept all** button (accept every variant for a source) plus a per-variant
+  **✓ Accept** on each translation, so you can accept just one rendering (e.g.
+  `ADDRESS`) while keeping the other variants flagged for review. An inconsistency is
+  only flagged while **two or more** variants remain unresolved; a genuinely new
+  variant re-flags it.
 - **Accepted issues review panel** — a new **✓ Accepted (N)** toolbar button opens a
-  panel listing everything you've accepted, with the source, the accepted target
-  variants, and the accept timestamp. Each entry has an **✗ Un-accept** button so you
-  can revert a decision later. Accepted issues are stored per-file in workspace state.
+  panel listing everything you've accepted. Each source shows its accepted target
+  variants with a usage count, a **🔍 Show** button to inspect exactly which rows use
+  that translation (and **🔍 Show all uses** for the whole source), the accept
+  timestamp, and **✗ Un-accept** controls — per variant or for the whole source.
+  Accepted issues are stored per-file in workspace state.
 
 ### Changed
 - **Lazy activation** — the extension no longer activates on every VS Code startup.
