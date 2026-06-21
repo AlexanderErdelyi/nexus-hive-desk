@@ -12,6 +12,7 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
+    "test": "turbo test",
     "type-check": "turbo type-check",
     "db:generate": "pnpm --filter @nexus/db run generate",
     "db:migrate": "pnpm --filter @nexus/db run migrate",

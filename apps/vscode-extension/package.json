@@ -2,7 +2,7 @@
   "name": "nexus-translator",
   "displayName": "Nexus Translator",
   "description": "AI-powered translation for Business Central XLIFF files",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "nexus",
   "private": true,
   "engines": {
@@ -325,8 +325,9 @@
     "build": "node esbuild.js",
     "dev": "node esbuild.js --watch",
     "type-check": "tsc --noEmit",
-    "package": "node esbuild.js && vsce package --no-dependencies",
-    "install-ext": "node esbuild.js && vsce package --no-dependencies && code --install-extension nexus-translator-0.1.0.vsix"
+    "test": "node --test src/**/*.test.ts",
+    "package": "node esbuild.js && vsce package --no-dependencies --out nexus-translator.vsix",
+    "install-ext": "node esbuild.js && vsce package --no-dependencies --out nexus-translator.vsix && code --install-extension nexus-translator.vsix --force"
   },
   "dependencies": {
     "@nexus/ai": "workspace:*",

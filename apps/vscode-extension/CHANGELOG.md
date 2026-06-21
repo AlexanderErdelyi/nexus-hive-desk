@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-22
+
 ### Added
 - **Status bar item** showing the active `.xlf` file's translation progress and target
   language; click it to open the file in the Nexus editor.
@@ -16,11 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   show a native progress notification with a Cancel button.
 - **Diagnostics output channel** (`Nexus Translator`) for surfacing errors and
   background operation details.
+- **Unit tests** for the XLIFF parser/serializer (round-trip, placeholder and state
+  preservation, XML escaping) and the Translation Memory similarity scoring. Run with
+  `pnpm test`.
 
 ### Changed
 - Translation Memory and Glossary writes are now serialized and written atomically
   (temp file + rename) to avoid corrupting `.nexus/tm.json` / `.nexus/glossary.json`
   when multiple windows or the MCP server write concurrently.
+- Extracted the fuzzy-matching helpers into `src/similarity.ts` (no VS Code API
+  dependency) so they can be unit-tested in isolation.
 
 ## [0.1.0] - 2026-06-21
 

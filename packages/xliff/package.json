@@ -5,7 +5,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "node --test src/**/*.test.ts"
   },
   "dependencies": {
     "fast-xml-parser": "^4.5.1",
