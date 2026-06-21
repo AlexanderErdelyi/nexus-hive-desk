@@ -92,7 +92,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     // Track pending in-memory changes for this editor instance.
     const pendingChanges = new Map<string, { target: string; state: TranslationState }>();
 
-    const sendInit = async () => {
+    const sendInit = () => {
       try {
         const parsed = parseXliff(document.getText());
         const initialFilter = pendingFilters.get(uriKey);
@@ -115,29 +115,31 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           duplicateTargetIds: findDuplicateTargetIds(document.getText()),
           diffUnitIds: initialUnitIds ?? null,
         });
-        // Fire-and-forget: compute TM suggestions and push them once ready
-        // Also auto-populate TM from this file if TM is empty (first use)
-        const tm = getTmManager(this.context);
+
+        // All TM work is fire-and-forget — never block sendInit
         const srcLang2 = parsed.sourceLanguage || getConfig().sourceLanguage;
         const tgtLang2 = parsed.targetLanguage || getConfig().targetLanguage;
-        const existingEntries = await tm.getAll(srcLang2, tgtLang2);
-        if (existingEntries.length === 0) {
-          // TM is empty — silently seed it from current file's translated units
-          const confirmed = parsed.units.filter(
-            (u) => u.target && u.target.trim() && (u.state === 'translated' || u.state === 'final' || u.state === 'signed-off')
-          );
-          if (confirmed.length > 0) {
-            await tm.upsertBatch(
-              confirmed.map((u) => ({ source: u.source, target: u.target })),
-              srcLang2, tgtLang2
-            );
+        void (async () => {
+          try {
+            const tm = getTmManager(this.context);
+            const existingEntries = await tm.getAll(srcLang2, tgtLang2);
+            if (existingEntries.length === 0) {
+              // TM is empty — silently seed it from current file's translated units
+              const confirmed = parsed.units.filter(
+                (u) => u.target && u.target.trim() && (u.state === 'translated' || u.state === 'final' || u.state === 'signed-off')
+              );
+              if (confirmed.length > 0) {
+                await tm.upsertBatch(
+                  confirmed.map((u) => ({ source: u.source, target: u.target })),
+                  srcLang2, tgtLang2
+                );
+              }
+            }
+            void sendTmSuggestions(parsed.units, srcLang2, tgtLang2);
+          } catch {
+            // TM is best-effort — ignore failures
           }
-        }
-        void sendTmSuggestions(
-          parsed.units,
-          srcLang2,
-          tgtLang2
-        );
+        })();
       } catch (err: unknown) {
         webviewPanel.webview.postMessage({
           type: 'error',
@@ -153,21 +155,22 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const sendTmSuggestions = async (units: XliffUnit[], srcLang: string, tgtLang: string) => {
       try {
         const tm = getTmManager(this.context);
-        // Look up all units' sources — show suggestions for untranslated units and
-        // exact (100%) confirmations for already-translated ones.
-        const sources = units.map((u) => u.source).filter(Boolean);
+        // Only look up untranslated units — translated units don't need TM suggestions
+        // and looking up thousands of already-translated sources is the main perf bottleneck.
+        const untranslated = units.filter(
+          (u) => !u.target || !u.target.trim() || u.state === 'needs-translation' || u.state === 'new'
+        );
+        // Cap at 200 per call to avoid blocking the extension host on huge files.
+        // The webview will request fresh suggestions as the user scrolls/edits.
+        const toLookup = untranslated.slice(0, 200);
+        const sources = toLookup.map((u) => u.source).filter(Boolean);
         if (sources.length === 0) return;
         const suggestions = await tm.lookup(sources, srcLang, tgtLang);
         const byId: Record<string, TmMatch[]> = {};
-        for (const unit of units) {
+        for (const unit of toLookup) {
           const matches = suggestions[unit.source];
           if (!matches || matches.length === 0) continue;
-          // For units that already have a target, only keep an exact (100%) confirmation
-          if (unit.target && unit.target.trim()) {
-            if (matches[0].score >= 100) byId[unit.id] = matches;
-          } else {
-            byId[unit.id] = matches;
-          }
+          byId[unit.id] = matches;
         }
         webviewPanel.webview.postMessage({ type: 'tmSuggestions', suggestions: byId });
       } catch {
