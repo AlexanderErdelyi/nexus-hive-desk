@@ -66,15 +66,25 @@ Rules:
       return item;
     });
 
-    const userPrompt = `Translate these strings. Each item may include "context" (BC object/property metadata) and "references" (approved translations of similar strings) — use them to choose correct terminology and the right grammatical form:\n${JSON.stringify(payload)}`;
+    const userPreamble = `Translate these strings. Each item may include "context" (BC object/property metadata) and "references" (approved translations of similar strings) — use them to choose correct terminology and the right grammatical form:\n`;
 
-    const content = await this.chat(lm, systemPrompt, userPrompt);
-    const parsed = parseJson<{ translations?: Array<{ id: string; translation: string; confidence?: number }> }>(content);
-    const results: AITranslateResult[] = (parsed.translations ?? []).map((t) => {
-      const score = typeof t.confidence === 'number' ? t.confidence : 85;
-      const tier: 'high' | 'medium' | 'low' = score >= 90 ? 'high' : score >= 70 ? 'medium' : 'low';
-      return { id: t.id, translatedText: t.translation, confidence: tier, confidenceScore: score };
-    });
+    // The Copilot model enforces a per-request input token limit. A caller-chosen
+    // batch (especially in Context mode, where each unit carries BC metadata + an AL
+    // source snippet) can exceed it, so split the payload into token-sized sub-batches
+    // that each fit, send them sequentially, and merge the results.
+    const subBatches = await this.splitByTokenBudget(lm, systemPrompt, userPreamble, payload);
+
+    const results: AITranslateResult[] = [];
+    for (const items of subBatches) {
+      const userPrompt = userPreamble + JSON.stringify(items);
+      const content = await this.chat(lm, systemPrompt, userPrompt);
+      const parsed = parseJson<{ translations?: Array<{ id: string; translation: string; confidence?: number }> }>(content);
+      for (const t of parsed.translations ?? []) {
+        const score = typeof t.confidence === 'number' ? t.confidence : 85;
+        const tier: 'high' | 'medium' | 'low' = score >= 90 ? 'high' : score >= 70 ? 'medium' : 'low';
+        results.push({ id: t.id, translatedText: t.translation, confidence: tier, confidenceScore: score });
+      }
+    }
 
     return { results, provider: this.type, model: lm.name };
   }
@@ -99,18 +109,25 @@ Each item may carry a "context" describing the BC object/property and an "AL sou
 Return ONLY a JSON object:
 { "reviews": [{ "id": "...", "quality": "good"|"warning"|"error", "reason": "...", "suggestion": "..." }] }`;
 
-    const userPrompt = `Review these translations:\n${JSON.stringify(
-      request.units.map((u) => ({ id: u.id, source: u.source, target: u.target, ...(u.context ? { context: u.context } : {}) }))
-    )}`;
-
-    const content = await this.chat(lm, systemPrompt, userPrompt);
-    const parsed = parseJson<{ reviews?: Array<{ id: string; quality: string; reason?: string; suggestion?: string }> }>(content);
-    const results: AIReviewResult[] = (parsed.reviews ?? []).map((r) => ({
-      id: r.id,
-      quality: (r.quality as AIReviewQuality) || 'warning',
-      reason: r.reason,
-      suggestion: r.suggestion,
+    const userPreamble = `Review these translations:\n`;
+    const payload = request.units.map((u) => ({
+      id: u.id, source: u.source, target: u.target, ...(u.context ? { context: u.context } : {}),
     }));
+
+    const subBatches = await this.splitByTokenBudget(lm, systemPrompt, userPreamble, payload);
+    const results: AIReviewResult[] = [];
+    for (const items of subBatches) {
+      const content = await this.chat(lm, systemPrompt, userPreamble + JSON.stringify(items));
+      const parsed = parseJson<{ reviews?: Array<{ id: string; quality: string; reason?: string; suggestion?: string }> }>(content);
+      for (const r of parsed.reviews ?? []) {
+        results.push({
+          id: r.id,
+          quality: (r.quality as AIReviewQuality) || 'warning',
+          reason: r.reason,
+          suggestion: r.suggestion,
+        });
+      }
+    }
 
     return { results, provider: this.type, model: lm.name };
   }
@@ -133,6 +150,46 @@ Return ONLY JSON: { "suggestions": [{ "sourceTerm": "...", "targetTerm": "...", 
     const content = await this.chat(lm, systemPrompt, userPrompt);
     const parsed = parseJson<{ suggestions?: AIGlossarySuggestion[] }>(content);
     return { suggestions: parsed.suggestions ?? [], provider: this.type, model: lm.name };
+  }
+
+  /**
+   * Split a JSON payload of items into sub-batches that each fit under the model's
+   * input token limit. Reserves headroom for the system prompt, the user preamble,
+   * and the model's response. Uses the model's own token counter so it's accurate
+   * per-model. An item larger than the whole budget is still emitted on its own so
+   * it can surface a precise error instead of silently dropping work.
+   */
+  private async splitByTokenBudget(
+    lm: vscode.LanguageModelChat,
+    systemPrompt: string,
+    userPreamble: string,
+    items: Array<Record<string, unknown>>
+  ): Promise<Array<Array<Record<string, unknown>>>> {
+    if (items.length === 0) return [];
+
+    const maxInput = lm.maxInputTokens && lm.maxInputTokens > 0 ? lm.maxInputTokens : 8000;
+    // Reserve ~35% (capped) for the model's reply plus JSON/array overhead.
+    const responseReserve = Math.min(Math.floor(maxInput * 0.35), 4000);
+    const fixed = await lm.countTokens(`${systemPrompt}\n\n${userPreamble}[]`);
+    const budget = Math.max(maxInput - fixed - responseReserve, 500);
+
+    const batches: Array<Array<Record<string, unknown>>> = [];
+    let current: Array<Record<string, unknown>> = [];
+    let currentTokens = 0;
+
+    for (const item of items) {
+      const itemTokens = await lm.countTokens(JSON.stringify(item));
+      // +1 token slack for the joining comma between array items.
+      if (current.length > 0 && currentTokens + itemTokens + 1 > budget) {
+        batches.push(current);
+        current = [];
+        currentTokens = 0;
+      }
+      current.push(item);
+      currentTokens += itemTokens + 1;
+    }
+    if (current.length > 0) batches.push(current);
+    return batches;
   }
 
   private async chat(lm: vscode.LanguageModelChat, system: string, user: string): Promise<string> {
