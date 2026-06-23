@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp, and **✗ Un-accept** controls — per variant or for the whole source.
   Accepted issues are stored per-file in workspace state.
 
+### Fixed
+- **AI + Context "Message exceeds token limit"** — the Copilot provider now measures
+  each request against the model's own input token limit (`countTokens` /
+  `maxInputTokens`) and automatically splits a batch into token-sized sub-requests.
+  Context-mode translation/review (which adds BC metadata + AL source snippets per
+  unit) no longer fails when a 50-unit batch is too large; it transparently sends more,
+  smaller sub-requests instead.
+
 ### Changed
 - **Exact-match search** — a new **Exact** checkbox next to the search box filters to
   entries whose field *equals* the search text (case-insensitive) instead of merely
