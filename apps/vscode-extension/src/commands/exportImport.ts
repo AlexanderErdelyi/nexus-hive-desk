@@ -5,6 +5,7 @@ import { parseXliff, serializeXliff } from '@nexus/xliff';
 import type { TranslationState, XliffUnit } from '@nexus/types';
 import { getConfig } from '../provider';
 import { TranslationEditorProvider } from '../translationEditor';
+import { ensureUtf8Bom } from '../bom';
 
 const SHEET_NAME = 'Translations';
 const README_SHEET = 'Read me';
@@ -78,6 +79,7 @@ async function exportForReview(uriArg?: vscode.Uri, options?: ExportOptions): Pr
     );
     if (pick !== 'Save & Export') return;
     await doc.save();
+    await ensureUtf8Bom(xlfUri);
   }
 
   let parsed;
@@ -380,6 +382,7 @@ async function importReview(uriArg?: vscode.Uri): Promise<void> {
     return;
   }
   await doc.save();
+  await ensureUtf8Bom(xlfUri);
 
   // Highlight the imported units in the open Nexus panel while preserving the
   // active filter. If the panel isn't open, fall back to a full refresh.

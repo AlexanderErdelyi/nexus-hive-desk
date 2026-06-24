@@ -7,6 +7,7 @@ import type { XliffUnit } from '@nexus/types';
 import { pendingUnitIds } from '../state';
 import { TranslationEditorProvider } from '../translationEditor';
 import { getNavigationViewColumn } from '../navigation';
+import { stripBom } from '../bom';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ function getBaselineContent(fsPath: string): string | null {
         cwd: gitRoot,
         maxBuffer: 50 * 1024 * 1024,
       });
-      return result.toString('utf-8');
+      return stripBom(result.toString('utf-8'));
     } catch {
       // try next ref
     }
@@ -265,7 +266,7 @@ function resolveBaseline(fsPath: string): { content: string; label: string } | n
         cwd: gitRoot,
         maxBuffer: 50 * 1024 * 1024,
       }).toString('utf-8');
-      return { content, label };
+      return { content: stripBom(content), label };
     } catch {
       // try next
     }
@@ -294,7 +295,7 @@ export function registerShowTranslationDiff(
         if (!fsPath) return '';
         if (params.get('role') === 'working') {
           try {
-            return fs.readFileSync(fsPath, 'utf-8');
+            return stripBom(fs.readFileSync(fsPath, 'utf-8'));
           } catch {
             return '';
           }

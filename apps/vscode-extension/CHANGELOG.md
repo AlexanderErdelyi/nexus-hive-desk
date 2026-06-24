@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Accepted issues are stored per-file in workspace state.
 
 ### Fixed
+- **Umlauts corrupted after publishing to Business Central** — translation files are now
+  always written as **UTF-8 with a byte-order mark (BOM)** on save, import, and export.
+  Without a BOM, BC's AL compiler decoded the (valid UTF-8) file using the machine's OEM
+  code page, turning German umlauts into mojibake such as `Für` → `F├╝r`,
+  `Ländercode` → `L├ñndercode`, and `Überschreiben` → `├£berschreiben`. The BOM forces
+  correct UTF-8 detection; diff baselines strip the BOM so it never shows as a phantom change.
 - **AI + Context "Message exceeds token limit"** — the Copilot provider now measures
   each request against the model's own input token limit (`countTokens` /
   `maxInputTokens`) and automatically splits a batch into token-sized sub-requests.
