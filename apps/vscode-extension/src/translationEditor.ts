@@ -10,6 +10,7 @@ import { getTmManager } from './tmManager';
 import type { TmMatch } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
 import { SourceContextProvider } from './sourceContext';
+import { ensureUtf8Bom } from './bom';
 import { getNavigationViewColumn } from './navigation';
 import { updateStatus, hideStatus } from './statusBar';
 import { reportError } from './log';
@@ -558,6 +559,15 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       }, 150);
     });
 
+    // ─── BOM enforcement on save ─────────────────────────────────────────────
+    // After any save of this document, make sure the file keeps a UTF-8 BOM so
+    // Business Central's AL compiler decodes umlauts correctly instead of
+    // falling back to the OEM code page (which produces "F├╝r" style mojibake).
+    const didSaveHandler = vscode.workspace.onDidSaveTextDocument((saved) => {
+      if (saved.uri.toString() !== document.uri.toString()) return;
+      void ensureUtf8Bom(document.uri);
+    });
+
     // ─── External change watcher ─────────────────────────────────────────────
     // If the file changes on disk (e.g. git pull), refresh the webview.
 
@@ -586,6 +596,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       TranslationEditorProvider.refreshers.delete(uriKey);
       msgHandler.dispose();
       willSaveHandler.dispose();
+      didSaveHandler.dispose();
       changeHandler.dispose();
       viewStateHandler.dispose();
       if (webviewPanel.active) hideStatus();
