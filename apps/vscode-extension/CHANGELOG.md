@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Accepted issues are stored per-file in workspace state.
 
 ### Fixed
+- **"Edit N changed unit in Nexus Translator" now opens filtered** — clicking the button
+  in the diff view reliably opens the editor showing only the changed units. Previously,
+  when the editor was freshly opened (or still loading a large file), the filter message
+  could be dropped because the panel was registered before its webview finished loading,
+  or lost to a URI-key mismatch on Windows. The editor now waits for the webview's
+  `ready` signal before pushing a live filter, and falls back to a path-normalised
+  hand-off during init otherwise.
 - **Umlauts corrupted after publishing to Business Central** — translation files are now
   always written as **UTF-8 with a byte-order mark (BOM)** on save, import, and export.
   Without a BOM, BC's AL compiler decoded the (valid UTF-8) file using the machine's OEM
@@ -36,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smaller sub-requests instead.
 
 ### Changed
+- **Faster search on large files** — the in-editor search box is now debounced and
+  reuses cached lowercased fields, so filtering files with tens of thousands of units
+  (e.g. 19k+) no longer stutters on every keystroke.
 - **Exact-match search** — a new **Exact** checkbox next to the search box filters to
   entries whose field *equals* the search text (case-insensitive) instead of merely
   containing it. Searching `both` with Exact on now matches only "Both", not

@@ -527,7 +527,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var searchExact = false; // when true, search matches whole-field equality instead of substring
   var filterQuality = false;
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
-  var visibleCount = 100, notifTimer = null;
+  var visibleCount = 100, notifTimer = null, searchDebounce = null;
   var selectedIds = new Set();
   var tmSuggestions = {}; // unitId → TmMatch[]
   var duplicateTargetIds = new Set();
@@ -568,7 +568,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       acceptedQuality = msg.acceptedQuality || []; showAccepted = false;
       inspectIds = null; inspectLabel = '';
       duplicateTargetIds = new Set(msg.duplicateTargetIds || []);
-      diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : null;
+      diffUnitIds = (msg.diffUnitIds && msg.diffUnitIds.length) ? new Set(msg.diffUnitIds) : null;
       filterState = 'all';
       filterType = '';
       objectFilters = msg.objectFilters || [];
@@ -586,7 +586,9 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
       filterSearch = msg.filter || '';
       filterState  = msg.state  || 'all';
       objectFilters = msg.objectFilters || [];
-      diffUnitIds = msg.diffUnitIds ? new Set(msg.diffUnitIds) : (msg.diffUnitIds === null ? null : diffUnitIds);
+      diffUnitIds = Array.isArray(msg.diffUnitIds)
+        ? (msg.diffUnitIds.length ? new Set(msg.diffUnitIds) : null)
+        : (msg.diffUnitIds === null ? null : diffUnitIds);
       document.getElementById('search-input').value  = filterSearch;
       document.getElementById('state-filter').value  = filterState;
       visibleCount = 100;
@@ -806,8 +808,19 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     return { total: total, translated: translated, needsTrans: needsTrans, pct: total > 0 ? Math.round(translated / total * 100) : 0 };
   }
 
+  // Cache lowercased immutable fields (source/id/note never change after load)
+  // so filtering 19k+ units on every keystroke doesn't re-lowercase everything.
+  function lcache(u) {
+    if (u._ls === undefined) {
+      u._ls = (u.source || '').toLowerCase();
+      u._li = (u.id || '').toLowerCase();
+      u._ln = (u.note || '').toLowerCase();
+    }
+  }
+
   function getFiltered() {
     var q = filterSearch.toLowerCase();
+    var qx = q.trim();
     return units.filter(function (u) {
       if (diffUnitIds && !diffUnitIds.has(u.id)) return false;
       if (inspectIds && !inspectIds.has(u.id)) return false;
@@ -825,17 +838,18 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         if (!noteOk) return false;
       }
       if (!q) return true;
-      // Match helper: exact (whole-field, trimmed) vs. substring (default).
-      var qx = q.trim();
-      var hit = searchExact
-        ? function (val) { return (val || '').trim().toLowerCase() === qx; }
-        : function (val) { return (val || '').toLowerCase().indexOf(q) >= 0; };
-      // searchIn scoping
-      if (searchIn === 'source') return hit(u.source);
-      if (searchIn === 'target') return hit(u.target);
-      if (searchIn === 'objectName') return !!(u.note && hit(u.note));
-      // 'all'
-      return hit(u.source) || hit(u.target) || hit(u.id) || (u.note && hit(u.note));
+      lcache(u);
+      var lt = (u.target || '').toLowerCase(); // target is mutable — compute inline
+      if (searchExact) {
+        if (searchIn === 'source') return u._ls.trim() === qx;
+        if (searchIn === 'target') return lt.trim() === qx;
+        if (searchIn === 'objectName') return !!u.note && u._ln.trim() === qx;
+        return u._ls.trim() === qx || lt.trim() === qx || u._li.trim() === qx || (!!u.note && u._ln.trim() === qx);
+      }
+      if (searchIn === 'source') return u._ls.indexOf(q) >= 0;
+      if (searchIn === 'target') return lt.indexOf(q) >= 0;
+      if (searchIn === 'objectName') return !!u.note && u._ln.indexOf(q) >= 0;
+      return u._ls.indexOf(q) >= 0 || lt.indexOf(q) >= 0 || u._li.indexOf(q) >= 0 || (!!u.note && u._ln.indexOf(q) >= 0);
     });
   }
 
@@ -1215,7 +1229,10 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
   // ─── Toolbar ───────────────────────────────────────────────────────────────
   document.getElementById('search-input').addEventListener('input', function () {
-    filterSearch = this.value; visibleCount = 100; renderList(); renderFooter();
+    filterSearch = this.value; visibleCount = 100;
+    // Debounce so a huge file isn't re-filtered on every keystroke.
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(function () { renderList(); renderFooter(); }, 160);
   });
   document.getElementById('search-in').addEventListener('change', function () {
     searchIn = this.value; visibleCount = 100; renderList(); renderFooter();
