@@ -48,17 +48,17 @@
       {
         "command": "nexus.openInNexusEditor",
         "title": "Open in Nexus Translator",
-        "icon": "$(globe)"
+        "icon": "images/action-open.svg"
       },
       {
         "command": "nexus.findInNexusTranslator",
         "title": "Find in Nexus Translator",
-        "icon": "$(search)"
+        "icon": "images/action-find.svg"
       },
       {
         "command": "nexus.showTranslationDiff",
         "title": "Nexus: Show Translation Changes",
-        "icon": "$(diff)"
+        "icon": "images/action-diff.svg"
       },
       {
         "command": "nexus.setNexusAsDefaultXlfEditor",
@@ -75,7 +75,7 @@
       {
         "command": "nexus.populateTmFromFile",
         "title": "Nexus: Populate TM from File",
-        "icon": "$(database)"
+        "icon": "images/action-tm.svg"
       },
       {
         "command": "nexus.exportForReview",
@@ -190,8 +190,7 @@
         {
           "command": "nexus.showTranslationDiff",
           "when": "resourceExtname == .xlf",
-          "group": "navigation",
-          "icon": "$(diff)"
+          "group": "navigation"
         },
         {
           "command": "nexus.openInNexusEditor",
@@ -206,8 +205,7 @@
         {
           "command": "nexus.populateTmFromFile",
           "when": "resourceExtname == .xlf",
-          "group": "navigation",
-          "icon": "$(database)"
+          "group": "navigation"
         }
       ],
       "commandPalette": [

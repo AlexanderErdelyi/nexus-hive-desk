@@ -9,9 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Toolbar icons for Open/Find** — the **Open in Nexus Translator** and **Find in
-  Nexus Translator** editor-title actions now render as compact icons (a globe and a
-  magnifying glass) instead of full-width text buttons, freeing up room in the tab bar.
-  Hovering shows the full command name and its keyboard shortcut.
+  Nexus Translator** editor-title actions now render as compact icons instead of
+  full-width text buttons, freeing up room in the tab bar. Hovering shows the full
+  command name and its keyboard shortcut.
+- **Branded Nexus toolbar icons** — all Nexus editor-title actions (Open, Find, Show
+  Translation Changes, Populate TM) now share a recognizable branded icon family: the
+  Nexus blue→purple badge with the signature AI sparkle and a distinct white glyph per
+  action, so it's obvious at a glance which toolbar buttons belong to the Nexus
+  translation tool.
 - **Accept quality issues** — each inconsistency in the Quality Check view now has an
   **✓ Accept all** button (accept every variant for a source) plus a per-variant
   **✓ Accept** on each translation, so you can accept just one rendering (e.g.
