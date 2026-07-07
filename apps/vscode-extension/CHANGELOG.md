@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Toolbar icons for Open/Find** — the **Open in Nexus Translator** and **Find in
+  Nexus Translator** editor-title actions now render as compact icons (a globe and a
+  magnifying glass) instead of full-width text buttons, freeing up room in the tab bar.
+  Hovering shows the full command name and its keyboard shortcut.
 - **Accept quality issues** — each inconsistency in the Quality Check view now has an
   **✓ Accept all** button (accept every variant for a source) plus a per-variant
   **✓ Accept** on each translation, so you can accept just one rendering (e.g.
@@ -22,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Accepted issues are stored per-file in workspace state.
 
 ### Fixed
+- **Find in Nexus Translator now applies the object filter** — running **Find in Nexus
+  Translator** from an AL object file and picking a translation file now opens the editor
+  pre-filtered to that object (e.g. `Table FMD VP Warehouse RC Cues`). Previously the
+  filter could be silently dropped on a freshly opened file because the pending filter
+  was stored under a different URI-string key than the editor read it back with. Both
+  sides now agree on a path-normalised key, matching the earlier diff-filter fix.
+- **"Opening…" progress while a large file loads** — opening a big translation file now
+  shows a notification-area progress spinner (`Nexus: Opening <file>…`) that stays until
+  the first render completes, plus a clearer in-panel hint that large files can take a
+  few seconds. Previously the panel looked frozen while tens of thousands of units were
+  parsed on the extension host.
 - **"Edit N changed unit in Nexus Translator" now opens filtered** — clicking the button
   in the diff view reliably opens the editor showing only the changed units. Previously,
   when the editor was freshly opened (or still loading a large file), the filter message

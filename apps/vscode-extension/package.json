@@ -47,11 +47,13 @@
       },
       {
         "command": "nexus.openInNexusEditor",
-        "title": "Open in Nexus Translator"
+        "title": "Open in Nexus Translator",
+        "icon": "$(globe)"
       },
       {
         "command": "nexus.findInNexusTranslator",
-        "title": "Find in Nexus Translator"
+        "title": "Find in Nexus Translator",
+        "icon": "$(search)"
       },
       {
         "command": "nexus.showTranslationDiff",
