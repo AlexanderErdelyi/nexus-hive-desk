@@ -80,12 +80,25 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
     /* ─── Object filter chips bar ─── */
     #filter-chips-bar {
-      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+      display: flex; flex-direction: column; align-items: stretch; gap: 4px;
       padding: 4px 16px;
       border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
       background: rgba(0,120,215,0.06);
       flex-shrink: 0;
     }
+    .filter-chips-head { display: flex; align-items: center; gap: 6px; }
+    .filter-chips-toggle {
+      background: none; border: none; height: auto; min-width: 0;
+      padding: 0; margin: 0; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 4px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .filter-chips-toggle:hover { color: var(--vscode-foreground); }
+    .filter-chips-wrap {
+      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+      max-height: 22vh; overflow-y: auto;
+    }
+    #filter-chips-bar.collapsed .filter-chips-wrap { display: none; }
     .filter-chips-label { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
     .filter-chip {
       display: inline-flex; align-items: center; gap: 3px;
@@ -524,6 +537,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   // ─── State ─────────────────────────────────────────────────────────────────
   var units = [], srcLang = '', tgtLang = '', fileName = '';
   var filterSearch = '', filterState = 'all', filterType = '', searchIn = 'all', objectFilters = [];
+  var filterChipsCollapsed = false;
   var searchExact = false; // when true, search matches whole-field equality instead of substring
   var filterQuality = false;
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
@@ -869,15 +883,29 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
   function renderFilterChips() {
     var bar = document.getElementById('filter-chips-bar');
-    if (objectFilters.length === 0) { bar.hidden = true; bar.innerHTML = ''; return; }
+    if (objectFilters.length === 0) {
+      bar.hidden = true; bar.innerHTML = ''; bar.classList.remove('collapsed'); return;
+    }
     bar.hidden = false;
-    var html = '<span class="filter-chips-label">Filter:</span>';
+    if (filterChipsCollapsed) bar.classList.add('collapsed');
+    else bar.classList.remove('collapsed');
+    var caret = filterChipsCollapsed ? '\u25B8' : '\u25BE';
+    var head = '<div class="filter-chips-head">' +
+      '<button class="filter-chips-toggle" id="btn-toggle-obj-filter" title="Show/hide filters">' +
+        caret + ' <span class="filter-chips-label">Filter (' + objectFilters.length + ')</span></button>' +
+      '<span style="flex:1"></span>' +
+      '<button class="filter-chip-clear" id="btn-clear-obj-filter">Clear all</button></div>';
+    var chips = '<div class="filter-chips-wrap">';
     objectFilters.forEach(function (f, i) {
-      html += '<span class="filter-chip">' + esc(f) +
+      chips += '<span class="filter-chip">' + esc(f) +
         '<button class="filter-chip-x" data-idx="' + i + '" title="Remove filter">\u00d7</button></span>';
     });
-    html += '<button class="filter-chip-clear" id="btn-clear-obj-filter">Clear all</button>';
-    bar.innerHTML = html;
+    chips += '</div>';
+    bar.innerHTML = head + chips;
+    document.getElementById('btn-toggle-obj-filter').addEventListener('click', function () {
+      filterChipsCollapsed = !filterChipsCollapsed;
+      renderFilterChips();
+    });
     bar.querySelectorAll('.filter-chip-x').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var idx = parseInt(this.getAttribute('data-idx'), 10);

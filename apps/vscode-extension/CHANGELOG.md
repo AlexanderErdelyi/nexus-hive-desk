@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smaller sub-requests instead.
 
 ### Changed
+- **Object filter bar is now scrollable and collapsible** — running **Find in Nexus
+  Translator** on a folder can produce dozens of object filters. The filter chip bar is
+  now capped in height (scrolls internally) instead of pushing the translation list off
+  screen, and a **Filter (N)** toggle lets you collapse the chips entirely while keeping
+  the filter active.
 - **Smoother scrolling on large files** — the editor list now renders incrementally
   and **auto-loads** the next batch as you scroll (via an on-screen sentinel) instead
   of only when you click *Load more*. Newly loaded rows are appended without
