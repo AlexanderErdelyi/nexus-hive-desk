@@ -376,10 +376,10 @@ export function registerShowTranslationDiff(
 
       panel.webview.onDidReceiveMessage(async (msg) => {
         if (msg.type === 'openInNexus' && Array.isArray(msg.unitIds)) {
-          const uriKey = target.toString();
-          // If panel already open, apply filter directly; otherwise store for sendInit
+          // If panel already open (and ready), apply filter directly; otherwise
+          // store under the fsPath key that sendInit consumes during init.
           if (!TranslationEditorProvider.applyFilter(target, '', undefined, msg.unitIds)) {
-            pendingUnitIds.set(uriKey, msg.unitIds);
+            pendingUnitIds.set(target.fsPath.toLowerCase(), msg.unitIds);
             await vscode.commands.executeCommand('vscode.openWith', target, 'nexus.translationEditor', getNavigationViewColumn());
           }
         } else if (msg.type === 'openXmlDiff') {

@@ -85,6 +85,15 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
 
   /** Registry of all currently open translation editor panels, keyed by document URI. */
   private static readonly activePanels = new Map<string, vscode.WebviewPanel>();
+  /**
+   * Tracks whether each panel's webview has signalled 'ready' (i.e. its
+   * message listener is attached). A panel is registered in `activePanels`
+   * at resolve time — before the webview finishes loading — so posting a
+   * `setFilter` message before 'ready' is silently dropped. applyFilter must
+   * only fast-path a panel that is confirmed ready; otherwise the caller falls
+   * back to pendingUnitIds so the filter is applied during the init handshake.
+   */
+  private static readonly activeReady = new Map<string, boolean>();
 
   /** Per-document refresh callbacks (re-read the document and re-render the webview). */
   private static readonly refreshers = new Map<string, () => void>();
@@ -108,8 +117,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
 
   /** If the document is already open in a panel, apply a search filter and focus it. */
   public static applyFilter(uri: vscode.Uri, filter: string, searchText?: string, unitIds?: string[]): boolean {
-    const panel = TranslationEditorProvider.activePanels.get(uri.toString());
-    if (!panel) return false;
+    const key = uri.toString();
+    const panel = TranslationEditorProvider.activePanels.get(key);
+    // Only a webview that has confirmed 'ready' can reliably receive a
+    // postMessage — otherwise it is dropped. Returning false here routes the
+    // caller to the pendingUnitIds path, which is consumed during init.
+    if (!panel || !TranslationEditorProvider.activeReady.get(key)) return false;
     panel.reveal(undefined, false);
     const objectFilters = filter.split(',').map((f) => f.trim()).filter(Boolean);
     panel.webview.postMessage({ type: 'setFilter', filter: searchText || '', objectFilters, state: 'all', diffUnitIds: unitIds ?? null });
@@ -198,8 +211,12 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         const objectFilters = initialFilter
           ? initialFilter.split(',').map((f) => f.trim()).filter(Boolean)
           : [];
-        const initialUnitIds = pendingUnitIds.get(uriKey);
-        if (initialUnitIds) pendingUnitIds.delete(uriKey);
+        // pendingUnitIds is keyed by fsPath (lowercased) so the diff view's
+        // producer and this consumer agree regardless of URI-string encoding
+        // differences (e.g. Windows drive-letter casing / percent-encoding).
+        const puKey = document.uri.fsPath.toLowerCase();
+        const initialUnitIds = pendingUnitIds.get(puKey);
+        if (initialUnitIds) pendingUnitIds.delete(puKey);
         webviewPanel.webview.postMessage({
           type: 'init',
           units: parsed.units,
@@ -293,6 +310,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const msgHandler = webviewPanel.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type as string) {
         case 'ready':
+          TranslationEditorProvider.activeReady.set(uriKey, true);
           void sendInit();
           break;
 
@@ -593,6 +611,7 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     webviewPanel.onDidDispose(() => {
       reviewCancelled = true;
       TranslationEditorProvider.activePanels.delete(uriKey);
+      TranslationEditorProvider.activeReady.delete(uriKey);
       TranslationEditorProvider.refreshers.delete(uriKey);
       msgHandler.dispose();
       willSaveHandler.dispose();
