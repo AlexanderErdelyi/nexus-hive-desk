@@ -528,6 +528,8 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
   var filterQuality = false;
   var pendingChanges = {}, reviewMap = {}, loadingSet = new Set();
   var visibleCount = 100, notifTimer = null, searchDebounce = null;
+  var cachedFiltered = null; // last getFiltered() result, reused by appendMore
+  var listObserver = null;   // IntersectionObserver driving auto-load-more
   var selectedIds = new Set();
   var tmSuggestions = {}; // unitId → TmMatch[]
   var duplicateTargetIds = new Set();
@@ -901,35 +903,39 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
     if (cleanupBtn) cleanupBtn.hidden = duplicateTargetIds.size === 0;
   }
 
-  function renderList() {
-    var filtered = getFiltered();
-    var visible  = filtered.slice(0, visibleCount);
-    var el = document.getElementById('unit-list');
-    if (filtered.length === 0) {
-      el.innerHTML = '<div class="empty-state">No units match the current filter.</div>';
-      return;
-    }
+  function rowsHtml(list) {
     var html = '';
-    for (var i = 0; i < visible.length; i++) html += renderRow(visible[i]);
-    if (filtered.length > visibleCount) {
-      html += '<div class="load-more-wrap"><button class="btn-secondary" id="btn-load-more">Load more (' + (filtered.length - visibleCount) + ' remaining)</button></div>';
-    }
-    el.innerHTML = html;
+    for (var i = 0; i < list.length; i++) html += renderRow(list[i]);
+    return html;
+  }
 
-    el.querySelectorAll('textarea.target-input').forEach(function (ta) {
+  // Attach per-row event listeners. Idempotent: elements already wired (marked
+  // with data-wired) are skipped, so this can be called on the whole list after
+  // appending a new chunk without double-binding the existing rows.
+  function wireRows(scope) {
+    scope.querySelectorAll('textarea.target-input').forEach(function (ta) {
+      if (ta.dataset.wired) return; ta.dataset.wired = '1';
       ta.addEventListener('input', autoResize);
       ta.addEventListener('blur',  onTargetBlur);
       ta.addEventListener('focus', onTargetFocus);
       autoResize.call(ta);
     });
-    el.querySelectorAll('.state-select').forEach(function (sel) { sel.addEventListener('change', onStateChange); });
-    el.querySelectorAll('.btn-ai-row').forEach(function (btn) { btn.addEventListener('click', onTranslateSingle); });
-    el.querySelectorAll('.btn-go-src').forEach(function (btn) {
+    scope.querySelectorAll('.state-select').forEach(function (sel) {
+      if (sel.dataset.wired) return; sel.dataset.wired = '1';
+      sel.addEventListener('change', onStateChange);
+    });
+    scope.querySelectorAll('.btn-ai-row').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', onTranslateSingle);
+    });
+    scope.querySelectorAll('.btn-go-src').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
       btn.addEventListener('click', function () {
         vscode.postMessage({ type: 'goToSource', note: this.getAttribute('data-note') });
       });
     });
-    el.querySelectorAll('.row-check').forEach(function (chk) {
+    scope.querySelectorAll('.row-check').forEach(function (chk) {
+      if (chk.dataset.wired) return; chk.dataset.wired = '1';
       chk.addEventListener('change', function () {
         var id = this.getAttribute('data-id');
         if (this.checked) selectedIds.add(id); else selectedIds.delete(id);
@@ -937,53 +943,118 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
         syncSelectAllChk();
       });
     });
-    el.querySelectorAll('.btn-tm-apply').forEach(function (btn) {
+    scope.querySelectorAll('.btn-tm-apply').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
       btn.addEventListener('click', function () {
         applyTmSuggestion(this.getAttribute('data-id'), this.getAttribute('data-target'));
       });
     });
-        el.querySelectorAll('.btn-q-show').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            var ids = (this.getAttribute('data-ids') || '').split(',').filter(Boolean);
-            if (ids.length === 0) return;
-            inspectUnitIds(ids, this.getAttribute('data-label') || (ids.length + ' units'));
-          });
-        });
-        el.querySelectorAll('.btn-q-use').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            var id = this.getAttribute('data-id');
-            var target = this.getAttribute('data-target');
-            var u = findUnit(id);
-            if (u) {
-              u.target = target;
-              u.state = 'translated';
-              pendingChanges[id] = { target: target, state: 'translated' };
-              vscode.postMessage({ type: 'updateUnit', id: id, target: target, state: 'translated' });
-              renderAll();
-            }
-          });
-        });
-        el.querySelectorAll('.btn-q-use-all').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            vscode.postMessage({ type: 'applyToSource', source: this.getAttribute('data-source'), target: this.getAttribute('data-target') });
-          });
-        });
-        el.querySelectorAll('.btn-q-accept').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            var source = this.getAttribute('data-source') || '';
-            var targets = [];
-            try { targets = JSON.parse(this.getAttribute('data-targets') || '[]'); } catch (e) {}
-            acceptIssue(source, targets);
-          });
-        });
-        el.querySelectorAll('.btn-q-accept-one').forEach(function (btn) {
-          btn.addEventListener('click', function () {
-            acceptIssue(this.getAttribute('data-source') || '', [this.getAttribute('data-target') || '']);
-          });
-        });
+    scope.querySelectorAll('.btn-q-show').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', function () {
+        var ids = (this.getAttribute('data-ids') || '').split(',').filter(Boolean);
+        if (ids.length === 0) return;
+        inspectUnitIds(ids, this.getAttribute('data-label') || (ids.length + ' units'));
+      });
+    });
+    scope.querySelectorAll('.btn-q-use').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', function () {
+        var id = this.getAttribute('data-id');
+        var target = this.getAttribute('data-target');
+        var u = findUnit(id);
+        if (u) {
+          u.target = target;
+          u.state = 'translated';
+          pendingChanges[id] = { target: target, state: 'translated' };
+          vscode.postMessage({ type: 'updateUnit', id: id, target: target, state: 'translated' });
+          renderAll();
+        }
+      });
+    });
+    scope.querySelectorAll('.btn-q-use-all').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', function () {
+        vscode.postMessage({ type: 'applyToSource', source: this.getAttribute('data-source'), target: this.getAttribute('data-target') });
+      });
+    });
+    scope.querySelectorAll('.btn-q-accept').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', function () {
+        var source = this.getAttribute('data-source') || '';
+        var targets = [];
+        try { targets = JSON.parse(this.getAttribute('data-targets') || '[]'); } catch (e) {}
+        acceptIssue(source, targets);
+      });
+    });
+    scope.querySelectorAll('.btn-q-accept-one').forEach(function (btn) {
+      if (btn.dataset.wired) return; btn.dataset.wired = '1';
+      btn.addEventListener('click', function () {
+        acceptIssue(this.getAttribute('data-source') || '', [this.getAttribute('data-target') || '']);
+      });
+    });
+  }
+
+  function loadMoreHtml(total) {
+    if (total <= visibleCount) return '';
+    return '<div class="load-more-wrap" id="load-more-wrap">' +
+      '<button class="btn-secondary" id="btn-load-more">Load more (' + (total - visibleCount) + ' remaining)</button>' +
+      '<div id="scroll-sentinel" style="height:1px;"></div></div>';
+  }
+
+  // Auto-load the next chunk as the sentinel scrolls into view, so the user
+  // doesn't have to click "Load more" on large filtered lists. The button
+  // stays as a manual fallback (and for browsers without IntersectionObserver).
+  function setupLoadMore() {
+    if (listObserver) { listObserver.disconnect(); listObserver = null; }
+    var btn = document.getElementById('btn-load-more');
+    if (btn) btn.addEventListener('click', appendMore);
+    var sentinel = document.getElementById('scroll-sentinel');
+    if (sentinel && typeof IntersectionObserver !== 'undefined') {
+      listObserver = new IntersectionObserver(function (entries) {
+        if (entries[0] && entries[0].isIntersecting) appendMore();
+      }, { root: document.getElementById('unit-list'), rootMargin: '600px' });
+      listObserver.observe(sentinel);
+    }
+  }
+
+  // Append the next 100 rows without re-rendering the ones already on screen,
+  // so scrolling a 19k-unit file stays cheap (O(chunk) instead of O(visible)).
+  function appendMore() {
+    var filtered = cachedFiltered || getFiltered();
+    if (visibleCount >= filtered.length) return;
+    var el = document.getElementById('unit-list');
+    var wrap = document.getElementById('load-more-wrap');
+    if (!el || !wrap) return;
+    var next = filtered.slice(visibleCount, visibleCount + 100);
+    visibleCount += next.length;
+    wrap.insertAdjacentHTML('beforebegin', rowsHtml(next));
+    wireRows(el); // only the newly inserted (unwired) rows get bound
     syncSelectAllChk();
-    var btnMore = document.getElementById('btn-load-more');
-    if (btnMore) btnMore.addEventListener('click', function () { visibleCount += 100; renderList(); });
+    if (visibleCount >= filtered.length) {
+      if (listObserver) { listObserver.disconnect(); listObserver = null; }
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+    } else {
+      var btn = document.getElementById('btn-load-more');
+      if (btn) btn.textContent = 'Load more (' + (filtered.length - visibleCount) + ' remaining)';
+    }
+  }
+
+  function renderList() {
+    var filtered = getFiltered();
+    cachedFiltered = filtered;
+    var el = document.getElementById('unit-list');
+    if (listObserver) { listObserver.disconnect(); listObserver = null; }
+    if (filtered.length === 0) {
+      el.innerHTML = '<div class="empty-state">No units match the current filter.</div>';
+      syncSelectAllChk();
+      return;
+    }
+    var visible = filtered.slice(0, visibleCount);
+    el.innerHTML = rowsHtml(visible) + loadMoreHtml(filtered.length);
+    wireRows(el);
+    syncSelectAllChk();
+    setupLoadMore();
   }
 
   function renderFooter() {
