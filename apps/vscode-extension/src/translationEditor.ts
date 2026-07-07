@@ -192,6 +192,22 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
       getNonce()
     );
 
+    // Show a notification-area progress spinner from the moment the editor is
+    // resolved until the first init is posted. Large files (10k+ units) can take
+    // several seconds to parse, so this tells the user "something is happening"
+    // instead of leaving the panel looking frozen.
+    let resolveFirstInit: (() => void) | undefined;
+    const firstInitDone = new Promise<void>((res) => {
+      resolveFirstInit = res;
+    });
+    void vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Nexus: Opening ${path.basename(document.fileName)}\u2026`,
+      },
+      () => firstInitDone
+    );
+
     // Register this panel so commands can find it even when already open
     const uriKey = document.uri.toString();
     TranslationEditorProvider.activePanels.set(uriKey, webviewPanel);
@@ -204,17 +220,18 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
     const sendInit = () => {
       try {
         const parsed = parseXliff(document.getText());
-        const initialFilter = pendingFilters.get(uriKey);
-        if (initialFilter) pendingFilters.delete(uriKey);
-        const initialSearch = pendingSearches.get(uriKey);
-        if (initialSearch) pendingSearches.delete(uriKey);
+        // pendingFilters/pendingSearches/pendingUnitIds are all keyed by fsPath
+        // (lowercased) so the producer (findInNexus / diff view) and this
+        // consumer agree regardless of URI-string encoding differences
+        // (e.g. Windows drive-letter casing / percent-encoding).
+        const puKey = document.uri.fsPath.toLowerCase();
+        const initialFilter = pendingFilters.get(puKey);
+        if (initialFilter) pendingFilters.delete(puKey);
+        const initialSearch = pendingSearches.get(puKey);
+        if (initialSearch) pendingSearches.delete(puKey);
         const objectFilters = initialFilter
           ? initialFilter.split(',').map((f) => f.trim()).filter(Boolean)
           : [];
-        // pendingUnitIds is keyed by fsPath (lowercased) so the diff view's
-        // producer and this consumer agree regardless of URI-string encoding
-        // differences (e.g. Windows drive-letter casing / percent-encoding).
-        const puKey = document.uri.fsPath.toLowerCase();
         const initialUnitIds = pendingUnitIds.get(puKey);
         if (initialUnitIds) pendingUnitIds.delete(puKey);
         webviewPanel.webview.postMessage({
@@ -231,6 +248,10 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
         });
 
         pushStatusBar(document.uri, parsed.units, parsed.targetLanguage || getConfig().targetLanguage);
+
+        // First render is done — dismiss the "Opening…" progress notification.
+        resolveFirstInit?.();
+        resolveFirstInit = undefined;
 
         // All TM work is fire-and-forget — never block sendInit
         const srcLang2 = parsed.sourceLanguage || getConfig().sourceLanguage;
@@ -260,6 +281,8 @@ export class TranslationEditorProvider implements vscode.CustomTextEditorProvide
           }
         })();
       } catch (err: unknown) {
+        resolveFirstInit?.();
+        resolveFirstInit = undefined;
         webviewPanel.webview.postMessage({
           type: 'error',
           message: `Failed to parse XLIFF: ${(err as Error).message}`,

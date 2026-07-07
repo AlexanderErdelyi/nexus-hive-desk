@@ -502,7 +502,7 @@ export function getWebviewContent(cspSource: string, nonce: string): string {
 
 <!-- Unit list -->
 <div id="unit-list">
-  <div class="empty-state"><span class="spinner"></span>&nbsp; Loading translations&hellip;</div>
+  <div class="empty-state"><span class="spinner"></span>&nbsp; Loading translations&hellip; <span style="opacity:.7">large files can take a few seconds</span></div>
 </div>
 
 <!-- Footer -->

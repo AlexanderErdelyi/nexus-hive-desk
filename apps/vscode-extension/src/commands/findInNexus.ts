@@ -100,12 +100,15 @@ export function registerFindInNexusTranslator(context: vscode.ExtensionContext):
           return;
         }
 
-        // Otherwise store filter so the editor applies it when it opens
+        // Otherwise store filter so the editor applies it when it opens.
+        // Key by fsPath (lowercased) so producer/consumer agree regardless of
+        // URI-string encoding differences (drive-letter casing / percent-encoding).
+        const pendingKey = xliffUri.fsPath.toLowerCase();
         if (filterStr) {
-          pendingFilters.set(xliffUri.toString(), filterStr);
+          pendingFilters.set(pendingKey, filterStr);
         }
         if (initialSearch) {
-          pendingSearches.set(xliffUri.toString(), initialSearch);
+          pendingSearches.set(pendingKey, initialSearch);
         }
 
         await vscode.commands.executeCommand(
