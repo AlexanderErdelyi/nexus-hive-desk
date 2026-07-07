@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   smaller sub-requests instead.
 
 ### Changed
+- **Smoother scrolling on large files** — the editor list now renders incrementally
+  and **auto-loads** the next batch as you scroll (via an on-screen sentinel) instead
+  of only when you click *Load more*. Newly loaded rows are appended without
+  re-rendering the ones already on screen, so paging through a 19k-unit file no longer
+  gets slower the further you scroll. *Load more* remains as a manual fallback.
 - **Faster search on large files** — the in-editor search box is now debounced and
   reuses cached lowercased fields, so filtering files with tens of thousands of units
   (e.g. 19k+) no longer stutters on every keystroke.
