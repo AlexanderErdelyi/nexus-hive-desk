@@ -18,6 +18,14 @@ npm run build
 
 See the [VS Code extension README](../vscode-extension/README.md#mcp-server) for full documentation.
 
+### Documentation generation
+
+For generating customer documentation in a target language, use the caption-index tools instead of scanning the raw `.xlf` or Translation Memory:
+
+- `get_object_translations(objectType, objectName, language)` — one call returns the Caption/ToolTip of an object and all its fields/controls/actions. Exact, location-aware, and token-cheap. Falls back to source text with `translated:false` when untranslated.
+- `lookup_translation(...)` — resolve a single element property by explicit path or by a raw BC "Xliff Generator" note.
+- `build_caption_index(force?)` — (re)build `.nexus/caption-index.json`. Lookups auto-rebuild when `.xlf` files change, so this is rarely needed.
+
 ## Storage
 
-Reads/writes `.nexus/tm.json` and `.nexus/glossary.json` relative to `NEXUS_WORKSPACE` (set in `.vscode/mcp.json`). These files are shared with the VS Code extension.
+Reads/writes `.nexus/tm.json`, `.nexus/glossary.json`, and `.nexus/caption-index.json` relative to `NEXUS_WORKSPACE` (set in `.vscode/mcp.json`). The TM and glossary files are shared with the VS Code extension; the caption index is a derived cache (gitignored) rebuilt automatically from the workspace `.xlf` files.
