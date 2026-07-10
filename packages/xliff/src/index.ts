@@ -541,3 +541,6 @@ export function getXliffStats(units: XliffUnit[]) {
 }
 
 export type { ParsedXliff, TranslationState, XliffUnit };
+
+export { syncXliff } from './sync.ts';
+export type { SyncOptions, SyncResult, SyncSummary } from './sync.ts';

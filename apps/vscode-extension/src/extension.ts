@@ -12,6 +12,7 @@ import { registerShowTranslationDiff } from './commands/showDiff';
 import { registerManageGlossary } from './commands/manageGlossary';
 import { registerPopulateTmFromFile } from './commands/populateTmFromFile';
 import { registerExportImport } from './commands/exportImport';
+import { registerSyncTranslations } from './commands/syncTranslations';
 import { getTmManager } from './tmManager';
 import { getGlossaryManager } from './glossaryManager';
 import { registerStatusBar } from './statusBar';
@@ -82,6 +83,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Export to Excel for customer review / import the reviewed file back
   registerExportImport(context);
+
+  // Sync a generated <App>.g.xlf into language files (NAB-style refresh, add-only by default)
+  registerSyncTranslations(context);
 }
 
 export function deactivate(): void {}

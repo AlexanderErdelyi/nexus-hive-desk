@@ -238,7 +238,32 @@ Reports and apps often need a customer or external reviewer to check translation
 
 ---
 
-## Find in Nexus (from AL source code)
+## Sync Translations (build refresh)
+
+The Nexus equivalent of NAB "refresh translations". After the AL compiler regenerates the base file (`<App>.g.xlf`), propagate new and changed captions into every language file — without the merge conflicts NAB causes.
+
+### Usage
+- Right-click a `<App>.g.xlf` file (or its folder) → **Nexus: Sync Translations from Generated File…**, or run it from the Command Palette / editor title bar
+- Pick which **languages** to sync (all selected by default)
+- Pick a **mode**:
+  - **Add-only (recommended)** — adds new units, flags source-changed units as `needs-review-translation` (keeping the old translation), and **never deletes**. Two feature branches produce non-overlapping diffs that git can auto-merge.
+  - **Full sync** — also removes units no longer in the generated file.
+- Brand-new units are **prefilled from exact Translation-Memory matches** (state `translated`) so you rarely start from scratch.
+
+### Pinned units (custom base-app overrides)
+Need to override a base-application caption (e.g. rename the standard "Release" action to something customer-specific)? Copy that trans-unit into your language file and add a note:
+
+```xml
+<note from="NexusCustom" annotates="general" priority="2">Base app override — keep on sync</note>
+```
+
+Pinned units are **always preserved**, even in Full-sync mode, because they don't exist in your app's generated file.
+
+### Why this avoids merge conflicts
+Nexus writes only the trans-units that actually changed and keeps a **deterministic (canonical) order** by unit id. Unchanged units stay byte-for-byte identical, so parallel branches touching different objects don't collide — unlike a whole-file rewrite.
+
+---
+
 
 Navigate from your AL code directly to a translation unit.
 
@@ -333,6 +358,8 @@ Copilot: ✓ Deleted
 | `build_caption_index` | (Re)build the compact caption index (`.nexus/caption-index.json`) for fast doc lookups |
 | `get_object_translations` | Get the translated Caption/ToolTip of an object **and all its fields/controls/actions** in one token-cheap call — the primary tool for generating documentation in a target language |
 | `lookup_translation` | Look up a single element property translation (one field caption / control tooltip) by path or by a raw BC generator note |
+| `list_translation_targets` | Discover `<App>.g.xlf` base files and their sibling `<App>.<lang>.xlf` language files |
+| `sync_translation_file` | Sync a generated `<App>.g.xlf` into language files (NAB-style refresh, add-only by default, TM prefill, pinned-unit protection) |
 
 ---
 
@@ -348,6 +375,7 @@ Copilot: ✓ Deleted
 | `Nexus: Populate TM from File` | Import all translated units into Translation Memory |
 | `Nexus: Export for Review (Excel)` | Export translations (filtered or all) to an `.xlsx` for customer review |
 | `Nexus: Import Reviewed Translations (Excel)` | Import a reviewed `.xlsx` and apply the updates back to the file |
+| `Nexus: Sync Translations from Generated File…` | Refresh language files from a generated `<App>.g.xlf` — add-only by default, TM prefill, pinned-unit protection |
 | `Nexus: Manage Glossary & TM` | Open the Glossary management panel |
 | `Nexus: Set API Token (Secure)` | Store your OpenAI/Azure API key in the system keychain |
 | `Nexus: Use Nexus as Default .xlf Editor` | Make Nexus the default editor for `.xlf` files |

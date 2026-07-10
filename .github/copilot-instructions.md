@@ -12,6 +12,12 @@ This is a Business Central AL translation management monorepo. When helping with
 - `find_inconsistencies(filePath)` — same source translated differently
 - `get_glossary` / `add_glossary_term` — manage terminology
 - `search_tm` / `populate_tm_from_xliff` — Translation Memory
+- `list_translation_targets(generatedFile?)` — discover `<App>.g.xlf` base files and their sibling `<App>.<lang>.xlf` language files
+- `sync_translation_file(generatedFile, {languages?|targetFiles?, removeOrphans?, prefillFromTm?, dryRun?})` — NAB-style refresh: sync a generated base file into language files. **Add-only by default** (never deletes → merge-friendly, preserves custom base-app overrides). Units marked `<note from="NexusCustom">` are pinned and always kept, even in full sync (`removeOrphans: true`).
+
+## Refreshing translations after an AL build (Nexus Sync)
+
+After the AL compiler regenerates `<App>.g.xlf`, propagate new/changed captions into the language files with `sync_translation_file` (or the VS Code command **Nexus: Sync Translations from Generated File…**). Prefer the default **add-only** mode: it adds new units, flags source-changed units as `needs-review-translation` (keeping the old translation), and never removes anything — so two feature branches produce non-overlapping diffs that git can auto-merge. Use `removeOrphans: true` only for a deliberate cleanup; pin any hand-copied base-app override unit with a `<note from="NexusCustom">` so it survives.
 
 ## Documentation generation (fast caption lookup)
 

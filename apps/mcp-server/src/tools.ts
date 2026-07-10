@@ -15,6 +15,7 @@ import {
   getObjectTranslations,
   lookupTranslation,
 } from './captionIndex.js';
+import { syncXliff, type SyncSummary } from './sync.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -179,6 +180,37 @@ export function findXliffFiles(root: string): string[] {
 
 export function resolveFilePath(workspaceRoot: string, filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath);
+}
+
+/** Given all workspace .xlf paths and a generated <base>.g.xlf, return its sibling language files. */
+function resolveTargets(allXlf: string[], genRel: string): Array<{ language: string; path: string }> {
+  const dir = path.posix.dirname(genRel);
+  const genName = path.posix.basename(genRel);
+  if (!genName.toLowerCase().endsWith('.g.xlf')) return [];
+  const base = genName.slice(0, -'.g.xlf'.length);
+  const out: Array<{ language: string; path: string }> = [];
+  for (const f of allXlf) {
+    if (path.posix.dirname(f) !== dir) continue;
+    const n = path.posix.basename(f);
+    if (n === genName) continue;
+    if (!n.startsWith(base + '.') || !n.toLowerCase().endsWith('.xlf')) continue;
+    const lang = n.slice(base.length + 1, n.length - '.xlf'.length);
+    if (!lang || lang.toLowerCase() === 'g') continue;
+    out.push({ language: lang, path: f });
+  }
+  return out;
+}
+
+/** Extract a language code from a language file name given its generated base name. */
+function languageFromName(rel: string, genRel: string): string {
+  const n = path.posix.basename(rel);
+  const genName = path.posix.basename(genRel);
+  const base = genName.toLowerCase().endsWith('.g.xlf') ? genName.slice(0, -'.g.xlf'.length) : '';
+  if (base && n.startsWith(base + '.') && n.toLowerCase().endsWith('.xlf')) {
+    return n.slice(base.length + 1, n.length - '.xlf'.length);
+  }
+  const m = n.match(/\.([a-z]{2}(?:-[A-Z]{2})?)\.xlf$/i);
+  return m ? m[1] : '';
 }
 
 // ─── Git / XML-write helpers (agentic translation workflow) ──────────────────
@@ -620,6 +652,65 @@ export function createTools(_workspaceRoot: string): Array<Record<string, unknow
         additionalProperties: false,
       },
     },
+    {
+      name: 'list_translation_targets',
+      description:
+        'Discover the generated base file(s) (<App>.g.xlf) and their sibling language files (<App>.<lang>.xlf) in the workspace. Use this before sync_translation_file to see what can be synced and into which languages.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          generatedFile: {
+            type: 'string',
+            description:
+              'Optional path to a specific generated .g.xlf file. When omitted, all generated files in the workspace are listed.',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'sync_translation_file',
+      description:
+        'Sync a freshly generated base file (<App>.g.xlf) into one or more language files — the Nexus equivalent of NAB "refresh translations". Adds new units, leaves unchanged units byte-for-byte (merge-friendly), flags source-changed units for review, and by default NEVER deletes units (add-only) so custom base-app overrides and other branches\' work survive. Units carrying a <note from="NexusCustom"> are pinned and preserved even in full-sync (removeOrphans) mode.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          generatedFile: {
+            type: 'string',
+            description: 'Path to the generated base file (e.g. "Translations/MyApp.g.xlf"). Required.',
+          },
+          targetFiles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Explicit language file paths to sync. If omitted, resolved from "languages" or all siblings.',
+          },
+          languages: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Language codes to sync (e.g. ["de-DE","fr-FR"]). Resolved to <base>.<lang>.xlf next to the generated file. If both this and targetFiles are omitted, ALL sibling language files are synced.',
+          },
+          removeOrphans: {
+            type: 'boolean',
+            description:
+              'When true, delete units that no longer exist in the generated file (full sync). Pinned NexusCustom units are still kept. Defaults to false (add-only).',
+          },
+          canonicalOrder: {
+            type: 'boolean',
+            description: 'Reorder units by stable id for merge-friendly diffs. Defaults to true.',
+          },
+          prefillFromTm: {
+            type: 'boolean',
+            description: 'Prefill brand-new units from exact Translation-Memory matches (state=translated). Defaults to true.',
+          },
+          dryRun: {
+            type: 'boolean',
+            description: 'Compute and return the change summary without writing any files. Defaults to false.',
+          },
+        },
+        required: ['generatedFile'],
+      },
+    },
   ];
 }
 
@@ -1053,6 +1144,101 @@ export async function handleTool(
         });
         if ('error' in result) return fail((result as { error: string }).error);
         return ok(result);
+      }
+
+      case 'list_translation_targets': {
+        const genArg = args.generatedFile != null ? String(args.generatedFile) : '';
+        const allXlf = findXliffFiles(workspaceRoot); // workspace-relative POSIX paths
+        const generatedRel = genArg
+          ? [genArg.split(path.sep).join('/')]
+          : allXlf.filter((f) => f.toLowerCase().endsWith('.g.xlf'));
+        const groups = generatedRel.map((genRel) => {
+          const targets = resolveTargets(allXlf, genRel);
+          return {
+            generatedFile: genRel,
+            baseName: path.posix.basename(genRel).slice(0, -'.g.xlf'.length),
+            targets,
+          };
+        });
+        return ok({ generated: groups });
+      }
+
+      case 'sync_translation_file': {
+        const genArg = String(args.generatedFile ?? '');
+        if (!genArg) return fail('generatedFile is required');
+        const genRel = genArg.split(path.sep).join('/');
+        const genFull = resolveFilePath(workspaceRoot, genRel);
+        if (!fs.existsSync(genFull)) return fail(`Generated file not found: ${genArg}`);
+        const generatedXml = readFileWithBom(genFull).content;
+
+        const removeOrphans = args.removeOrphans === true;
+        const canonicalOrder = args.canonicalOrder !== false;
+        const prefillFromTm = args.prefillFromTm !== false;
+        const dryRun = args.dryRun === true;
+
+        // Resolve which language files to sync.
+        const allXlf = findXliffFiles(workspaceRoot);
+        let targetRels: string[];
+        if (Array.isArray(args.targetFiles) && args.targetFiles.length > 0) {
+          targetRels = (args.targetFiles as unknown[]).map((f) => String(f).split(path.sep).join('/'));
+        } else if (Array.isArray(args.languages) && args.languages.length > 0) {
+          const base = genRel.slice(0, -'.g.xlf'.length);
+          targetRels = (args.languages as unknown[]).map((l) => `${base}.${String(l)}.xlf`);
+        } else {
+          targetRels = resolveTargets(allXlf, genRel).map((t) => t.path);
+        }
+        if (targetRels.length === 0) {
+          return fail('No language files found to sync. Pass "languages" or "targetFiles", or ensure sibling <base>.<lang>.xlf files exist.');
+        }
+
+        // Optional TM prefill map, filtered per target language at run time.
+        const tm = prefillFromTm ? readTm(workspaceRoot) : [];
+
+        const results: Array<{ file: string; language: string; written: boolean } & Partial<SyncSummary> & { error?: string }> = [];
+        for (const rel of targetRels) {
+          const full = resolveFilePath(workspaceRoot, rel);
+          if (!fs.existsSync(full)) {
+            results.push({ file: rel, language: languageFromName(rel, genRel), written: false, error: 'File not found' });
+            continue;
+          }
+          const { content: targetXml, hasBom } = readFileWithBom(full);
+          const lang = parseXliffContent(targetXml).targetLanguage || languageFromName(rel, genRel);
+
+          let prefill: ((source: string) => { target: string; state?: string } | null) | undefined;
+          if (prefillFromTm && tm.length > 0) {
+            const map = new Map<string, string>();
+            for (const e of tm) {
+              if (lang && e.targetLanguage && e.targetLanguage !== lang) continue;
+              const key = e.source.trim();
+              if (key && e.target) map.set(key, e.target);
+            }
+            prefill = (source: string) => {
+              const hit = map.get(source.trim());
+              return hit ? { target: hit } : null;
+            };
+          }
+
+          const { xml, summary, unchangedFile } = syncXliff(generatedXml, targetXml, {
+            removeOrphans,
+            canonicalOrder,
+            prefill,
+          });
+
+          let written = false;
+          if (!dryRun && !unchangedFile) {
+            writeFileWithBom(full, xml, hasBom);
+            written = true;
+          }
+          results.push({ file: rel, language: lang, written, ...summary });
+        }
+
+        return ok({
+          generatedFile: genRel,
+          mode: removeOrphans ? 'full-sync' : 'add-only',
+          canonicalOrder,
+          dryRun,
+          results,
+        });
       }
 
       default:

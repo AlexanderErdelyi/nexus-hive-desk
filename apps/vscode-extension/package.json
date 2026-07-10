@@ -86,6 +86,11 @@
         "command": "nexus.importReview",
         "title": "Nexus: Import Reviewed Translations (Excel)",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "nexus.syncTranslations",
+        "title": "Nexus: Sync Translations from Generated File…",
+        "icon": "$(sync)"
       }
     ],
     "customEditors": [
@@ -172,6 +177,11 @@
           "command": "nexus.importReview",
           "when": "resourceExtname == .xlf",
           "group": "nexus@6"
+        },
+        {
+          "command": "nexus.syncTranslations",
+          "when": "resourceFilename =~ /\\.g\\.xlf$/ || explorerResourceIsFolder",
+          "group": "nexus@2"
         }
       ],
       "editor/context": [
@@ -205,6 +215,11 @@
         {
           "command": "nexus.populateTmFromFile",
           "when": "resourceExtname == .xlf",
+          "group": "navigation"
+        },
+        {
+          "command": "nexus.syncTranslations",
+          "when": "resourceFilename =~ /\\.g\\.xlf$/",
           "group": "navigation"
         }
       ],
@@ -244,6 +259,9 @@
         },
         {
           "command": "nexus.populateTmFromFile"
+        },
+        {
+          "command": "nexus.syncTranslations"
         }
       ]
     },
