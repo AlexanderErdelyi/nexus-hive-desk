@@ -330,6 +330,9 @@ Copilot: ✓ Deleted
 | `get_tm_stats` | Get TM statistics by language pair |
 | `populate_tm_from_xliff` | Import translations from a file into TM |
 | `search_tm` | Fuzzy-search TM for a source string |
+| `build_caption_index` | (Re)build the compact caption index (`.nexus/caption-index.json`) for fast doc lookups |
+| `get_object_translations` | Get the translated Caption/ToolTip of an object **and all its fields/controls/actions** in one token-cheap call — the primary tool for generating documentation in a target language |
+| `lookup_translation` | Look up a single element property translation (one field caption / control tooltip) by path or by a raw BC generator note |
 
 ---
 

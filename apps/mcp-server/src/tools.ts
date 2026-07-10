@@ -10,10 +10,15 @@ import {
   writeGlossary,
   writeTm,
 } from './storage.js';
+import {
+  buildCaptionIndex,
+  getObjectTranslations,
+  lookupTranslation,
+} from './captionIndex.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface ParsedUnit {
+export interface ParsedUnit {
   id: string;
   source: string;
   target: string;
@@ -21,7 +26,7 @@ interface ParsedUnit {
   note: string;
 }
 
-interface ParsedXliff {
+export interface ParsedXliff {
   units: ParsedUnit[];
   sourceLanguage: string;
   targetLanguage: string;
@@ -72,7 +77,7 @@ function collectTransUnits(node: unknown, out: Record<string, unknown>[]): void 
   }
 }
 
-function parseXliffContent(xml: string): ParsedXliff {
+export function parseXliffContent(xml: string): ParsedXliff {
   const doc = xmlParser.parse(xml) as Record<string, unknown>;
   const xliff = (doc['xliff'] ?? doc) as Record<string, unknown>;
   const files = Array.isArray((xliff as Record<string, unknown>)['file'])
@@ -149,7 +154,7 @@ const FUZZY_THRESHOLD = 0.75;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out']);
 
-function findXliffFiles(root: string): string[] {
+export function findXliffFiles(root: string): string[] {
   const result: string[] = [];
   const walk = (dir: string) => {
     let entries: fs.Dirent[];
@@ -172,7 +177,7 @@ function findXliffFiles(root: string): string[] {
   return result.map((f) => path.relative(root, f).split(path.sep).join('/'));
 }
 
-function resolveFilePath(workspaceRoot: string, filePath: string): string {
+export function resolveFilePath(workspaceRoot: string, filePath: string): string {
   return path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath);
 }
 
@@ -571,6 +576,48 @@ export function createTools(_workspaceRoot: string): Array<Record<string, unknow
           },
         },
         required: ['filePath'],
+      },
+    },
+    {
+      name: 'build_caption_index',
+      description:
+        'Build (or rebuild) the compact caption index used for fast, exact caption/tooltip lookups when generating documentation. Scans every .xlf in the workspace and writes .nexus/caption-index.json. Cheap to re-run; lookups auto-rebuild when files change, so you usually only call this to force a refresh.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'get_object_translations',
+      description:
+        'Get the translated Caption and ToolTip of an AL object and ALL of its fields/controls/actions in one call — the primary tool for generating documentation in a target language. Exact and location-aware (unlike Translation Memory), and token-cheap (does not load the whole .xlf). Falls back to the source text with translated:false when an element is not yet translated.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          objectType: { type: 'string', description: 'AL object type, e.g. "Table", "Page", "Report".' },
+          objectName: { type: 'string', description: 'AL object name as written in source, e.g. "Sales Header".' },
+          language: { type: 'string', description: 'Target language code, e.g. "de-DE". Defaults to the first language in the index.' },
+        },
+        required: ['objectType', 'objectName'],
+      },
+    },
+    {
+      name: 'lookup_translation',
+      description:
+        'Look up a single AL element property translation (e.g. one field Caption or one control ToolTip). Provide either an explicit path (objectType/objectName/elementKind/elementName/property) or a raw BC generator note string. Returns the target text and translated flag; falls back to the source text when untranslated.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          objectType: { type: 'string', description: 'AL object type, e.g. "Table" or "Page".' },
+          objectName: { type: 'string', description: 'AL object name, e.g. "Sales Header".' },
+          elementKind: { type: 'string', description: 'Element kind, e.g. "Field", "Control", "Action". Omit for an object-level property.' },
+          elementName: { type: 'string', description: 'Element name, e.g. "Posting Date". Omit for an object-level property.' },
+          property: { type: 'string', description: 'Property name. Defaults to "Caption". Other examples: "ToolTip", "InstructionalText".' },
+          note: { type: 'string', description: 'Alternatively, a raw BC generator note like "Table Sales Header - Field Posting Date - Property Caption". When set, the explicit path fields are ignored.' },
+          language: { type: 'string', description: 'Target language code, e.g. "de-DE". Defaults to the first language in the index.' },
+        },
+        additionalProperties: false,
       },
     },
   ];
@@ -976,6 +1023,36 @@ export async function handleTool(
           totalChecked: translated.length,
           inconsistencyCount: inconsistencies.length,
         });
+      }
+
+      case 'build_caption_index': {
+        const stats = buildCaptionIndex(workspaceRoot);
+        return ok(stats);
+      }
+
+      case 'get_object_translations': {
+        const objectType = String(args.objectType ?? '');
+        const objectName = String(args.objectName ?? '');
+        if (!objectType || !objectName) return fail('objectType and objectName are required');
+        const language = String(args.language ?? '');
+        const result = getObjectTranslations(workspaceRoot, objectType, objectName, language);
+        if ('error' in result) return fail(JSON.stringify(result));
+        return ok(result);
+      }
+
+      case 'lookup_translation': {
+        const note = args.note != null ? String(args.note) : undefined;
+        const result = lookupTranslation(workspaceRoot, {
+          type: args.objectType != null ? String(args.objectType) : undefined,
+          name: args.objectName != null ? String(args.objectName) : undefined,
+          elementKind: args.elementKind != null ? String(args.elementKind) : undefined,
+          elementName: args.elementName != null ? String(args.elementName) : undefined,
+          property: args.property != null ? String(args.property) : undefined,
+          note,
+          language: String(args.language ?? ''),
+        });
+        if ('error' in result) return fail((result as { error: string }).error);
+        return ok(result);
       }
 
       default:
